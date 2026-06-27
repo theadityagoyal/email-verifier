@@ -75,6 +75,7 @@ async def verify_email(email: str) -> EmailVerifyResponse:
         disposable=disposable,
         catch_all=catch_all,
         domain=domain or "",
+        username=username,
     )
 
     status = determine_status(
