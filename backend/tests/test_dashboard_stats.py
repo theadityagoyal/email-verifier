@@ -1,5 +1,5 @@
 import pytest
-from backend.schemas.schemas import DashboardStats
+from schemas.schemas import DashboardStats
 
 def test_dashboard_stats_schema():
     # Test that the schema can be instantiated with example data
