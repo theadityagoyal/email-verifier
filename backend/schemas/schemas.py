@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr, field_validator
-from typing import Optional
-from datetime import datetime
+from typing import Optional, Dict, List, Any
+from datetime import datetime, date
 from models.models import EmailStatus, JobStatus
 
 
@@ -79,12 +79,15 @@ class DomainStats(BaseModel):
 
 class DashboardStats(BaseModel):
     total_emails: int
-    verified: int
-    invalid: int
-    risky: int
-    processing: int
-    queue_size: int
-    success_rate: float
+    per_status_counts: Dict[str, int]  # keys: verified, deliverable, trusted, probably_valid, risky, unconfirmed, uncertain, invalid, undeliverable, processing
+    bucket_counts: Dict[str, int]      # keys: safe, risky, unsafe, processing
+    trust_score: int                   # 0-100
+    flagged_counts: Dict[str, int]     # keys: disposable, role_based, catch_all
+    top_domains: List[Dict[str, Any]]  # each: {domain: str, bucket_counts: Dict[str, int]}
+    daily_volume: List[Dict[str, Any]] # each: {date: str, bucket_counts: Dict[str, int]}
+    active_job: Optional[Dict[str, Any]] # {job_id: str, file_name: str, progress_percent: int, processed: int, total: int} or None
+
+    model_config = {"from_attributes": True}
 
 
 class VerificationTrend(BaseModel):
