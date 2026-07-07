@@ -1,39 +1,64 @@
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts'
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { useTheme } from '@/styles/theme';
 
-const COLORS = { verified: '#10b981', invalid: '#ef4444', risky: '#f59e0b', processing: '#0ea5e9' }
+export default function StatusPieChart({ stats, data }) {
+  const theme = useTheme();
+  const isDark = document.documentElement.classList.contains('dark');
 
-export default function StatusPieChart({ stats }) {
-  if (!stats) return null
+  // Support both formats: stats object or data array
+  const chartData = data || (stats ? [
+    { name: 'Verified', value: stats.verified, fill: theme.success },
+    { name: 'Invalid', value: stats.invalid, fill: theme.error },
+    { name: 'Risky', value: stats.risky, fill: theme.warning },
+    { name: 'Processing', value: stats.processing, fill: theme.info },
+  ].filter(d => d.value > 0) : []);
 
-  const data = [
-    { name: 'Verified', value: stats.verified },
-    { name: 'Invalid', value: stats.invalid },
-    { name: 'Risky', value: stats.risky },
-    { name: 'Processing', value: stats.processing },
-  ].filter(d => d.value > 0)
+  if (chartData.length === 0) {
+    return (
+      <ResponsiveContainer width="100%" height={260}>
+        <PieChart>
+          <Pie
+            data={[{ value: 1 }]}
+            cx="50%"
+            cy="50%"
+            innerRadius="60%"
+            outerRadius="80%"
+            fill="var(--foreground) / 10"
+            dataKey="value"
+          />
+        </PieChart>
+      </ResponsiveContainer>
+    );
+  }
 
   return (
     <ResponsiveContainer width="100%" height={260}>
       <PieChart>
         <Pie
-          data={data}
+          data={chartData}
           cx="50%"
           cy="50%"
-          innerRadius={70}
-          outerRadius={100}
-          paddingAngle={3}
+          labelLine={false}
+          label={false}
+          innerRadius="60%"
+          outerRadius="80%"
           dataKey="value"
         >
-          {data.map((entry) => (
-            <Cell key={entry.name} fill={COLORS[entry.name.toLowerCase()] || '#64748b'} />
+          {chartData.map((entry, index) => (
+            <Cell key={`cell-${index}`} fill={entry.fill} />
           ))}
         </Pie>
         <Tooltip
-          contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8 }}
-          labelStyle={{ color: '#94a3b8' }}
+          containerStyle={{
+            background: 'var(--background)',
+            border: '1px solid var(--muted)',
+            borderRadius: 8,
+          }}
+          labelStyle={{ fill: 'var(--foreground)' }}
+          formatter={(value, name) => `${name}: ${value}`}
         />
-        <Legend wrapperStyle={{ fontSize: 12 }} />
+        <Legend verticalAlign="top" height={36} wrapperStyle={{ justSelf: 'center' }} />
       </PieChart>
     </ResponsiveContainer>
-  )
+  );
 }

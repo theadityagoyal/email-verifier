@@ -5,18 +5,15 @@ import json
 
 class Settings(BaseSettings):
     # Database
-    DATABASE_URL: str = "mysql+pymysql://root:password@localhost:3306/email_verifier"
-
-    # Redis
-    REDIS_URL: str = "redis://localhost:6379/0"
+    DATABASE_URL: str
 
     # AWS
     AWS_ACCESS_KEY_ID: str = ""
     AWS_SECRET_ACCESS_KEY: str = ""
-    AWS_REGION: str = "us-east-1"
+    AWS_REGION: str = "ap-south-1"
     S3_BUCKET_NAME: str = "email-verifier-uploads"
 
-    # App
+    # Application
     SECRET_KEY: str = "change-me-in-production"
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
@@ -28,6 +25,7 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
     @property
     def cors_origins_list(self) -> List[str]:

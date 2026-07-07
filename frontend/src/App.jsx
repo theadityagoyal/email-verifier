@@ -1,26 +1,30 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
-import Sidebar from './layouts/Sidebar'
-import DashboardPage from './pages/DashboardPage'
-import VerifyPage from './pages/VerifyPage'
-import EmailListPage from './pages/EmailListPage'
-import DomainsPage from './pages/DomainsPage'
-import BulkUploadPage from './pages/BulkUploadPage'
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import Layout from './layouts/Layout';
+import DashboardPage from './pages/DashboardPage';
+import VerifyEmailPage from './pages/VerifyEmailPage';
+import BulkUploadPage from './pages/BulkUploadPage';
+import EmailListPage from './pages/EmailListPage';
+import DomainsPage from './pages/DomainsPage';
 
-export default function App() {
+const queryClient = new QueryClient();
+
+function App() {
   return (
-    <BrowserRouter>
-      <div className="flex min-h-screen">
-        <Sidebar />
-        <main className="flex-1 min-w-0 overflow-auto">
-          <Routes>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <Routes>
+          <Route element={<Layout />}>
             <Route path="/" element={<DashboardPage />} />
-            <Route path="/verify" element={<VerifyPage />} />
+            <Route path="/verify" element={<VerifyEmailPage />} />
+            <Route path="/bulk" element={<BulkUploadPage />} />
             <Route path="/emails" element={<EmailListPage />} />
             <Route path="/domains" element={<DomainsPage />} />
-            <Route path="/bulk" element={<BulkUploadPage />} />
-          </Routes>
-        </main>
-      </div>
-    </BrowserRouter>
-  )
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </QueryClientProvider>
+  );
 }
+
+export default App;

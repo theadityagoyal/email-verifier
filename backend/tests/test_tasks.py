@@ -4,7 +4,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from models.models import Base
 from models.models import Job, Email, JobStatus, EmailStatus, Domain
-from tasks.verification_tasks import verify_single_email_task, process_bulk_job, _update_domain_stats, _update_job_counter
 from services.email_service import EmailVerifyResponse
 
 # Use an in-memory SQLite database for testing
@@ -12,23 +11,6 @@ SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Override the dependency to use the test DB
-from models.database import AsyncSessionLocal as OriginalSessionLocal, SyncSessionLocal as OriginalSyncSessionLocal
-def override_get_db():
-    try:
-        db = TestingSessionLocal()
-        yield db
-    finally:
-        db.close()
-
-def override_sync_db():
-    try:
-        db = TestingSessionLocal()
-        yield db
-    finally:
-        db.close()
-
-# We'll directly use TestingSessionLocal in tests
 
 @pytest.fixture(autouse=True)
 def setup_database():
@@ -37,9 +19,9 @@ def setup_database():
     yield
     Base.metadata.drop_all(bind=engine)
 
-def test_verify_single_email_task_new():
+
+def test_verify_single_email_sync_new():
     db = TestingSessionLocal()
-    # Mock verify_email to return a valid response
     mock_result = EmailVerifyResponse(
         email="test@example.com",
         domain="example.com",
@@ -57,21 +39,19 @@ def test_verify_single_email_task_new():
         username_flags=None,
     )
     with patch("services.email_service.verify_email", return_value=mock_result):
-        # Call the task function directly (it expects self param for bound task; we can pass None)
-        result = verify_single_email_task.__wrapped__(None, "test@example.com", job_id=None)
-        # The function returns the model dict
+        from tasks.bulk_processor import verify_single_email_sync
+        result = verify_single_email_sync("test@example.com", job_id=None)
         assert result["email"] == "test@example.com"
         assert result["status"] == "verified"
-        # Check DB
         email_obj = db.query(Email).filter(Email.email == "test@example.com").first()
         assert email_obj is not None
         assert email_obj.status == EmailStatus.verified
         assert email_obj.score == 100
-        db.close()
+    db.close()
 
-def test_verify_single_email_task_existing():
+
+def test_verify_single_email_sync_existing():
     db = TestingSessionLocal()
-    # Insert existing record
     existing = Email(
         email="test@example.com",
         domain="old.com",
@@ -87,7 +67,6 @@ def test_verify_single_email_task_existing():
     )
     db.add(existing)
     db.commit()
-    # Mock verify_email to return updated info
     mock_result = EmailVerifyResponse(
         email="test@example.com",
         domain="example.com",
@@ -105,18 +84,18 @@ def test_verify_single_email_task_existing():
         username_flags=None,
     )
     with patch("services.email_service.verify_email", return_value=mock_result):
-        result = verify_single_email_task.__wrapped__(None, "test@example.com", job_id=None)
+        from tasks.bulk_processor import verify_single_email_sync
+        result = verify_single_email_sync("test@example.com", job_id=None)
         assert result["status"] == "verified"
         db.refresh(existing)
         assert existing.status == EmailStatus.verified
         assert existing.score == 95
         assert existing.domain == "example.com"
-        db.close()
+    db.close()
+
 
 def test_update_domain_stats():
     db = TestingSessionLocal()
-    # Ensure no domain record
-    from models.models import Domain
     assert db.query(Domain).filter(Domain.domain == "example.com").count() == 0
     mock_result = EmailVerifyResponse(
         email="test@example.com",
@@ -134,6 +113,7 @@ def test_update_domain_stats():
         username_quality=None,
         username_flags=None,
     )
+    from tasks.bulk_processor import _update_domain_stats
     _update_domain_stats(db, mock_result)
     domain_rec = db.query(Domain).filter(Domain.domain == "example.com").first()
     assert domain_rec is not None
@@ -141,6 +121,7 @@ def test_update_domain_stats():
     assert domain_rec.verified_count == 1
     assert domain_rec.invalid_count == 0
     assert domain_rec.risky_count == 0
+
     # Add another email same domain, invalid
     mock_result2 = EmailVerifyResponse(
         email="test2@example.com",
@@ -164,21 +145,21 @@ def test_update_domain_stats():
     assert domain_rec.verified_count == 1
     assert domain_rec.invalid_count == 1
     assert domain_rec.risky_count == 0
-    assert domain_rec.bounce_rate == 50.0  # 1/2*100
+    assert domain_rec.bounce_rate == 50.0
     db.close()
+
 
 def test_update_job_counter():
     db = TestingSessionLocal()
     job = Job(job_id="test-job", file_name="test.csv", s3_key="local:test-job/test.csv", status=JobStatus.pending, total=5)
     db.add(job)
     db.commit()
-    # Simulate processing a verified email
+    from tasks.bulk_processor import _update_job_counter
     _update_job_counter(db, "test-job", EmailStatus.verified)
     db.refresh(job)
     assert job.processed == 1
     assert job.verified == 1
-    assert job.status == JobStatus.pending  # not yet completed
-    # Process 4 more verified
+    assert job.status == JobStatus.pending
     for _ in range(4):
         _update_job_counter(db, "test-job", EmailStatus.verified)
     db.refresh(job)
@@ -187,7 +168,40 @@ def test_update_job_counter():
     assert job.status == JobStatus.completed
     db.close()
 
-def test_process_bulk_job_simple():
-    # This is more integration; we'll just ensure the task runs without error given a mocked file.
-    # We'll mock the file download and pandas read.
-    pass  # placeholder for now
+
+def test_process_bulk_job_sync():
+    """Test bulk job processing with mocked file and email verification."""
+    import io
+    import pandas as pd
+    from unittest.mock import patch, mock_open
+
+    db = TestingSessionLocal()
+
+    job = Job(job_id="bulk-test", file_name="test.csv", s3_key="local:bulk-test/test.csv", status=JobStatus.pending, total=3)
+    db.add(job)
+    db.commit()
+
+    # Create mock CSV content
+    csv_content = "email\nuser1@gmail.com\nuser2@yahoo.com\nuser3@invalid.xyz\n"
+
+    mock_results = [
+        EmailVerifyResponse(email="user1@gmail.com", domain="gmail.com", status=EmailStatus.trusted, syntax_valid=True, domain_exists=True, mx_found=True, smtp_valid=False, disposable=False, role_based=False, catch_all=False, score=90, verified_at=None, username_quality=None, username_flags=None),
+        EmailVerifyResponse(email="user2@yahoo.com", domain="yahoo.com", status=EmailStatus.trusted, syntax_valid=True, domain_exists=True, mx_found=True, smtp_valid=False, disposable=False, role_based=False, catch_all=False, score=90, verified_at=None, username_quality=None, username_flags=None),
+        EmailVerifyResponse(email="user3@invalid.xyz", domain="invalid.xyz", status=EmailStatus.invalid, syntax_valid=True, domain_exists=False, mx_found=False, smtp_valid=False, disposable=False, role_based=False, catch_all=False, score=0, verified_at=None, username_quality=None, username_flags=None),
+    ]
+
+    with patch("services.email_service.verify_email", side_effect=mock_results):
+        with patch("builtins.open", mock_open(read_data=csv_content)):
+            with patch("os.path.exists", return_value=True):
+                with patch("pandas.read_csv") as mock_read:
+                    df = pd.DataFrame({"email": ["user1@gmail.com", "user2@yahoo.com", "user3@invalid.xyz"]})
+                    mock_read.return_value = df
+                    from tasks.bulk_processor import process_bulk_job_sync
+                    process_bulk_job_sync("bulk-test", "local:bulk-test/test.csv", "email")
+
+    db.refresh(job)
+    assert job.status == JobStatus.completed
+    assert job.processed == 3
+    assert job.verified == 2
+    assert job.invalid == 1
+    db.close()

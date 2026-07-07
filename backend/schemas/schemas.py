@@ -54,6 +54,8 @@ class BulkUploadResponse(BaseModel):
     message: str
     total_emails: int
 
+    model_config = {"from_attributes": True}
+
 
 # ── List/pagination schemas ───────────────────────────────────────────────────
 
@@ -64,28 +66,91 @@ class PaginatedEmailsResponse(BaseModel):
     size: int
     pages: int
 
+    model_config = {"from_attributes": True}
+
 
 class DomainStats(BaseModel):
     domain: str
+
     total_emails: int
-    verified_count: int
-    invalid_count: int
+
+    safe_count: int
     risky_count: int
-    bounce_rate: float
-    mx_records: Optional[list]
+    unsafe_count: int
+    processing_count: int
+
+    risk_percent: float
+    trust_score: int
+
+    verdict: str
+
+    disposable_count: int
+    role_based_count: int
+    catch_all_count: int
+
+    mx_records: Optional[list] = None
+    mx_status: str
+
+    first_seen: Optional[datetime] = None
+
+    trend: str = "stable"
+    trend_delta_pct: Optional[float] = None
+
+    is_new: bool = False
+    low_sample: bool = False
 
     model_config = {"from_attributes": True}
 
 
+class PaginatedDomainsResponse(BaseModel):
+    items: list[DomainStats]
+    total: int
+    page: int
+    size: int
+    pages: int
+
+    model_config = {"from_attributes": True}
+
+
+class ActiveJob(BaseModel):
+    job_id: str
+    file_name: Optional[str] = None
+    progress_percent: int
+    processed: int
+    total: int
+
+    model_config = {"from_attributes": True}
+
+class DomainOverview(BaseModel):
+    total_domains: int
+
+    total_emails: int
+
+    safe: int
+    risky: int
+    unsafe: int
+    processing: int
+
+    flagged_domains: int
+    disposable_domains: int
+    catch_all_domains: int
+    no_mx_domains: int
+    new_domains_count: int
+
+    average_risk_percent: float
+    average_trust_score: int
+
+    model_config = {"from_attributes": True}
+    
 class DashboardStats(BaseModel):
     total_emails: int
-    per_status_counts: Dict[str, int]  # keys: verified, deliverable, trusted, probably_valid, risky, unconfirmed, uncertain, invalid, undeliverable, processing
-    bucket_counts: Dict[str, int]      # keys: safe, risky, unsafe, processing
+    per_status_counts: Dict[str, int]  # verified, deliverable, trusted, probably_valid, risky, unconfirmed, uncertain, invalid, undeliverable, processing
+    bucket_counts: Dict[str, int]      # safe, risky, unsafe, processing
     trust_score: int                   # 0-100
-    flagged_counts: Dict[str, int]     # keys: disposable, role_based, catch_all
-    top_domains: List[Dict[str, Any]]  # each: {domain: str, bucket_counts: Dict[str, int]}
-    daily_volume: List[Dict[str, Any]] # each: {date: str, bucket_counts: Dict[str, int]}
-    active_job: Optional[Dict[str, Any]] # {job_id: str, file_name: str, progress_percent: int, processed: int, total: int} or None
+    flagged_counts: Dict[str, int]     # disposable, role_based, catch_all
+    top_domains: List[Dict[str, Any]]  # each: {domain, safe, risky, unsafe, processing, total, risk_pct}
+    daily_volume: List[Dict[str, Any]] # each: {date, safe, risky, unsafe, processing}
+    active_job: Optional[ActiveJob] = None
 
     model_config = {"from_attributes": True}
 
@@ -95,3 +160,5 @@ class VerificationTrend(BaseModel):
     verified: int
     invalid: int
     risky: int
+
+    model_config = {"from_attributes": True}

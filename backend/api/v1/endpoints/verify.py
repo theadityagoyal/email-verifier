@@ -13,6 +13,11 @@ router = APIRouter(prefix="/verify-email", tags=["Verification"])
 logger = get_logger(__name__)
 
 
+def _utc_now_naive() -> datetime:
+    """Return current UTC datetime as naive (tzinfo=None)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 @router.post("", response_model=EmailVerifyResponse, status_code=status.HTTP_200_OK)
 async def verify_email_endpoint(
     payload: EmailVerifyRequest,
@@ -24,21 +29,56 @@ async def verify_email_endpoint(
     """
     result = await verify_email(payload.email)
 
+    # Convert aware datetime from service to naive for storage
+    verified_at_naive = (
+        result.verified_at.replace(tzinfo=None) if result.verified_at else None
+    )
+
     # Persist / update
     existing = (
         await db.execute(select(Email).where(Email.email == result.email))
     ).scalar_one_or_none()
 
-    now = datetime.now(timezone.utc)
+    now = _utc_now_naive()
 
     if existing:
-        for field in ("domain", "status", "syntax_valid", "domain_exists",
-                      "mx_found", "smtp_valid", "disposable", "role_based",
-                      "catch_all", "score", "verified_at"):
-            setattr(existing, field, getattr(result, field))
+        # Update fields individually, handling verified_at conversion
+        update_data = {
+            "domain": result.domain,
+            "status": result.status,
+            "syntax_valid": result.syntax_valid,
+            "domain_exists": result.domain_exists,
+            "mx_found": result.mx_found,
+            "smtp_valid": result.smtp_valid,
+            "disposable": result.disposable,
+            "role_based": result.role_based,
+            "catch_all": result.catch_all,
+            "score": result.score,
+            "verified_at": verified_at_naive,
+        }
+        for field, value in update_data.items():
+            setattr(existing, field, value)
         existing.updated_at = now
     else:
-        db.add(Email(**result.model_dump(exclude={"username_quality", "username_flags"}), created_at=now, updated_at=now))
+        # Create new Email instance with naive datetimes
+        email_obj = Email(
+            email=result.email,
+            domain=result.domain,
+            status=result.status,
+            syntax_valid=result.syntax_valid,
+            domain_exists=result.domain_exists,
+            mx_found=result.mx_found,
+            smtp_valid=result.smtp_valid,
+            disposable=result.disposable,
+            role_based=result.role_based,
+            catch_all=result.catch_all,
+            score=result.score,
+            job_id=None,  # single verify endpoint doesn't associate with a job
+            verified_at=verified_at_naive,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(email_obj)
 
     # Update domain stats
     if result.domain:

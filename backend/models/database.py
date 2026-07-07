@@ -1,17 +1,27 @@
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import (
+    create_async_engine,
+    AsyncSession,
+    async_sessionmaker,
+)
+
 from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
 from utils.config import settings
 
-# Async engine for FastAPI
+# Async Engine (FastAPI)
 async_engine = create_async_engine(
-    settings.DATABASE_URL.replace("mysql+pymysql://", "mysql+aiomysql://"),
+    settings.DATABASE_URL.replace(
+        "mysql+pymysql://",
+        "mysql+aiomysql://"
+    ),
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,
     echo=settings.DEBUG,
 )
 
-# Sync engine for Celery workers
+# Sync Engine (Alembic / Background Tasks)
 sync_engine = create_engine(
     settings.DATABASE_URL,
     pool_pre_ping=True,
@@ -26,8 +36,11 @@ AsyncSessionLocal = async_sessionmaker(
     expire_on_commit=False,
 )
 
-from sqlalchemy.orm import sessionmaker
-SyncSessionLocal = sessionmaker(bind=sync_engine, autoflush=False, autocommit=False)
+SyncSessionLocal = sessionmaker(
+    bind=sync_engine,
+    autoflush=False,
+    autocommit=False,
+)
 
 
 async def get_db():
@@ -38,8 +51,6 @@ async def get_db():
         except Exception:
             await session.rollback()
             raise
-        finally:
-            await session.close()
 
 
 def get_sync_db():

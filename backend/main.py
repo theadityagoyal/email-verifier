@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -6,9 +7,20 @@ import time
 from api.v1.router import api_router
 from utils.config import settings
 from utils.logging import configure_logging, get_logger
+from utils.executor import get_executor, shutdown_executor
 
 configure_logging()
 logger = get_logger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    executor = get_executor()
+    logger.info("application_startup", workers=executor._max_workers)
+    yield
+    logger.info("application_shutdown")
+    shutdown_executor(wait=True)
+
 
 app = FastAPI(
     title="Email Verification System",
@@ -16,6 +28,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # CORS
@@ -55,13 +68,3 @@ app.include_router(api_router)
 @app.get("/health", tags=["Health"])
 async def health():
     return {"status": "ok", "version": "1.0.0"}
-
-
-@app.on_event("startup")
-async def on_startup():
-    logger.info("application_startup")
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    logger.info("application_shutdown")

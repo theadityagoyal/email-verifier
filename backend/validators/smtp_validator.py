@@ -45,8 +45,8 @@ def _smtp_check(email: str, mx_host: str, timeout: int) -> tuple[bool, bool]:
 def verify_smtp(email: str, mx_records: list[str]) -> tuple[bool, bool]:
     if not mx_records:
         return False, False
-    # Try only top 2 MX
-    for mx in mx_records[:2]:
+    # Try only top 1 MX for speed (was top 2)
+    for mx in mx_records[:1]:
         try:
             result = _smtp_check(email, mx, settings.SMTP_TIMEOUT)
             if result[0]:

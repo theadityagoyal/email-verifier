@@ -1,19 +1,28 @@
 import uuid
 import io
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, desc, delete
 import pandas as pd
+from pandas.errors import ParserError
 
 from models.database import get_db
 from models.models import Job, Email, JobStatus
 from schemas.schemas import JobStatusResponse, BulkUploadResponse
-from services.s3_service import upload_file_to_s3
-from tasks.verification_tasks import process_bulk_job
 from utils.config import settings
 from utils.logging import get_logger
 from utils.email_utils import detect_email_column
+
+
+
+# Import the sync processor
+from tasks.bulk_processor import (
+    process_bulk_job_sync,
+    verify_single_email_sync,
+)
 
 router = APIRouter(tags=["Bulk"])
 logger = get_logger(__name__)
@@ -23,12 +32,26 @@ def _read_file(content: bytes, filename: str) -> pd.DataFrame:
     """Read CSV or Excel file into DataFrame."""
     try:
         if filename.endswith(".csv"):
-            # Try different encodings
             for encoding in ["utf-8", "latin-1", "cp1252"]:
                 try:
-                    return pd.read_csv(io.BytesIO(content), encoding=encoding)
+                    df = pd.read_csv(io.BytesIO(content), encoding=encoding)
+                    return df
                 except UnicodeDecodeError:
                     continue
+                except ParserError:
+                    # Fallback: treat each line as a single column (email)
+                    try:
+                        text = content.decode(encoding, errors="replace")
+                    except UnicodeDecodeError:
+                        text = content.decode("utf-8", errors="replace")
+                    lines = [line.strip() for line in text.splitlines() if line.strip() != ""]
+                    if not lines:
+                        return pd.DataFrame(columns=["email"])
+                    header = lines[0]
+                    data_lines = lines[1:] if "@" not in header or header.lower().startswith("email") else lines
+                    col_name = "email" if header.lower() == "email" else header
+                    df = pd.DataFrame({col_name: data_lines})
+                    return df
         elif filename.endswith((".xlsx", ".xls")):
             return pd.read_excel(io.BytesIO(content))
         raise ValueError("Unsupported file format")
@@ -48,6 +71,7 @@ def _detect_email_column(df: pd.DataFrame) -> str:
 async def bulk_upload(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
     """Upload CSV or Excel file for bulk email verification."""
     filename = file.filename.lower()
@@ -109,14 +133,27 @@ async def bulk_upload(
     db.add(job)
     await db.commit()
 
-    # Start processing the job
-    from tasks.verification_tasks import process_bulk_job
+    # Start processing the job in background using FastAPI BackgroundTasks
     logger.info("about_to_dispatch_bulk_job", job_id=job_id, email_col=email_col)
-    process_bulk_job.delay(job_id, s3_key, email_col)
+    background_tasks.add_task(process_bulk_job_sync, job_id, s3_key, email_col)
     logger.info("bulk_job_dispatched", job_id=job_id)
 
     return BulkUploadResponse(job_id=job_id, message="Job queued", total_emails=total)
 
+@router.get("/jobs")
+async def list_jobs(db: AsyncSession = Depends(get_db)):
+    """
+    Return all bulk upload jobs ordered by newest first.
+    Used by the frontend to restore upload history after refresh/navigation.
+    """
+
+    jobs = (
+        await db.execute(
+            select(Job).order_by(desc(Job.created_at))
+        )
+    ).scalars().all()
+
+    return jobs
 
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(job_id: str, db: AsyncSession = Depends(get_db)):
@@ -125,6 +162,38 @@ async def get_job_status(job_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Job not found.")
     return job
 
+
+@router.delete("/jobs/{job_id}")
+async def delete_job(
+    job_id: str, 
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete a job and all associated data."""
+    # Get the job
+    job = (await db.execute(select(Job).where(Job.job_id == job_id))).scalar_one_or_none()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Delete associated email records
+    await db.execute(delete(Email).where(Email.job_id == job_id))
+    
+    # Delete the job itself
+    await db.delete(job)
+    await db.commit()
+    
+    # Delete uploaded file if it exists locally
+    try:
+        if job.s3_key.startswith("local:"):
+            path_part = job.s3_key.replace("local:", "")
+            job_id_part, filename = path_part.split("/", 1)
+            filepath = f"/tmp/uploads/{job_id_part}/{filename}"
+            if os.path.exists(filepath):
+                os.remove(filepath)
+    except Exception as e:
+        logger.warning("could_not_delete_file", job_id=job_id, error=str(e))
+    
+    return {"message": "deleted", "job_id": job_id}
 
 @router.get("/jobs/{job_id}/export")
 async def export_job_results(job_id: str, db: AsyncSession = Depends(get_db)):
@@ -154,8 +223,8 @@ async def export_job_results(job_id: str, db: AsyncSession = Depends(get_db)):
         original_df = None
         email_col = "email"
 
-    # Fetch verified results from DB
-    emails_db = (await db.execute(select(Email))).scalars().all()
+    # Fetch verified results from DB (only for this job)
+    emails_db = (await db.execute(select(Email).where(Email.job_id == job_id))).scalars().all()
     results_map = {e.email: e for e in emails_db}
 
     if original_df is not None:

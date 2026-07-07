@@ -1,39 +1,7 @@
+version: "3.8"
+
 services:
-  # ── MySQL ────────────────────────────────────────────────────────────────────
-  mysql:
-    image: mysql:8.0
-    container_name: ev_mysql
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-password}
-      MYSQL_DATABASE: email_verifier
-    ports:
-      - "3306:3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-password}"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  # ── Redis ─────────────────────────────────────────────────────────────────────
-  redis:
-    image: redis:7-alpine
-    container_name: ev_redis
-    restart: unless-stopped
-    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
-  # ── FastAPI backend ───────────────────────────────────────────────────────────
+  # ── FastAPI backend ──────────────────────────────────────────────────────────
   backend:
     build:
       context: ./backend
@@ -41,61 +9,13 @@ services:
     container_name: ev_backend
     restart: unless-stopped
     env_file: ./backend/.env
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-password}
-      DATABASE_URL: mysql+pymysql://root:${MYSQL_ROOT_PASSWORD:-password}@mysql:3306/email_verifier
-      REDIS_URL: redis://redis:6379/0
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
       - /tmp/uploads:/tmp/uploads
 
-
-  # ── Celery worker ─────────────────────────────────────────────────────────────
-  worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: ev_worker
-    restart: unless-stopped
-    command: celery -A tasks.celery_app worker --loglevel=info --concurrency=20 -Q celery
-    env_file: ./backend/.env
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-password}
-      REDIS_URL: redis://redis:6379/0
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./backend:/app
-      - /tmp/uploads:/tmp/uploads
-
-  # ── Celery Flower (monitoring UI) ─────────────────────────────────────────────
-  flower:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: ev_flower
-    restart: unless-stopped
-    command: celery -A tasks.celery_app flower --port=5555
-    env_file: ./backend/.env
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-password}
-    ports:
-      - "5555:5555"
-    depends_on:
-      - redis
-      - worker
-
-  # ── React frontend ────────────────────────────────────────────────────────────
+  # ── React frontend ───────────────────────────────────────────────────────────
   frontend:
     build:
       context: ./frontend
@@ -104,9 +24,3 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
-    depends_on:
-      - backend
-
-volumes:
-  mysql_data:
-  redis_data:

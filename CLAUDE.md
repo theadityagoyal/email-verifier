@@ -1,236 +1,65 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code when working with this repository.
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
 
-## Core Principles
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
-* Never make assumptions.
-* Verify findings using actual code.
-* Always provide file paths and line numbers.
-* Prefer evidence over theory.
-* Optimize for business impact, reliability, accuracy, and scalability.
-* Do not suggest rewrites unless explicitly requested.
+## 1. Think Before Coding
 
----
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
 
-## Prompt Enhancement Rules
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
 
-Before executing any request:
+## 2. Simplicity First
 
-1. Analyze the prompt.
-2. Identify ambiguity.
-3. Improve the prompt.
-4. Add validation requirements.
-5. Add anti-hallucination instructions.
-6. Add verification steps.
-7. Then execute the enhanced prompt.
+**Minimum code that solves the problem. Nothing speculative.**
 
-Always show:
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
 
-### Original Prompt
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
 
-### Enhanced Prompt
+## 3. Surgical Changes
 
-### Execution Plan
+**Touch only what you must. Clean up only your own mess.**
 
-Unless the user explicitly says:
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
 
-"Do not enhance."
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
 
----
+The test: Every changed line should trace directly to the user's request.
 
-## Engineering Review Rules
+## 4. Goal-Driven Execution
 
-When reviewing code:
+**Define success criteria. Loop until verified.**
 
-1. Verify findings using actual code.
-2. Show exact file paths.
-3. Show exact line numbers.
-4. Show current implementation.
-5. Explain impact.
-6. Suggest minimal-risk fixes.
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
 
-Classify findings as:
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
 
-* VERIFIED
-* POTENTIAL
-* UNVERIFIED
-
-Never report vulnerabilities without evidence.
-
----
-
-## Bug Investigation Workflow
-
-For every bug:
-
-1. Reproduce issue.
-2. Locate exact file.
-3. Identify root cause.
-4. Show affected code.
-5. Propose minimal fix.
-6. Explain testing strategy.
-7. Estimate regression risk.
-
-Never modify code before identifying root cause.
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
 ---
 
-## Security Review Rules
-
-For every security finding provide:
-
-* Severity
-* File path
-* Line numbers
-* Vulnerable code
-* Exploitation scenario
-* Recommended fix
-
-If exploitability cannot be proven:
-
-Mark as:
-
-UNVERIFIED
-
-Avoid generic OWASP checklists.
-
-Focus on real exploitable issues.
-
----
-
-## Email Verification Expertise
-
-When reviewing verification logic focus on:
-
-* False positives
-* False negatives
-* SMTP reliability
-* DNS reliability
-* MX validation
-* Disposable email detection
-* Catch-all domains
-* Temporary mailbox detection
-* Verification accuracy
-* Bulk verification performance
-
-Accuracy is more important than theoretical security findings.
-
----
-
-## Performance Review Rules
-
-Focus on:
-
-1. Verification throughput
-2. Database efficiency
-3. Celery worker efficiency
-4. Queue performance
-5. Memory usage
-6. Large CSV processing
-
-Always estimate:
-
-* Impact
-* Effort
-* Expected improvement
-
----
-
-## Refactoring Rules
-
-Prefer:
-
-* Incremental improvements
-* Low-risk changes
-* Backward-compatible changes
-
-Avoid recommending:
-
-* Framework rewrites
-* Microservices
-* Complete redesigns
-
-Unless explicitly requested.
-
----
-
-## Production Readiness Checklist
-
-Before production deployment verify:
-
-* Authentication implemented
-* Authorization implemented
-* Rate limiting enabled
-* HTTPS configured
-* Secrets removed from source code
-* Upload validation implemented
-* Logging configured
-* Monitoring configured
-* Database indexes reviewed
-* Backup strategy documented
-
----
-
-## Code Modification Rules
-
-Before modifying code:
-
-1. Explain why the change is needed.
-2. Show current implementation.
-3. Show proposed implementation.
-4. Estimate impact.
-5. Explain testing approach.
-
-After modifying code:
-
-1. Summarize changes.
-2. List modified files.
-3. Explain risks.
-4. Suggest validation steps.
-
----
-
-## Technical Debt Rules
-
-Classify recommendations into:
-
-### Fix Now
-
-High impact + low effort
-
-### Before Production
-
-Important but not urgent
-
-### Scaling Phase
-
-Required for higher load
-
-### Nice To Have
-
-Optional improvements
-
----
-
-## Communication Style
-
-Be direct.
-
-Avoid generic advice.
-
-Provide:
-
-* Exact files
-* Exact code locations
-* Actionable steps
-* Impact estimates
-* Effort estimates
-
-Whenever possible provide:
-
-* Current code
-* Improved code
-* Test plan
-
-Do not provide theory unless requested.
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

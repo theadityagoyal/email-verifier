@@ -1,6 +1,6 @@
 # Email Verification System
 
-Production-ready email verification platform with a React dashboard, FastAPI backend, Celery workers, MySQL, and Redis.
+Production-ready email verification platform with a React dashboard, FastAPI backend, MySQL, and background processing via ThreadPoolExecutor + FastAPI BackgroundTasks.
 
 ---
 
@@ -9,12 +9,12 @@ Production-ready email verification platform with a React dashboard, FastAPI bac
 | Feature | Details |
 |---------|---------|
 | **Single email verification** | Syntax → DNS → MX → SMTP → disposable → role → catch-all → score |
-| **Bulk CSV upload** | Async processing via Celery + Redis queue |
+| **Bulk CSV upload** | Async processing via FastAPI BackgroundTasks + ThreadPoolExecutor |
 | **Real-time dashboard** | Stats cards, trend charts, domain analytics |
 | **Email list** | Paginated, searchable, filterable, CSV export |
 | **Domain analytics** | Per-domain breakdown with bounce rate |
 | **Job tracking** | Live progress for bulk jobs |
-| **AWS ready** | S3, RDS MySQL, ElastiCache, EC2/ECS |
+| **AWS ready** | S3, RDS MySQL (Redis and Celery removed for simpler deployment) |
 
 ---
 
@@ -42,14 +42,15 @@ email-verifier/
 │   │   ├── disposable_checker.py
 │   │   └── score_calculator.py
 │   ├── tasks/
-│   │   ├── celery_app.py      # Celery configuration
-│   │   └── verification_tasks.py
+│   │   └── bulk_processor.py  # Background job processing (no Celery)
 │   ├── migrations/            # Alembic migrations
 │   ├── tests/
 │   │   └── test_validators.py
 │   ├── utils/
 │   │   ├── config.py          # Pydantic settings
-│   │   └── logging.py         # Structured logging
+│   │   ├── logging.py         # Structured logging
+│   │   ├── email_utils.py     # Email utilities
+│   │   └── executor.py        # ThreadPoolExecutor wrapper
 │   ├── main.py                # FastAPI application
 │   ├── requirements.txt
 │   ├── Dockerfile
@@ -113,10 +114,7 @@ This starts:
 | Container | Port | Purpose |
 |-----------|------|---------|
 | `ev_mysql` | 3306 | MySQL 8.0 database |
-| `ev_redis` | 6379 | Redis broker + result backend |
-| `ev_backend` | 8000 | FastAPI (runs migrations on start) |
-| `ev_worker` | — | Celery verification worker |
-| `ev_flower` | 5555 | Celery monitoring UI |
+| `ev_backend` | 8000 | FastAPI (runs migrations on start, handles background tasks via ThreadPoolExecutor) |
 | `ev_frontend` | 80 | React dashboard via Nginx |
 
 ### 3. Access
@@ -125,7 +123,6 @@ This starts:
 |-----|-------------|
 | http://localhost | React Dashboard |
 | http://localhost:8000/docs | Swagger API docs |
-| http://localhost:5555 | Flower (Celery monitor) |
 
 ---
 
@@ -140,20 +137,16 @@ source venv/bin/activate
 pip install -r requirements.txt
 pip install aiomysql
 
-# Start MySQL + Redis locally or via Docker:
+# Start MySQL locally or via Docker:
 docker run -d -p 3306:3306 -e MYSQL_ROOT_PASSWORD=password -e MYSQL_DATABASE=email_verifier mysql:8.0
-docker run -d -p 6379:6379 redis:7-alpine
 
-cp .env.example .env   # edit DATABASE_URL and REDIS_URL for local
+cp .env.example .env   # edit DATABASE_URL for local (no REDIS_URL needed)
 
 # Run migrations
 alembic upgrade head
 
 # Start API
 uvicorn main:app --reload --port 8000
-
-# Start Celery worker (separate terminal)
-celery -A tasks.celery_app worker --loglevel=info
 ```
 
 ### Frontend
@@ -303,7 +296,7 @@ pytest tests/ -v
 | ORM | SQLAlchemy 2.0 (async) |
 | Migrations | Alembic |
 | Database | MySQL 8.0 |
-| Queue | Celery + Redis |
+| Queue | BackgroundTasks + ThreadPoolExecutor (no Celery/Redis) |
 | Storage | AWS S3 |
 | Frontend | React 18 + Vite |
 | Styling | Tailwind CSS |

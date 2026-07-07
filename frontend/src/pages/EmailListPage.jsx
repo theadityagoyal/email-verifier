@@ -1,166 +1,624 @@
-import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, Download, Filter, Trash2 } from 'lucide-react'
-import StatusBadge from '../components/ui/StatusBadge'
-import BoolIcon from '../components/ui/BoolIcon'
-import { listEmails, exportEmails, deleteEmail } from '../services/api'
+import { useState, useMemo } from 'react';
+import { motion } from 'framer-motion';
+import { useQuery } from '@tanstack/react-query';
+import {
+  Search, Filter, ChevronDown, ChevronUp, Download,
+  Check, Trash2, Mail, ExternalLink, ShieldCheck, AlertTriangle, XCircle,
+  ArrowUpDown, Globe, Shield, AlertCircle, Info, Calendar,
+  ChevronLeft, ChevronRight
+} from 'lucide-react';
+import { listEmails, exportEmails, deleteEmail, getDashboardStats } from '@/services/api';
+import StatusBadge, { getStatusBucket } from '@/components/ui/StatusBadge';
+import Button from '@/components/ui/Button';
 
-const STATUSES = ['', 'verified', 'invalid', 'risky', 'processing', 'deliverable', 'trusted', 'probably_valid', 'unconfirmed', 'uncertain', 'undeliverable']
-const SIZE = 20
+const statusOptions = [
+  { value: '', label: 'All Statuses' },
+  { value: 'safe', label: 'Safe' },
+  { value: 'risky', label: 'Risky' },
+  { value: 'unsafe', label: 'Unsafe' },
+  { value: 'processing', label: 'Processing' },
+];
 
-export default function EmailListPage() {
-  const [page, setPage] = useState(1)
-  const [search, setSearch] = useState('')
-  const [status, setStatus] = useState('')
-  const [searchInput, setSearchInput] = useState('')
+const scoreRangeOptions = [
+  { value: '', label: 'All Scores' },
+  { value: '80-100', label: '80+' },
+  { value: '60-79', label: '60 - 79' },
+  { value: '0-59', label: 'Below 60' },
+];
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['emails', page, search, status],
-    queryFn: () => listEmails({ page, size: SIZE, search: search || undefined, status: status || undefined }),
-    keepPreviousData: true,
-  })
-
-  const queryClient = useQueryClient()
-  const deleteMutation = useMutation({
-    mutationFn: deleteEmail,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['emails'] }),
-  })
-
-  const handleDelete = (email) => {
-    if (window.confirm(`Delete ${email}?`)) {
-      deleteMutation.mutate(email)
-    }
+function scoreStyles(score) {
+  if (score === null || score === undefined) {
+    return 'text-[var(--foreground)]/40 bg-[var(--muted)]/40';
   }
+  if (score >= 80) return 'text-emerald-700 bg-emerald-100 dark:text-emerald-400 dark:bg-emerald-900/20';
+  if (score >= 60) return 'text-amber-700 bg-amber-100 dark:text-amber-400 dark:bg-amber-900/20';
+  return 'text-red-700 bg-red-100 dark:text-red-400 dark:bg-red-900/20';
+}
 
-  const handleSearch = (e) => {
-    e.preventDefault()
-    setSearch(searchInput)
-    setPage(1)
-  }
+const CHECK_DEFS = [
+  { key: 'syntax_valid', icon: Check, tone: 'positive', label: 'Syntax' },
+  { key: 'domain_exists', icon: Globe, tone: 'positive', label: 'Domain' },
+  { key: 'mx_found', icon: Mail, tone: 'positive', label: 'MX' },
+  { key: 'smtp_valid', icon: Shield, tone: 'positive', label: 'SMTP' },
+  { key: 'disposable', icon: AlertTriangle, tone: 'warning', label: 'Disposable' },
+  { key: 'role_based', icon: Info, tone: 'info', label: 'Role' },
+  { key: 'catch_all', icon: AlertCircle, tone: 'warning', label: 'Catch-all' },
+];
 
-  const emails = data?.items ?? []
-  const total = data?.total ?? 0
-  const pages = data?.pages ?? 1
+const CHECK_TONE_COLORS = {
+  positive: 'text-emerald-600',
+  warning: 'text-amber-500',
+  info: 'text-blue-500',
+};
 
+function ChecksCell({ email }) {
   return (
-    <div className="p-6 space-y-5">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold text-white">Email List</h1>
-          <p className="text-slate-400 text-sm mt-0.5">{total.toLocaleString()} total records</p>
-        </div>
-        <a
-          href={exportEmails({ status: status || undefined })}
-          className="btn-secondary flex items-center gap-2 text-sm"
-          download
-        >
-          <Download className="w-4 h-4" />
-          Export CSV
-        </a>
+    <div className="flex items-center gap-1.5">
+      {CHECK_DEFS.map(({ key, icon: Icon, tone, label }) =>
+        email[key] ? (
+          <Icon key={key} title={label} className={`h-4 w-4 ${CHECK_TONE_COLORS[tone]}`} />
+        ) : null
+      )}
+    </div>
+  );
+}
+
+// KPI metric card - lightweight, local to this page (no new shared component needed).
+function KpiCard({ icon: Icon, iconBg, iconColor, label, value, subtitle, subtitleColor }) {
+  return (
+    <div className="card flex items-center gap-4 hover:shadow-md transition-shadow">
+      <div className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-full ${iconBg}`}>
+        <Icon className={`h-7 w-7 ${iconColor}`} />
       </div>
-
-      {/* Filters */}
-      <div className="flex gap-3 flex-wrap">
-        <form onSubmit={handleSearch} className="flex gap-2 flex-1 min-w-60">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-            <input
-              className="input pl-9"
-              placeholder="Search emails..."
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-            />
-          </div>
-          <button className="btn-secondary text-sm">Search</button>
-        </form>
-
-        <div className="relative">
-          <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-          <select
-            className="input pl-9 w-auto pr-8 appearance-none"
-            value={status}
-            onChange={(e) => { setStatus(e.target.value); setPage(1) }}
-          >
-            <option value="">All statuses</option>
-            {STATUSES.filter(Boolean).map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      {/* Table */}
-      <div className="card p-0 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-800 text-slate-400 text-left">
-                {['Email', 'Domain', 'Status', 'MX', 'SMTP', 'Disp.', 'Role', 'Catch-all', 'Score', 'Verified', 'Action'].map((h) => (
-                  <th key={h} className="px-4 py-3 font-medium whitespace-nowrap">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
-                <tr><td colSpan={11} className="text-center py-12 text-slate-600">Loading…</td></tr>
-              ) : emails.length === 0 ? (
-                <tr><td colSpan={11} className="text-center py-12 text-slate-600">No emails found</td></tr>
-              ) : emails.map((e) => (
-                <tr key={e.email} className="border-b border-slate-800/60 hover:bg-slate-800/30 transition-colors">
-                  <td className="px-4 py-3 font-mono text-xs text-slate-300 max-w-xs truncate">{e.email}</td>
-                  <td className="px-4 py-3 text-slate-400 whitespace-nowrap">{e.domain}</td>
-                  <td className="px-4 py-3"><StatusBadge status={e.status} /></td>
-                  <td className="px-4 py-3"><BoolIcon value={e.mx_found} /></td>
-                  <td className="px-4 py-3"><BoolIcon value={e.smtp_valid} /></td>
-                  <td className="px-4 py-3"><BoolIcon value={!e.disposable} /></td>
-                  <td className="px-4 py-3"><BoolIcon value={!e.role_based} /></td>
-                  <td className="px-4 py-3"><BoolIcon value={!e.catch_all} /></td>
-                  <td className="px-4 py-3">
-                    <span className={`font-semibold tabular-nums ${e.score >= 80 ? 'text-emerald-400' : e.score >= 50 ? 'text-amber-400' : 'text-red-400'}`}>
-                      {e.score}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">
-                    {e.verified_at ? new Date(e.verified_at).toLocaleDateString() : '—'}
-                  </td>
-                  <td className="px-4 py-3">
-                    <button
-                      onClick={() => handleDelete(e.email)}
-                      className="text-red-400 hover:text-red-300 transition-colors"
-                      title="Delete"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Pagination */}
-        <div className="flex items-center justify-between px-4 py-3 border-t border-slate-800">
-          <p className="text-xs text-slate-500">
-            Page {page} of {pages}
-          </p>
-          <div className="flex gap-2">
-            <button
-              className="btn-secondary text-xs py-1 px-3 disabled:opacity-40"
-              disabled={page === 1}
-              onClick={() => setPage(p => p - 1)}
-            >
-              Previous
-            </button>
-            <button
-              className="btn-secondary text-xs py-1 px-3 disabled:opacity-40"
-              disabled={page >= pages}
-              onClick={() => setPage(p => p + 1)}
-            >
-              Next
-            </button>
-          </div>
-        </div>
+      <div>
+        <p className="text-sm text-[var(--foreground)]/60">{label}</p>
+        <p className="text-2xl font-bold text-[var(--foreground)]">{value.toLocaleString()}</p>
+        <p className={`text-xs font-medium ${subtitleColor}`}>{subtitle}</p>
       </div>
     </div>
-  )
+  );
+}
+
+// Builds a compact page-number list with ellipses, e.g. [1, 2, 3, '...', 623]
+function getPageNumbers(current, total) {
+  const pages = [];
+  const windowSize = 1;
+
+  pages.push(1);
+  if (current - windowSize > 2) pages.push('...');
+
+  for (let p = Math.max(2, current - windowSize); p <= Math.min(total - 1, current + windowSize); p++) {
+    pages.push(p);
+  }
+
+  if (current + windowSize < total - 1) pages.push('...');
+  if (total > 1) pages.push(total);
+
+  return pages;
+}
+
+export default function EmailListPage() {
+  const [page, setPage] = useState(1);
+  const [size, setSize] = useState(20);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [domainFilter, setDomainFilter] = useState('');
+  const [scoreRange, setScoreRange] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [sortConfig, setSortConfig] = useState({ key: 'created_at', direction: 'desc' });
+  const [selectedEmails, setSelectedEmails] = useState(new Set());
+  const [selectAll, setSelectAll] = useState(false);
+  const [showFilters, setShowFilters] = useState(true);
+
+  const { data: stats } = useQuery({
+    queryKey: ['dashboard-stats', 7],
+    queryFn: () => getDashboardStats(7),
+  });
+
+  const [scoreMin, scoreMax] = scoreRange ? scoreRange.split('-').map(Number) : [undefined, undefined];
+
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: ['emails', page, size, search, statusFilter, domainFilter, scoreRange, dateFrom, dateTo],
+    queryFn: () => listEmails({
+      page,
+      size,
+      search: search || undefined,
+      status: statusFilter || undefined,
+      domain: domainFilter || undefined,
+      score_min: scoreMin,
+      score_max: scoreMax,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+    }),
+    placeholderData: (previousData) => previousData,
+  });
+
+  const emails = data?.items || [];
+  const total = data?.total || 0;
+  const totalPages = data?.pages || 1;
+
+  const totalEmails = stats?.total_emails || 0;
+  const safeCount = stats?.bucket_counts?.safe || 0;
+  const riskyCount = stats?.bucket_counts?.risky || 0;
+  const unsafeCount = stats?.bucket_counts?.unsafe || 0;
+  const pct = (n) => (totalEmails > 0 ? ((n / totalEmails) * 100).toFixed(1) : '0.0');
+
+  const handleSelectAll = () => {
+    if (selectAll) {
+      setSelectedEmails(new Set());
+    } else {
+      setSelectedEmails(new Set(emails.map((e) => e.email)));
+    }
+    setSelectAll(!selectAll);
+  };
+
+  const handleSelectEmail = (email) => {
+    setSelectedEmails((prev) => {
+      const next = new Set(prev);
+      if (next.has(email)) {
+        next.delete(email);
+      } else {
+        next.add(email);
+      }
+      return next;
+    });
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedEmails.size === 0) return;
+    if (!confirm(`Delete ${selectedEmails.size} email(s)?`)) return;
+
+    for (const email of selectedEmails) {
+      try {
+        await deleteEmail(email);
+      } catch (err) {
+        console.error(`Failed to delete ${email}:`, err);
+      }
+    }
+    setSelectedEmails(new Set());
+    setSelectAll(false);
+    refetch();
+  };
+
+  const handleBulkExport = () => {
+    const params = new URLSearchParams();
+    if (search) params.append('search', search);
+    if (statusFilter) params.append('status', statusFilter);
+    if (domainFilter) params.append('domain', domainFilter);
+    window.open(exportEmails(Object.fromEntries(params)), '_blank');
+  };
+
+  const handleClearFilters = () => {
+    setStatusFilter('');
+    setDomainFilter('');
+    setScoreRange('');
+    setDateFrom('');
+    setDateTo('');
+    setSearch('');
+    setPage(1);
+  };
+
+  const handleSort = (key) => {
+    setSortConfig((prev) => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc',
+    }));
+  };
+
+  const sortedEmails = useMemo(() => {
+    return [...emails].sort((a, b) => {
+      const aVal = a[sortConfig.key];
+      const bVal = b[sortConfig.key];
+      if (aVal === null || aVal === undefined) return 1;
+      if (bVal === null || bVal === undefined) return -1;
+
+      const comparison = String(aVal).localeCompare(String(bVal), undefined, { numeric: true });
+      return sortConfig.direction === 'asc' ? comparison : -comparison;
+    });
+  }, [emails, sortConfig]);
+
+  const formatDate = (dateString) => {
+    if (!dateString) return '\u2014';
+    return new Date(dateString).toLocaleString();
+  };
+
+  const columns = [
+    { key: 'select', label: '', width: 'w-12', sortable: false },
+    { key: 'email', label: 'Email', width: 'min-w-[240px]', sortable: true },
+    { key: 'domain', label: 'Domain', width: 'min-w-[140px]', sortable: true },
+    { key: 'status', label: 'Overall Status', width: 'w-36', sortable: true },
+    { key: 'score', label: 'Score', width: 'w-24', sortable: true },
+    { key: 'checks', label: 'Checks', width: 'w-36', sortable: false },
+    { key: 'verified_at', label: 'Verified', width: 'w-36', sortable: true },
+    { key: 'actions', label: 'Actions', width: 'w-24', sortable: false },
+  ];
+
+  return (
+    <div className="space-y-6">
+
+      <motion.div
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
+        className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4"
+      >
+        <div>
+          <h1 className="text-3xl font-bold text-[var(--foreground)] mb-1">Email List</h1>
+          <p className="text-sm text-[var(--foreground)]/60">Manage and filter verified emails</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button variant="secondary" onClick={handleBulkExport} disabled={total === 0}>
+            <Download className="h-4 w-4" />
+            Export Filtered
+          </Button>
+          <Button variant="ghost" onClick={handleBulkDelete} disabled={selectedEmails.size === 0} className="text-error hover:text-error">
+            <Trash2 className="h-4 w-4" />
+            Delete Selected ({selectedEmails.size})
+          </Button>
+        </div>
+      </motion.div>
+
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, delay: 0.05 }}
+        className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4"
+      >
+        <KpiCard
+          icon={ShieldCheck}
+          iconBg="bg-emerald-100 dark:bg-emerald-900/20"
+          iconColor="text-emerald-600"
+          label="Safe Emails"
+          value={safeCount}
+          subtitle={`${pct(safeCount)}% of total`}
+          subtitleColor="text-emerald-600"
+        />
+        <KpiCard
+          icon={AlertTriangle}
+          iconBg="bg-amber-100 dark:bg-amber-900/20"
+          iconColor="text-amber-600"
+          label="Risky Emails"
+          value={riskyCount}
+          subtitle={`${pct(riskyCount)}% of total`}
+          subtitleColor="text-amber-600"
+        />
+        <KpiCard
+          icon={XCircle}
+          iconBg="bg-red-100 dark:bg-red-900/20"
+          iconColor="text-red-600"
+          label="Unsafe Emails"
+          value={unsafeCount}
+          subtitle={`${pct(unsafeCount)}% of total`}
+          subtitleColor="text-red-600"
+        />
+        <KpiCard
+          icon={Mail}
+          iconBg="bg-[var(--accent)]/10"
+          iconColor="text-[var(--accent)]"
+          label="Total Emails"
+          value={totalEmails}
+          subtitle="All verified emails"
+          subtitleColor="text-[var(--foreground)]/50"
+        />
+      </motion.div>
+
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.1 }}
+        className="card overflow-hidden"
+      >
+        <div className="p-4">
+          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+            <div className="relative flex-1 max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--foreground)]/40" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+                placeholder="Search emails, domains..."
+                className="input pl-10"
+                aria-label="Search emails"
+              />
+            </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowFilters(!showFilters)}
+              className={showFilters ? 'bg-[var(--accent)]/10 border-[var(--accent)] text-[var(--accent)]' : ''}
+            >
+              <Filter className="h-4 w-4 mr-1" />
+              Filters
+              {showFilters ? <ChevronUp className="h-3.5 w-3.5 ml-1" /> : <ChevronDown className="h-3.5 w-3.5 ml-1" />}
+            </Button>
+          </div>
+
+          {showFilters && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"
+            >
+              <div>
+                <label className="block text-xs font-medium text-[var(--foreground)]/50 mb-1">Overall Status</label>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+                  className="input w-full"
+                >
+                  {statusOptions.map((s) => (
+                    <option key={s.value} value={s.value}>{s.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-[var(--foreground)]/50 mb-1">Domain</label>
+                <input
+                  type="text"
+                  value={domainFilter}
+                  onChange={(e) => { setDomainFilter(e.target.value); setPage(1); }}
+                  placeholder="All Domains"
+                  className="input w-full"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-[var(--foreground)]/50 mb-1">Score Range</label>
+                <select
+                  value={scoreRange}
+                  onChange={(e) => { setScoreRange(e.target.value); setPage(1); }}
+                  className="input w-full"
+                >
+                  {scoreRangeOptions.map((s) => (
+                    <option key={s.value} value={s.value}>{s.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-[var(--foreground)]/50 mb-1">Verified Date</label>
+                <div className="relative flex items-center gap-2">
+                  <Calendar className="absolute left-3 h-4 w-4 text-[var(--foreground)]/40 pointer-events-none" />
+                  <input
+                    type="date"
+                    value={dateFrom}
+                    onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
+                    className="input pl-9 w-full"
+                  />
+                </div>
+              </div>
+
+              <div className="sm:col-span-2 lg:col-span-4 flex items-center justify-end gap-2">
+                <Button variant="ghost" size="sm" onClick={handleClearFilters}>
+                  Clear Filters
+                </Button>
+                <Button variant="primary" size="sm" onClick={() => { setPage(1); refetch(); }}>
+                  <Filter className="h-4 w-4" />
+                  Apply Filters
+                </Button>
+              </div>
+            </motion.div>
+          )}
+        </div>
+      </motion.div>
+
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.15 }}
+        className="card overflow-hidden p-0"
+      >
+        {isLoading ? (
+          <div className="p-8 text-center">
+            <div className="animate-spin h-8 w-8 border-3 border-[var(--accent)] border-t-transparent rounded-full mx-auto mb-4" />
+            <p className="text-[var(--foreground)]/60">Loading emails...</p>
+          </div>
+        ) : error ? (
+          <div className="p-8 text-center text-error">
+            <p>Failed to load emails: {error.message}</p>
+            <Button variant="outline" onClick={() => refetch()} className="mt-2">
+              Retry
+            </Button>
+          </div>
+        ) : emails.length === 0 ? (
+          <div className="p-12 text-center">
+            <Mail className="h-16 w-16 text-[var(--foreground)]/20 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-[var(--foreground)] mb-2">No emails found</h3>
+            <p className="text-[var(--foreground)]/60">
+              {search || statusFilter || domainFilter
+                ? 'Try adjusting your filters'
+                : 'Upload emails via Bulk Upload to get started'}
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full" role="grid">
+                <thead className="sticky top-0 z-10">
+                  <tr className="border-b border-[var(--muted)] bg-[var(--muted)]/40">
+                    {columns.map((col) => (
+                      <th
+                        key={col.key}
+                        className={`px-4 py-3.5 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider ${col.width}`}
+                        style={{ minWidth: col.width }}
+                        scope="col"
+                      >
+                        {col.key === 'select' ? (
+                          <input
+                            type="checkbox"
+                            checked={selectAll && emails.length > 0}
+                            onChange={handleSelectAll}
+                            className="w-4 h-4 rounded border-[var(--muted)] text-[var(--accent)] focus:ring-[var(--accent)] cursor-pointer"
+                            aria-label="Select all emails on this page"
+                          />
+                        ) : col.sortable ? (
+                          <button
+                            onClick={() => handleSort(col.key)}
+                            className="flex items-center gap-1 hover:text-[var(--foreground)] transition-colors"
+                          >
+                            <span>{col.label}</span>
+                            {sortConfig.key === col.key ? (
+                              sortConfig.direction === 'asc' ? <ChevronUp className="h-3 w-3 text-[var(--foreground)]" /> : <ChevronDown className="h-3 w-3 text-[var(--foreground)]" />
+                            ) : (
+                              <ArrowUpDown className="h-3 w-3 text-[var(--foreground)]/30" />
+                            )}
+                          </button>
+                        ) : (
+                          col.label
+                        )}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--muted)]">
+                  {sortedEmails.map((email, rowIndex) => (
+                    <motion.tr
+                      key={email.email}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ duration: 0.3, delay: rowIndex * 0.02 }}
+                      className={`transition-colors hover:bg-[var(--accent)]/5 ${rowIndex % 2 === 1 ? 'bg-[var(--muted)]/10' : ''}`}
+                    >
+                      <td className="px-4 py-3.5">
+                        <input
+                          type="checkbox"
+                          checked={selectedEmails.has(email.email)}
+                          onChange={() => handleSelectEmail(email.email)}
+                          className="w-4 h-4 rounded border-[var(--muted)] text-[var(--accent)] focus:ring-[var(--accent)] cursor-pointer"
+                          aria-label={`Select ${email.email}`}
+                        />
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <div className="flex items-center gap-2">
+                          <Mail className="h-4 w-4 text-[var(--foreground)]/30 shrink-0" />
+                          <a
+                            href={`mailto:${email.email}`}
+                            className="font-medium text-[var(--foreground)] hover:text-[var(--accent)] truncate block max-w-xs"
+                          >
+                            {email.email}
+                          </a>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <a
+                          href={`https://${email.domain}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[var(--accent)] hover:underline transition-colors flex items-center gap-1"
+                        >
+                          {email.domain}
+                          <ExternalLink className="h-3 w-3 opacity-50" />
+                        </a>
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <StatusBadge status={email.status} />
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <span className={`inline-flex items-center justify-center min-w-[2.5rem] rounded-full px-2.5 py-1 font-mono text-sm font-semibold tabular-nums ${scoreStyles(email.score)}`}>
+                          {email.score ?? '\u2014'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <ChecksCell email={email} />
+                      </td>
+                      <td className="px-4 py-3.5 text-[var(--foreground)]/50 font-mono text-sm">
+                        {formatDate(email.verified_at)}
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => window.open(`mailto:${email.email}`, '_blank')}
+                            aria-label={`Email ${email.email}`}
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={async () => {
+                              if (!confirm(`Delete ${email.email}?`)) return;
+                              try {
+                                await deleteEmail(email.email);
+                                refetch();
+                              } catch (err) {
+                                console.error(`Failed to delete ${email.email}:`, err);
+                              }
+                            }}
+                            className="text-error hover:text-error hover:bg-error/10"
+                            aria-label={`Delete ${email.email}`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </td>
+                    </motion.tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="px-4 py-3.5 border-t border-[var(--muted)] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="text-sm text-[var(--foreground)]/50">
+                Showing {(page - 1) * size + 1} to {Math.min(page * size, total)} of {total.toLocaleString()} results
+              </div>
+              <div className="flex items-center gap-2">
+                <select
+                  value={size}
+                  onChange={(e) => { setSize(Number(e.target.value)); setPage(1); }}
+                  className="input w-auto py-1.5 text-sm"
+                  aria-label="Results per page"
+                >
+                  <option value={10}>10 per page</option>
+                  <option value={20}>20 per page</option>
+                  <option value={50}>50 per page</option>
+                  <option value={100}>100 per page</option>
+                </select>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+
+                {getPageNumbers(page, totalPages).map((p, idx) =>
+                  p === '...' ? (
+                    <span key={`ellipsis-${idx}`} className="px-2 text-sm text-[var(--foreground)]/40">...</span>
+                  ) : (
+                    <button
+                      key={p}
+                      onClick={() => setPage(p)}
+                      className={`min-w-[2rem] h-8 rounded-lg text-sm font-medium transition-colors ${
+                        p === page
+                          ? 'bg-[var(--accent)] text-white'
+                          : 'hover:bg-[var(--muted)] text-[var(--foreground)]/70'
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  )
+                )}
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={page === totalPages}
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
+      </motion.div>
+    </div>
+  );
 }
