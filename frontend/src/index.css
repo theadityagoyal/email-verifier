@@ -36,47 +36,36 @@
     @apply bg-[var(--background)] text-[var(--foreground)] antialiased;
 
     background-image:
-      radial-gradient(circle at top right, rgba(99,102,241,.08), transparent 35%),
-      radial-gradient(circle at bottom left, rgba(16,185,129,.05), transparent 30%);
+      radial-gradient(circle at top right, rgba(99, 102, 241, .08), transparent 35%),
+      radial-gradient(circle at bottom left, rgba(16, 185, 129, .05), transparent 30%);
   }
 }
 
 @layer components {
   .card {
-  @apply bg-[var(--card)]
-         rounded-2xl
-         p-6
-         border
-         border-[var(--muted)]
-         shadow-xl
-         transition-all
-         duration-300;
+    @apply bg-[var(--card)] rounded-2xl p-6 border border-[var(--muted)] shadow-xl transition-all duration-300;
 
-  background: var(--card);
-  backdrop-filter: blur(12px);
-}
+    background: var(--card);
+    backdrop-filter: blur(12px);
+  }
 
-.card:hover {
-  transform: translateY(-2px);
-  box-shadow:
-    0 15px 40px rgba(15, 23, 42, 0.12),
-    0 4px 12px rgba(15, 23, 42, 0.08);
-}
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow:
+      0 15px 40px rgba(15, 23, 42, 0.12),
+      0 4px 12px rgba(15, 23, 42, 0.08);
+  }
 
   .btn-primary {
-    @apply bg-[var(--accent)] hover:bg-[#34D399] text-white font-semibold px-4 py-2 rounded-lg
-           transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply bg-[var(--accent)] hover:bg-[#34D399] text-white font-semibold px-4 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
   }
 
   .btn-secondary {
-    @apply bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium px-4 py-2 rounded-lg
-           transition-colors;
+    @apply bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium px-4 py-2 rounded-lg transition-colors;
   }
 
   .input {
-    @apply bg-[var(--card)] border border-[var(--muted)] rounded-lg px-4 py-2 text-[var(--foreground)]
-           focus:outline-none focus:ring-2 focus:ring-[var(--accent)]
-           w-full;
+    @apply bg-[var(--card)] border border-[var(--muted)] rounded-lg px-4 py-2 text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] w-full;
   }
 
   .input::placeholder {
@@ -85,42 +74,34 @@
   }
 
   .badge-verified {
-    @apply bg-emerald-500/30 text-emerald-400 border border-emerald-500/30
-           px-2 py-0.5 rounded-full text-xs font-medium;
+    @apply bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full text-xs font-medium;
   }
 
   .badge-invalid {
-    @apply bg-red-500/30 text-red-400 border border-red-500/30
-           px-2 py-0.5 rounded-full text-xs font-medium;
+    @apply bg-red-500/30 text-red-400 border border-red-500/30 px-2 py-0.5 rounded-full text-xs font-medium;
   }
 
   .badge-risky {
-    @apply bg-amber-500/30 text-amber-400 border border-amber-500/30
-           px-2 py-0.5 rounded-full text-xs font-medium;
+    @apply bg-amber-500/30 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded-full text-xs font-medium;
   }
 
   .badge-processing {
-    @apply bg-sky-500/30 text-sky-400 border border-sky-500/30
-           px-2 py-0.5 rounded-full text-xs font-medium;
+    @apply bg-sky-500/30 text-sky-400 border border-sky-500/30 px-2 py-0.5 rounded-full text-xs font-medium;
   }
 
   .badge-success {
-    @apply bg-success bg-opacity-20 text-success text-opacity-80 border-success border-opacity-30
-           px-2 py-0.5 rounded-full text-xs font-medium;
+    @apply bg-success bg-opacity-20 text-success text-opacity-80 border-success border-opacity-30 px-2 py-0.5 rounded-full text-xs font-medium;
   }
 
   .badge-error {
-    @apply bg-error bg-opacity-20 text-error text-opacity-80 border-error border-opacity-30
-           px-2 py-0.5 rounded-full text-xs font-medium;
+    @apply bg-error bg-opacity-20 text-error text-opacity-80 border-error border-opacity-30 px-2 py-0.5 rounded-full text-xs font-medium;
   }
 
   .badge-warning {
-    @apply bg-warning bg-opacity-20 text-warning text-opacity-80 border-warning border-opacity-30
-           px-2 py-0.5 rounded-full text-xs font-medium;
+    @apply bg-warning bg-opacity-20 text-warning text-opacity-80 border-warning border-opacity-30 px-2 py-0.5 rounded-full text-xs font-medium;
   }
 
   .badge-info {
-    @apply bg-info bg-opacity-20 text-info text-opacity-80 border-info border-opacity-30
-           px-2 py-0.5 rounded-full text-xs font-medium;
+    @apply bg-info bg-opacity-20 text-info text-opacity-80 border-info border-opacity-30 px-2 py-0.5 rounded-full text-xs font-medium;
   }
 }

@@ -44,9 +44,8 @@ export default function Layout() {
         <div className="flex h-full flex-col">
 
           <div
-            className={`flex h-16 items-center border-b border-[var(--muted)] px-5 ${
-              sidebarOpen ? 'justify-between' : 'justify-center'
-            }`}
+            className={`flex h-16 items-center border-b border-[var(--muted)] px-5 ${sidebarOpen ? 'justify-between' : 'justify-center'
+              }`}
           >
             <Link
               to="/"
@@ -101,11 +100,10 @@ export default function Layout() {
                   onClick={() => setMobileMenuOpen(false)}
                   className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-all duration-300
 
-                  ${
-                    active
+                  ${active
                       ? 'bg-gradient-to-r from-indigo-500 to-violet-600 text-white shadow-lg'
                       : 'text-[var(--foreground)]/65 hover:bg-indigo-50 dark:hover:bg-slate-700 hover:text-[var(--foreground)]'
-                  }
+                    }
 
                   ${!sidebarOpen ? 'justify-center' : ''}
                   `}
@@ -143,9 +141,8 @@ export default function Layout() {
       </aside>
 
       <main
-        className={`min-h-screen transition-all duration-300 ${
-          sidebarOpen ? 'ml-72' : 'ml-24'
-        }`}
+        className={`min-h-screen transition-all duration-300 ${sidebarOpen ? 'ml-72' : 'ml-24'
+          }`}
       >
 
         <header className="sticky top-0 z-30 border-b border-[var(--muted)] bg-[var(--card)]/90 backdrop-blur-xl">

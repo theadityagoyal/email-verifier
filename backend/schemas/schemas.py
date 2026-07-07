@@ -141,7 +141,8 @@ class DomainOverview(BaseModel):
     average_trust_score: int
 
     model_config = {"from_attributes": True}
-    
+
+
 class DashboardStats(BaseModel):
     total_emails: int
     per_status_counts: Dict[str, int]  # verified, deliverable, trusted, probably_valid, risky, unconfirmed, uncertain, invalid, undeliverable, processing
@@ -151,6 +152,14 @@ class DashboardStats(BaseModel):
     top_domains: List[Dict[str, Any]]  # each: {domain, safe, risky, unsafe, processing, total, risk_pct}
     daily_volume: List[Dict[str, Any]] # each: {date, safe, risky, unsafe, processing}
     active_job: Optional[ActiveJob] = None
+
+    # ── New: powers the enhanced Status Breakdown card ──────────────────────
+    per_status_trend: Dict[str, int] = {}      # raw count delta per status vs previous 24h
+    bucket_trend_pct: Dict[str, float] = {}    # % change per bucket vs previous 24h
+    verification_speed: float = 0.0            # emails/sec, live (last 5 min window)
+    avg_processing_time_ms: Optional[float] = None  # avg time from created_at -> verified_at, last 24h
+    generated_at: datetime                     # server timestamp this response was built at;
+                                                # frontend derives "2 min ago" / "Just now" from this
 
     model_config = {"from_attributes": True}
 

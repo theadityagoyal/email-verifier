@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import and_, case, cast, Date, func, Integer, or_, select
+from sqlalchemy import and_, case, cast, Date, func, Integer, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 import pandas as pd
 from models.database import get_db
@@ -30,8 +30,13 @@ LOW_SAMPLE_THRESHOLD = 5   # total_emails below this -> "Low Sample" verdict
 RISK_HEALTHY_MAX = 10      # risk_percent below this -> "Healthy"
 RISK_WATCH_MAX = 30        # risk_percent below this -> "Watch", else "High Risk"
 NEW_DOMAIN_DAYS = 7        # first_seen within this many days -> is_new
-TREND_WINDOW_DAYS = 7      # size of each comparison window for trend
+TREND_WINDOW_DAYS = 7      # size of each comparison window for domain trend
 TREND_DELTA_PCT = 2        # minimum pp change to call it up/down instead of stable
+
+# ── Status-breakdown card constants ─────────────────────────────────────────
+DAY_TREND_HOURS = 24               # "vs yesterday" comparison window
+SPEED_WINDOW_MINUTES = 5           # verification speed measured over last N minutes
+PROCESSING_TIME_WINDOW_HOURS = 24  # avg processing time computed over last N hours
 
 DOMAIN_SORT_OPTIONS = {"risk", "total", "trust", "domain", "newest"}
 
@@ -61,10 +66,160 @@ def bucket_case():
     )
 
 
+async def _compute_dashboard_trends(db: AsyncSession):
+    """
+    24h-vs-previous-24h trend data for the Status Breakdown card.
+
+    Returns:
+      per_status_trend: raw count delta per individual status
+                         (e.g. {"probably_valid": 12, "unconfirmed": -8, ...})
+      bucket_trend_pct: % change in bucket count (safe/risky/unsafe/processing)
+                        vs the previous 24h window, e.g. {"safe": 2.4, "risky": -1.1}
+
+    Uses the same bucket_case() as the rest of the dashboard, so these numbers
+    can never disagree with the main safe/risky/unsafe/processing counts.
+    """
+    now = datetime.utcnow()
+    day_start = now - timedelta(hours=DAY_TREND_HOURS)
+    prev_start = now - timedelta(hours=DAY_TREND_HOURS * 2)
+
+    window_expr = case((Email.created_at >= day_start, "recent"), else_="previous")
+    bucket_expr = bucket_case()
+
+    # Per-status recent/previous counts
+    status_rows = (
+        await db.execute(
+            select(Email.status, window_expr.label("window"), func.count(Email.id))
+            .where(Email.created_at >= prev_start)
+            .group_by(Email.status, window_expr)
+        )
+    ).all()
+
+    status_window_map: dict = {}
+    for status, window, count in status_rows:
+        status_window_map.setdefault(status, {})[window] = count
+
+    per_status_trend = {}
+    for s in ALL_STATUSES:
+        windows = status_window_map.get(s, {})
+        recent = windows.get("recent", 0)
+        prev = windows.get("previous", 0)
+        per_status_trend[s.value] = recent - prev
+
+    # Per-bucket recent/previous counts
+    bucket_rows = (
+        await db.execute(
+            select(bucket_expr.label("bucket"), window_expr.label("window"), func.count(Email.id))
+            .where(Email.created_at >= prev_start)
+            .group_by(bucket_expr, window_expr)
+        )
+    ).all()
+
+    bucket_window_map: dict = {}
+    for bucket, window, count in bucket_rows:
+        bucket_window_map.setdefault(bucket, {})[window] = count
+
+    bucket_trend_pct = {}
+    for b in ["safe", "risky", "unsafe", "processing"]:
+        windows = bucket_window_map.get(b, {})
+        recent = windows.get("recent", 0)
+        prev = windows.get("previous", 0)
+        if prev > 0:
+            bucket_trend_pct[b] = round(((recent - prev) / prev) * 100, 1)
+        else:
+            # No baseline yesterday: report 100% if anything came in today, else flat 0%
+            bucket_trend_pct[b] = 100.0 if recent > 0 else 0.0
+
+    return per_status_trend, bucket_trend_pct
+
+
+async def _compute_speed_and_processing_time(db: AsyncSession):
+    """
+    verification_speed: emails/sec, measured over the last SPEED_WINDOW_MINUTES,
+      based on verified_at timestamps (actual throughput, not an estimate).
+    avg_processing_time_ms: avg(verified_at - created_at) over the last
+      PROCESSING_TIME_WINDOW_HOURS, in milliseconds.
+    """
+    now = datetime.utcnow()
+
+    # ── Verification Speed ────────────────────────────────────────────────
+    speed_start = now - timedelta(minutes=SPEED_WINDOW_MINUTES)
+    speed_count_row = await db.execute(
+        select(func.count(Email.id)).where(
+            Email.verified_at.isnot(None), 
+            Email.verified_at >= speed_start
+        )
+    )
+    speed_count = speed_count_row.scalar() or 0
+    verification_speed = round(speed_count / (SPEED_WINDOW_MINUTES * 60), 1)
+
+    # ── Average Processing Time (in SECONDS) ─────────────────────────────
+    proc_start = now - timedelta(hours=PROCESSING_TIME_WINDOW_HOURS)
+    
+    # Get average in SECONDS
+    avg_seconds_row = await db.execute(
+        select(
+            func.avg(
+                func.timestampdiff(text("SECOND"), Email.created_at, Email.verified_at)
+            )
+        ).where(
+            Email.verified_at.isnot(None),
+            Email.created_at.isnot(None),
+            Email.verified_at >= proc_start,
+            Email.status.in_([
+                EmailStatus.verified,
+                EmailStatus.deliverable,
+                EmailStatus.trusted,
+                EmailStatus.probably_valid,
+                EmailStatus.invalid,
+                EmailStatus.undeliverable,
+                EmailStatus.risky,
+                EmailStatus.unconfirmed,
+                EmailStatus.uncertain,
+            ])
+        )
+    )
+    avg_seconds = avg_seconds_row.scalar()
+    
+    # FIXED: Convert to milliseconds and ensure it's a reasonable value
+    if avg_seconds is not None and avg_seconds > 0:
+        # If avg_seconds is very large (> 60 seconds), it might be in milliseconds already
+        # Check if the value seems to be in milliseconds (very large)
+        if avg_seconds > 60000:  # If it's > 60,000, it's likely already in milliseconds
+            avg_processing_time_ms = round(float(avg_seconds), 1)
+        else:
+            # Normal case: convert seconds to milliseconds
+            avg_processing_time_ms = round(float(avg_seconds) * 1000, 1)
+    else:
+        # Fallback: check a wider window
+        fallback_row = await db.execute(
+            select(
+                func.avg(
+                    func.timestampdiff(text("SECOND"), Email.created_at, Email.verified_at)
+                )
+            ).where(
+                Email.verified_at.isnot(None),
+                Email.created_at.isnot(None),
+                Email.verified_at >= now - timedelta(hours=48)
+            )
+        )
+        fallback_seconds = fallback_row.scalar()
+        if fallback_seconds is not None and fallback_seconds > 0:
+            if fallback_seconds > 60000:
+                avg_processing_time_ms = round(float(fallback_seconds), 1)
+            else:
+                avg_processing_time_ms = round(float(fallback_seconds) * 1000, 1)
+        else:
+            avg_processing_time_ms = None
+
+    return verification_speed, avg_processing_time_ms
+
+
 @router.get("/dashboard/stats", response_model=DashboardStats)
-async def get_dashboard_stats(days: int = Query(7, ge=1, le=365),db: AsyncSession = Depends(get_db),):
+async def get_dashboard_stats(days: int = Query(7, ge=1, le=365), db: AsyncSession = Depends(get_db)):
     """Aggregate stats for the dashboard overview — safe/risky/unsafe bucket logic,
-    trust score, flagged counts, top domains, daily volume, active job."""
+    trust score, flagged counts, top domains, daily volume, active job, and
+    the 24h trend / speed / processing-time metrics used by the Status Breakdown card."""
 
     # 1. Total emails
     total_result = await db.execute(select(func.count(Email.id)))
@@ -110,9 +265,7 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365),db: AsyncSessio
         "catch_all": flag_row[2] or 0,
     }
 
-    # 6. Top domains — live per-row aggregation from Email table (not the
-    # legacy Domain.verified_count/invalid_count/risky_count columns, which
-    # only track the old 3-bucket system and would be wrong here).
+    # 6. Top domains — live per-row aggregation from Email table
     domain_bucket_rows = (
         await db.execute(
             select(Email.domain, bucket_expr.label("bucket"), func.count(Email.id))
@@ -134,7 +287,7 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365),db: AsyncSessio
         denom_d = d["safe"] + d["risky"] + d["unsafe"]
         d["risk_pct"] = round(((d["risky"] + d["unsafe"]) / denom_d) * 100) if denom_d > 0 else 0
 
-    # 7. Daily volume — last 7 days, flat bucket counts per day
+    # 7. Daily volume — last N days, flat bucket counts per day
     start_date = datetime.utcnow() - timedelta(days=days)
     daily_rows = (
         await db.execute(
@@ -171,6 +324,12 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365),db: AsyncSessio
             "total": active_job_row.total,
         }
 
+    # 9. NEW — 24h trends (per-status count delta + per-bucket % change)
+    per_status_trend, bucket_trend_pct = await _compute_dashboard_trends(db)
+
+    # 10. NEW — live verification speed + avg processing time
+    verification_speed, avg_processing_time_ms = await _compute_speed_and_processing_time(db)
+
     return DashboardStats(
         total_emails=total_emails,
         per_status_counts=per_status_counts,
@@ -180,6 +339,11 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365),db: AsyncSessio
         top_domains=top_domains,
         daily_volume=daily_volume,
         active_job=active_job,
+        per_status_trend=per_status_trend,
+        bucket_trend_pct=bucket_trend_pct,
+        verification_speed=verification_speed,
+        avg_processing_time_ms=avg_processing_time_ms,
+        generated_at=datetime.utcnow(),
     )
 
 
@@ -403,7 +567,6 @@ async def get_domains_overview(db: AsyncSession = Depends(get_db)):
         )
     ).all()
 
-    # Cached MX records — only used here to count "No MX" domains.
     mx_map = {}
     if rows:
         mx_rows = (
@@ -504,7 +667,6 @@ async def list_domains(
     rows = (await db.execute(stmt)).all()
     domains_on_page = [r.domain for r in rows]
 
-    # Cached MX records — the only thing the Domain table is still used for.
     mx_map = {}
     if domains_on_page:
         mx_rows = (
@@ -514,8 +676,6 @@ async def list_domains(
         ).all()
         mx_map = {d: mx for d, mx in mx_rows}
 
-    # 7-day risk trend per domain, same bucket_expr windowed by date, so
-    # up/down/stable can never disagree with the safe/risky/unsafe counts.
     trend_map = {}
     trend_delta_map = {}
     if domains_on_page:

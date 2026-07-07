@@ -303,9 +303,8 @@ export default function BulkUploadPage() {
           </div>
         ) : (
           <div
-            className={`card relative border-2 border-dashed transition-colors ${
-              dragActive ? 'border-[var(--primary)] bg-[var(--primary)]/5' : 'border-[var(--muted)] hover:border-[var(--muted)]/50'
-            }`}
+            className={`card relative border-2 border-dashed transition-colors ${dragActive ? 'border-[var(--primary)] bg-[var(--primary)]/5' : 'border-[var(--muted)] hover:border-[var(--muted)]/50'
+              }`}
             onDragEnter={handleDrag}
             onDragLeave={handleDrag}
             onDragOver={handleDrag}
@@ -347,11 +346,10 @@ export default function BulkUploadPage() {
               <button
                 key={key}
                 onClick={() => setDateFilter(key)}
-                className={`px-3 py-1.5 text-sm rounded-full transition-colors ${
-                  dateFilter === key
+                className={`px-3 py-1.5 text-sm rounded-full transition-colors ${dateFilter === key
                     ? 'bg-[var(--primary)] text-white'
                     : 'bg-[var(--muted)]/40 text-[var(--foreground)]/60 hover:bg-[var(--muted)]/60'
-                }`}
+                  }`}
               >
                 {label}
               </button>
@@ -387,11 +385,10 @@ export default function BulkUploadPage() {
                     className="w-full flex items-center gap-4 p-4 text-left hover:bg-[var(--muted)]/30 transition-colors"
                     aria-expanded={expandedJob === job.job_id}
                   >
-                    <div className={`p-3 rounded-xl flex-shrink-0 min-w-[48px] ${
-                      job.status === 'completed' ? 'bg-success/20 text-success' :
-                      job.status === 'failed' ? 'bg-error/20 text-error' :
-                      job.status === 'processing' ? 'bg-info/20 text-info' : 'bg-warning/20 text-warning'
-                    }`}>
+                    <div className={`p-3 rounded-xl flex-shrink-0 min-w-[48px] ${job.status === 'completed' ? 'bg-success/20 text-success' :
+                        job.status === 'failed' ? 'bg-error/20 text-error' :
+                          job.status === 'processing' ? 'bg-info/20 text-info' : 'bg-warning/20 text-warning'
+                      }`}>
                       {getStatusIcon(job.status)}
                     </div>
 

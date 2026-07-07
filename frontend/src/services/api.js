@@ -68,7 +68,7 @@ export const deleteJob = (jobId) =>
 // ── Dashboard ─────────────────────────────────────────────────────────────
 
 export const getDashboardStats = (days = 7) =>
-  api.get('/dashboard/stats', {params: { days },}).then((r) => r.data)
+  api.get('/dashboard/stats', { params: { days }, }).then((r) => r.data)
 
 export const getTrends = (days = 30) =>
   api.get('/dashboard/trends', { params: { days } }).then((r) => r.data)

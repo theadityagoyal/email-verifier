@@ -595,11 +595,10 @@ export default function EmailListPage() {
                     <button
                       key={p}
                       onClick={() => setPage(p)}
-                      className={`min-w-[2rem] h-8 rounded-lg text-sm font-medium transition-colors ${
-                        p === page
-                          ? 'bg-[var(--accent)] text-white'
-                          : 'hover:bg-[var(--muted)] text-[var(--foreground)]/70'
-                      }`}
+                      className={`min-w-[2rem] h-8 rounded-lg text-sm font-medium transition-colors ${p === page
+                        ? 'bg-[var(--accent)] text-white'
+                        : 'hover:bg-[var(--muted)] text-[var(--foreground)]/70'
+                        }`}
                     >
                       {p}
                     </button>

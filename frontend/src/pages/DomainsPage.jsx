@@ -426,13 +426,12 @@ export default function DomainsPage() {
             <h3 className="text-sm font-semibold text-[var(--foreground)]">7-Day Risk Trend (All Domains)</h3>
             {overallTrendDelta !== null && (
               <span
-                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${
-                  overallTrendDelta > 0
-                    ? 'bg-red-100 text-red-600 dark:bg-red-900/20 dark:text-red-400'
-                    : overallTrendDelta < 0
+                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${overallTrendDelta > 0
+                  ? 'bg-red-100 text-red-600 dark:bg-red-900/20 dark:text-red-400'
+                  : overallTrendDelta < 0
                     ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-400'
                     : 'bg-[var(--muted)] text-[var(--foreground)]/50'
-                }`}
+                  }`}
               >
                 {overallTrendDelta > 0 ? <TrendingUp className="h-3 w-3" /> : overallTrendDelta < 0 ? <TrendingDown className="h-3 w-3" /> : <Minus className="h-3 w-3" />}
                 {Math.abs(overallTrendDelta)}% vs last 7 days
@@ -767,9 +766,8 @@ export default function DomainsPage() {
                               </span>
                               <div className="h-1.5 rounded-full bg-[var(--muted)] overflow-hidden mt-1">
                                 <div
-                                  className={`h-full rounded-full ${
-                                    domain.risk_percent >= 30 ? 'bg-red-500' : domain.risk_percent >= 10 ? 'bg-amber-500' : 'bg-emerald-500'
-                                  }`}
+                                  className={`h-full rounded-full ${domain.risk_percent >= 30 ? 'bg-red-500' : domain.risk_percent >= 10 ? 'bg-amber-500' : 'bg-emerald-500'
+                                    }`}
                                   style={{ width: `${Math.min(domain.risk_percent ?? 0, 100)}%` }}
                                 />
                               </div>
@@ -924,11 +922,10 @@ export default function DomainsPage() {
                     <button
                       key={p}
                       onClick={() => setPage(p)}
-                      className={`h-8 w-8 rounded-lg text-sm font-medium ${
-                        p === page
-                          ? 'bg-[var(--primary)] text-white'
-                          : 'text-[var(--foreground)]/70 hover:bg-[var(--muted)]/40'
-                      }`}
+                      className={`h-8 w-8 rounded-lg text-sm font-medium ${p === page
+                        ? 'bg-[var(--primary)] text-white'
+                        : 'text-[var(--foreground)]/70 hover:bg-[var(--muted)]/40'
+                        }`}
                     >
                       {p}
                     </button>

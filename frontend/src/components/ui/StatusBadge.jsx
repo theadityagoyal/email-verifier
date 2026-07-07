@@ -123,9 +123,8 @@ export default function StatusBadge({ status = 'unknown', className = '' }) {
       className={`${BUCKET_STYLES[bucket]} transition-all duration-200 hover:scale-105 ${className}`}
     >
       <Icon
-        className={`h-3.5 w-3.5 ${
-          bucket === 'processing' ? 'animate-spin' : ''
-        }`}
+        className={`h-3.5 w-3.5 ${bucket === 'processing' ? 'animate-spin' : ''
+          }`}
       />
 
       <span>{config.label}</span>

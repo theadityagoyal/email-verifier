@@ -58,9 +58,8 @@ export default function Button({
 
   return (
     <Component
-      className={`${base} ${variantMap[variant] || variantMap.primary} ${
-        sizeMap[size] || sizeMap.md
-      } ${className}`}
+      className={`${base} ${variantMap[variant] || variantMap.primary} ${sizeMap[size] || sizeMap.md
+        } ${className}`}
       disabled={disabled || isLoading}
       onClick={handleClick}
       {...props}
