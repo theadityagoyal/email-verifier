@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, Link } from 'react-router-dom';
 import {
   LayoutDashboard,
   Mail,
@@ -19,11 +19,17 @@ const links = [
 
 export default function Sidebar() {
   return (
-    <aside className="w-72 shrink-0 min-h-screen border-r border-[var(--muted)] bg-[var(--card)] shadow-xl flex flex-col">
+    <aside
+      className="w-72 shrink-0 min-h-screen border-r border-[var(--muted)] bg-[var(--card)] shadow-xl flex flex-col"
+      aria-label="Sidebar"
+    >
 
       {/* Logo */}
-      <div className="flex items-center gap-4 border-b border-[var(--muted)] px-6 py-5">
-
+      <Link
+        to="/"
+        className="flex items-center gap-4 border-b border-[var(--muted)] px-6 py-5"
+        aria-label="EmailVerifier Home"
+      >
         <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-r from-indigo-500 to-violet-600 shadow-lg">
           <CheckCircle className="h-5 w-5 text-white" />
         </div>
@@ -37,13 +43,11 @@ export default function Sidebar() {
             Enterprise Dashboard
           </p>
         </div>
+      </Link>
 
-        <ThemeToggle />
-
-      </div>
+      <ThemeToggle />
 
       {/* Navigation */}
-
       <nav className="flex-1 space-y-2 px-4 py-5">
 
         {links.map(({ to, icon: Icon, label }) => (
@@ -74,7 +78,6 @@ export default function Sidebar() {
       </nav>
 
       {/* Footer */}
-
       <div className="border-t border-[var(--muted)] p-5">
 
         <div className="rounded-xl bg-[var(--background)] p-4">

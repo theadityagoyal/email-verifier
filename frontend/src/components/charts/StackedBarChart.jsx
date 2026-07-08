@@ -10,31 +10,39 @@ import {
 } from 'recharts';
 
 import CustomTooltip from '../ui/CustomTooltip';
+import { useTheme } from '@/styles/theme';
 
 export default function StackedBarChart({
   data = [],
   height = 430,
 }) {
+  const theme = useTheme();
+
   if (!data.length) {
     return (
-      <div className="flex h-full min-h-[360px] items-center justify-center rounded-2xl border border-[var(--muted)] bg-[var(--background)] text-sm text-[var(--foreground)]/50">
+      <div
+        className="flex h-full min-h-[360px] items-center justify-center rounded-2xl border border-[var(--muted)] bg-[var(--background)] text-sm text-[var(--foreground)]/50"
+        aria-label="No verification data available"
+      >
         No verification data available
       </div>
     );
   }
 
-  const chartData = data.map((day) => ({
-    ...day,
-    label: new Date(day.date).toLocaleDateString('en-IN', {
-      timeZone: 'Asia/Kolkata',
-      day: '2-digit',
-      month: 'short',
-    }),
-  }));
+  const chartData = data
+    .filter((day) => day?.date)
+    .map((day) => ({
+      ...day,
+      label: new Date(day.date).toLocaleDateString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        day: '2-digit',
+        month: 'short',
+      }),
+    }));
 
   return (
     <div className="w-full">
-      <ResponsiveContainer width="100%" height={height}>
+      <ResponsiveContainer width="100%" height={height} aria-label="Email verification status over time">
         <BarChart
           data={chartData}
           margin={{
@@ -49,7 +57,7 @@ export default function StackedBarChart({
         >
           <CartesianGrid
             vertical={false}
-            stroke="#CBD5E1"
+            stroke="var(--muted)"
             strokeDasharray="4 4"
             opacity={0.35}
           />
@@ -91,7 +99,7 @@ export default function StackedBarChart({
             dataKey="safe"
             stackId="emails"
             name="Safe"
-            fill="#10B981"
+            fill={theme.success}
             radius={[0, 0, 0, 0]}
             isAnimationActive
             animationDuration={900}
@@ -102,7 +110,7 @@ export default function StackedBarChart({
             dataKey="risky"
             stackId="emails"
             name="Risky"
-            fill="#F59E0B"
+            fill={theme.warning}
             radius={[0, 0, 0, 0]}
             isAnimationActive
             animationDuration={900}
@@ -113,7 +121,7 @@ export default function StackedBarChart({
             dataKey="unsafe"
             stackId="emails"
             name="Unsafe"
-            fill="#EF4444"
+            fill={theme.error}
             radius={[0, 0, 0, 0]}
             isAnimationActive
             animationDuration={900}
@@ -124,8 +132,8 @@ export default function StackedBarChart({
             dataKey="processing"
             stackId="emails"
             name="Processing"
-            fill="#2563EB"
-            radius={[8, 8, 0, 0]}
+            fill={theme.info}
+            radius={[0, 0, 0, 0]}
             isAnimationActive
             animationDuration={900}
             animationEasing="ease-out"

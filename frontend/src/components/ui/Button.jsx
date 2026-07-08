@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useTheme } from '@/styles/theme';
 
 export default function Button({
   children,
@@ -11,8 +12,10 @@ export default function Button({
   className = '',
   ...props
 }) {
+  const theme = useTheme();
   const [isLoading, setIsLoading] = useState(loading);
 
+  // Sync loading prop with state
   useEffect(() => {
     setIsLoading(loading);
   }, [loading]);
@@ -23,7 +26,7 @@ export default function Button({
   };
 
   const base =
-    'inline-flex items-center justify-center gap-2 rounded-xl font-semibold transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:pointer-events-none disabled:opacity-50 hover:-translate-y-0.5';
+    'inline-flex items-center justify-center gap-2 rounded-xl font-semibold transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-[var(--primary)] disabled:pointer-events-none disabled:opacity-50 hover:-translate-y-0.5';
 
   const variantMap = {
     primary:
@@ -45,7 +48,7 @@ export default function Button({
       'hover:bg-[var(--background)] text-[var(--foreground)]',
 
     link:
-      'text-indigo-600 underline-offset-4 hover:underline',
+      `text-[var(--foreground)] underline-offset-4 hover:underline hover:bg-[var(--background)] dark:hover:bg-[var(--muted)]/20`,
   };
 
   const sizeMap = {
@@ -62,22 +65,23 @@ export default function Button({
         } ${className}`}
       disabled={disabled || isLoading}
       onClick={handleClick}
+      aria-label={isLoading ? 'Loading...' : undefined}
       {...props}
     >
       {isLoading ? (
         <>
+          <span className="sr-only">Loading...</span>
           <svg
             className="h-4 w-4 animate-spin"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
             strokeWidth="2"
+            aria-hidden="true"
           >
             <circle cx="12" cy="12" r="9" opacity="0.25" />
             <path d="M12 3a9 9 0 0 1 9 9" strokeLinecap="round" />
           </svg>
-
-          Loading...
         </>
       ) : (
         children

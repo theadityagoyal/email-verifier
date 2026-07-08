@@ -1,17 +1,13 @@
+import { useTheme } from '@/styles/theme';
+
 export default function CustomTooltip({ active, payload, label }) {
   if (!active || !payload || !payload.length) return null;
 
+  const theme = useTheme();
   const total = payload.reduce(
     (sum, item) => sum + (Number(item.value) || 0),
     0
   );
-
-  const colors = {
-    Safe: '#10B981',
-    Risky: '#F59E0B',
-    Unsafe: '#EF4444',
-    Processing: '#2563EB',
-  };
 
   return (
     <div className="min-w-[260px] rounded-2xl border border-[var(--muted)] bg-[var(--card)] p-5 shadow-2xl backdrop-blur-md">
@@ -39,6 +35,13 @@ export default function CustomTooltip({ active, payload, label }) {
               ? ((value / total) * 100).toFixed(1)
               : '0.0';
 
+          // Get color from theme based on entry.name, fallback to entry.color if provided
+          let dotColor = entry.color;
+          if (entry.name === 'Safe') dotColor = theme.success;
+          else if (entry.name === 'Risky') dotColor = theme.warning;
+          else if (entry.name === 'Unsafe') dotColor = theme.error;
+          else if (entry.name === 'Processing') dotColor = theme.info;
+
           return (
             <div
               key={entry.name}
@@ -50,8 +53,7 @@ export default function CustomTooltip({ active, payload, label }) {
                 <span
                   className="h-3.5 w-3.5 rounded-full"
                   style={{
-                    backgroundColor:
-                      colors[entry.name] || entry.color,
+                    backgroundColor: dotColor,
                   }}
                 />
 

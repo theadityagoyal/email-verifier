@@ -1,6 +1,6 @@
 from sqlalchemy import (
     Column, BigInteger, String, Boolean, Integer,
-    DateTime, Float, Text, Enum as SAEnum, JSON
+    DateTime, Float, Text, Enum as SAEnum, JSON, CheckConstraint, Index
 )
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.sql import func
@@ -50,8 +50,15 @@ class Email(Base):
     role_based = Column(Boolean, default=False)
     catch_all = Column(Boolean, default=False)
     score = Column(Integer, default=0)
-    verified_at = Column(DateTime, nullable=True)
+    verified_at = Column(DateTime, nullable=True, index=True)
     job_id = Column(String(100), nullable=True, index=True)
+    __table_args__ = (
+        CheckConstraint('score >= 0 AND score <= 100', name='check_score_range'),
+        Index('ix_emails_domain_status', 'domain', 'status'),
+        Index('ix_emails_status', 'status'),
+        Index('ix_emails_job_id_status', 'job_id', 'status'),
+        Index('ix_emails_verified_at', 'verified_at'),
+    )
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -67,6 +74,9 @@ class Domain(Base):
     invalid_count = Column(Integer, default=0)
     risky_count = Column(Integer, default=0)
     bounce_rate = Column(Float, default=0.0)
+    __table_args__ = (
+        CheckConstraint('bounce_rate >= 0.0 AND bounce_rate <= 100.0', name='check_bounce_rate_range'),
+    )
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -95,5 +105,15 @@ class Job(Base):
     invalid = Column(Integer, default=0)
     risky = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
+    __table_args__ = (
+        CheckConstraint('progress_percent >= 0 AND progress_percent <= 100', name='check_progress_range'),
+        CheckConstraint('total >= 0', name='check_total_nonnegative'),
+        CheckConstraint('processed >= 0', name='check_processed_nonnegative'),
+        CheckConstraint('verified >= 0', name='check_verified_nonnegative'),
+        CheckConstraint('invalid >= 0', name='check_invalid_nonnegative'),
+        CheckConstraint('risky >= 0', name='check_risky_nonnegative'),
+        Index('ix_jobs_status', 'status'),
+        Index('ix_jobs_created_at', 'created_at'),
+    )
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

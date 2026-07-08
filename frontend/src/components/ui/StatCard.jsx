@@ -1,3 +1,5 @@
+import { useTheme } from '@/styles/theme';
+
 export default function StatCard({
   label,
   value,
@@ -6,58 +8,64 @@ export default function StatCard({
   sub,
   trend,
 }) {
-  const colors = {
+  const theme = useTheme();
+
+  // Define color mappings using theme values
+  const colorMap = {
     safe: {
       bg: 'from-emerald-500 to-green-600',
-      light: 'bg-emerald-50 dark:bg-emerald-900/20',
+      light: 'bg-emerald-50 dark:bg-emerald-900/10',
       text: 'text-emerald-600 dark:text-emerald-400',
-      border: 'border-emerald-200 dark:border-emerald-800',
+      border: 'border-emerald-200 dark:border-emerald-800/20',
     },
     risky: {
       bg: 'from-amber-500 to-orange-500',
-      light: 'bg-amber-50 dark:bg-amber-900/20',
+      light: 'bg-amber-50 dark:bg-amber-900/10',
       text: 'text-amber-600 dark:text-amber-400',
-      border: 'border-amber-200 dark:border-amber-800',
+      border: 'border-amber-200 dark:border-amber-800/20',
     },
     unsafe: {
       bg: 'from-red-500 to-rose-600',
-      light: 'bg-red-50 dark:bg-red-900/20',
+      light: 'bg-red-50 dark:bg-red-900/10',
       text: 'text-red-600 dark:text-red-400',
-      border: 'border-red-200 dark:border-red-800',
+      border: 'border-red-200 dark:border-red-800/20',
     },
     processing: {
       bg: 'from-sky-500 to-blue-600',
-      light: 'bg-sky-50 dark:bg-sky-900/20',
+      light: 'bg-sky-50 dark:bg-sky-900/10',
       text: 'text-sky-600 dark:text-sky-400',
-      border: 'border-sky-200 dark:border-sky-800',
+      border: 'border-sky-200 dark:border-sky-800/20',
     },
     primary: {
       bg: 'from-indigo-500 to-violet-600',
-      light: 'bg-indigo-50 dark:bg-indigo-900/20',
+      light: 'bg-indigo-50 dark:bg-indigo-900/10',
       text: 'text-indigo-600 dark:text-indigo-400',
-      border: 'border-indigo-200 dark:border-indigo-800',
+      border: 'border-indigo-200 dark:border-indigo-800/20',
     },
     gray: {
       bg: 'from-slate-500 to-slate-600',
-      light: 'bg-slate-50 dark:bg-slate-900/20',
+      light: 'bg-slate-50 dark:bg-slate-900/10',
       text: 'text-slate-600 dark:text-slate-400',
-      border: 'border-slate-200 dark:border-slate-700',
+      border: 'border-slate-200 dark:border-slate-700/20',
     },
   };
 
-  const theme = colors[color] || colors.gray;
+  const themeColors = colorMap[color] || colorMap.gray;
 
   return (
-    <div className="group relative overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-xl">
-
+    <div
+      className="group relative overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-xl"
+      role="img"
+      aria-label={`${label}: ${typeof value === 'number' ? value.toLocaleString() : value}`}
+    >
       {/* Top Gradient */}
       <div
-        className={`absolute left-0 top-0 h-1 w-full bg-gradient-to-r ${theme.bg}`}
+        className={`absolute left-0 top-0 h-1 w-full bg-gradient-to-r ${themeColors.bg}`}
       />
 
       {/* Background Glow */}
       <div
-        className={`absolute -right-8 -top-8 h-28 w-28 rounded-full opacity-10 blur-3xl bg-gradient-to-br ${theme.bg}`}
+        className={`absolute -right-8 -top-8 h-28 w-28 rounded-full opacity-10 blur-3xl bg-gradient-to-br ${themeColors.bg}`}
       />
 
       <div className="relative flex items-start justify-between">
@@ -82,7 +90,7 @@ export default function StatCard({
 
           {trend && (
             <span
-              className={`mt-4 inline-flex w-fit items-center rounded-full border px-3 py-1 text-xs font-semibold ${theme.light} ${theme.text} ${theme.border}`}
+              className={`mt-4 inline-flex w-fit items-center rounded-full border px-3 py-1 text-xs font-semibold ${themeColors.light} ${themeColors.text} ${themeColors.border}`}
             >
               {trend}
             </span>
@@ -91,7 +99,7 @@ export default function StatCard({
         </div>
 
         <div
-          className={`flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br ${theme.bg} text-white shadow-lg transition-all duration-300 group-hover:scale-110 group-hover:rotate-6`}
+          className={`flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br ${themeColors.bg} text-white shadow-lg transition-all duration-300 group-hover:scale-110 group-hover:rotate-6`}
         >
           {Icon && <Icon size={30} strokeWidth={2.2} />}
         </div>

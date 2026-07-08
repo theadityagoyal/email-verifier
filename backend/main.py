@@ -7,7 +7,7 @@ import time
 from api.v1.router import api_router
 from utils.config import settings
 from utils.logging import configure_logging, get_logger
-from utils.executor import get_executor, shutdown_executor
+from utils.executor import get_executor, shutdown_executor, init_executor
 
 configure_logging()
 logger = get_logger(__name__)
@@ -15,6 +15,7 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    init_executor()
     executor = get_executor()
     logger.info("application_startup", workers=executor._max_workers)
     yield

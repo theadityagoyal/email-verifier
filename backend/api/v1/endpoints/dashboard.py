@@ -12,6 +12,7 @@ from schemas.schemas import (
     DashboardStats, PaginatedEmailsResponse, DomainStats,
     EmailVerifyResponse, VerificationTrend,
     ActiveJob, DomainOverview, PaginatedDomainsResponse,
+    FlaggedOverview, DomainSummary,
 )
 from utils.config import settings
 from utils.logging import get_logger
@@ -27,11 +28,17 @@ ALL_STATUSES = SAFE_STATUSES + RISKY_STATUSES + UNSAFE_STATUSES + [EmailStatus.p
 # Domains-page thresholds — kept next to bucket_case() so anyone touching
 # risk bands sees the bucket source of truth right above it.
 LOW_SAMPLE_THRESHOLD = 5   # total_emails below this -> "Low Sample" verdict
+                           # Minimum sample size needed for reliable risk assessment
 RISK_HEALTHY_MAX = 10      # risk_percent below this -> "Healthy"
+                           # Domains with <10% risky/unsafe emails are considered healthy
 RISK_WATCH_MAX = 30        # risk_percent below this -> "Watch", else "High Risk"
+                           # Domains with 10-30% risky/unsafe emails need monitoring
 NEW_DOMAIN_DAYS = 7        # first_seen within this many days -> is_new
+                           # Domains seen within last 7 days are considered new
 TREND_WINDOW_DAYS = 7      # size of each comparison window for domain trend
+                           # 7-day windows used for trend analysis (current vs previous)
 TREND_DELTA_PCT = 2        # minimum pp change to call it up/down instead of stable
+                           # Minimum 2 percentage point change to declare trend direction
 
 # ── Status-breakdown card constants ─────────────────────────────────────────
 DAY_TREND_HOURS = 24               # "vs yesterday" comparison window
@@ -39,6 +46,7 @@ SPEED_WINDOW_MINUTES = 5           # verification speed measured over last N min
 PROCESSING_TIME_WINDOW_HOURS = 24  # avg processing time computed over last N hours
 
 DOMAIN_SORT_OPTIONS = {"risk", "total", "trust", "domain", "newest"}
+FLAGGED_FILTER_OPTIONS = {"any", "disposable", "role_based", "catch_all"}
 
 
 def bucket_case():
@@ -146,7 +154,7 @@ async def _compute_speed_and_processing_time(db: AsyncSession):
     speed_start = now - timedelta(minutes=SPEED_WINDOW_MINUTES)
     speed_count_row = await db.execute(
         select(func.count(Email.id)).where(
-            Email.verified_at.isnot(None), 
+            Email.verified_at.isnot(None),
             Email.verified_at >= speed_start
         )
     )
@@ -155,8 +163,8 @@ async def _compute_speed_and_processing_time(db: AsyncSession):
 
     # ── Average Processing Time (in SECONDS) ─────────────────────────────
     proc_start = now - timedelta(hours=PROCESSING_TIME_WINDOW_HOURS)
-    
-    # Get average in SECONDS
+
+    # Get average in SECONDS using the same status categories as defined in constants
     avg_seconds_row = await db.execute(
         select(
             func.avg(
@@ -166,30 +174,15 @@ async def _compute_speed_and_processing_time(db: AsyncSession):
             Email.verified_at.isnot(None),
             Email.created_at.isnot(None),
             Email.verified_at >= proc_start,
-            Email.status.in_([
-                EmailStatus.verified,
-                EmailStatus.deliverable,
-                EmailStatus.trusted,
-                EmailStatus.probably_valid,
-                EmailStatus.invalid,
-                EmailStatus.undeliverable,
-                EmailStatus.risky,
-                EmailStatus.unconfirmed,
-                EmailStatus.uncertain,
-            ])
+            Email.status.in_(ALL_STATUSES)
         )
     )
     avg_seconds = avg_seconds_row.scalar()
-    
-    # FIXED: Convert to milliseconds and ensure it's a reasonable value
+
+    # Convert to milliseconds and ensure it's a reasonable value
     if avg_seconds is not None and avg_seconds > 0:
-        # If avg_seconds is very large (> 60 seconds), it might be in milliseconds already
-        # Check if the value seems to be in milliseconds (very large)
-        if avg_seconds > 60000:  # If it's > 60,000, it's likely already in milliseconds
-            avg_processing_time_ms = round(float(avg_seconds), 1)
-        else:
-            # Normal case: convert seconds to milliseconds
-            avg_processing_time_ms = round(float(avg_seconds) * 1000, 1)
+        # Convert seconds to milliseconds (timestampdiff with SECOND returns seconds)
+        avg_processing_time_ms = round(float(avg_seconds) * 1000, 1)
     else:
         # Fallback: check a wider window
         fallback_row = await db.execute(
@@ -205,21 +198,201 @@ async def _compute_speed_and_processing_time(db: AsyncSession):
         )
         fallback_seconds = fallback_row.scalar()
         if fallback_seconds is not None and fallback_seconds > 0:
-            if fallback_seconds > 60000:
-                avg_processing_time_ms = round(float(fallback_seconds), 1)
-            else:
-                avg_processing_time_ms = round(float(fallback_seconds) * 1000, 1)
+            # Convert seconds to milliseconds
+            avg_processing_time_ms = round(float(fallback_seconds) * 1000, 1)
         else:
             avg_processing_time_ms = None
 
     return verification_speed, avg_processing_time_ms
 
 
+async def _compute_flagged_overview(db: AsyncSession):
+    """Powers the Flagged Emails card's Overview row: Total Flagged, High
+    Priority (disposable), Flag Rate, and Last 7 Days — each with a trend %
+    versus its own comparison window (24h for the first three, 7d-vs-prev-7d
+    for the last one)."""
+    now = datetime.utcnow()
+    day_start = now - timedelta(hours=24)
+    prev_start = now - timedelta(hours=48)
+    week_start = now - timedelta(days=7)
+    prev_week_start = now - timedelta(days=14)
+
+    flagged_expr = or_(Email.disposable.is_(True), Email.role_based.is_(True), Email.catch_all.is_(True))
+
+    totals_row = (
+        await db.execute(
+            select(
+                func.sum(case((flagged_expr, 1), else_=0)),
+                func.sum(cast(Email.disposable, Integer)),
+            )
+        )
+    ).one()
+    total_flagged = totals_row[0] or 0
+    high_priority = totals_row[1] or 0
+
+    total_emails = (await db.execute(select(func.count(Email.id)))).scalar() or 0
+    flag_rate = round((total_flagged / total_emails) * 100, 1) if total_emails else 0.0
+
+    last_7_days = (
+        await db.execute(
+            select(func.sum(case((flagged_expr, 1), else_=0))).where(Email.created_at >= week_start)
+        )
+    ).scalar() or 0
+
+    def pct_delta(recent_val, prev_val):
+        if prev_val:
+            return round(((recent_val - prev_val) / prev_val) * 100, 1)
+        return 100.0 if recent_val else 0.0
+
+    # 24h vs previous 24h — total_flagged, high_priority, flag_rate
+    window_expr = case((Email.created_at >= day_start, "recent"), else_="previous")
+    trend_rows = (
+        await db.execute(
+            select(
+                window_expr.label("window"),
+                func.sum(case((flagged_expr, 1), else_=0)).label("flagged"),
+                func.sum(cast(Email.disposable, Integer)).label("disposable"),
+                func.count(Email.id).label("total"),
+            )
+            .where(Email.created_at >= prev_start)
+            .group_by(window_expr)
+        )
+    ).all()
+    tw = {row.window: row for row in trend_rows}
+    recent, prev = tw.get("recent"), tw.get("previous")
+
+    total_flagged_trend_pct = pct_delta(recent.flagged if recent else 0, prev.flagged if prev else 0)
+    high_priority_trend_pct = pct_delta(recent.disposable if recent else 0, prev.disposable if prev else 0)
+
+    recent_rate = float(recent.flagged / recent.total * 100) if recent and recent.total else 0.0
+    prev_rate = float(prev.flagged / prev.total * 100) if prev and prev.total else 0.0
+    flag_rate_trend_pct = round(recent_rate - prev_rate, 1)
+
+    # 7d vs previous 7d — last_7_days count
+    prev_week_flagged = (
+        await db.execute(
+            select(func.sum(case((flagged_expr, 1), else_=0))).where(
+                Email.created_at >= prev_week_start, Email.created_at < week_start
+            )
+        )
+    ).scalar() or 0
+    last_7_days_trend_pct = pct_delta(last_7_days, prev_week_flagged)
+
+    return FlaggedOverview(
+        total_flagged=total_flagged,
+        total_flagged_trend_pct=total_flagged_trend_pct,
+        high_priority=high_priority,
+        high_priority_trend_pct=high_priority_trend_pct,
+        flag_rate=flag_rate,
+        flag_rate_trend_pct=flag_rate_trend_pct,
+        last_7_days=last_7_days,
+        last_7_days_trend_pct=last_7_days_trend_pct,
+    )
+
+
+async def _compute_domain_summary(db: AsyncSession, domain_map: dict, bucket_expr):
+    """Powers the Worst Domains card's Summary row: Avg Reputation, High
+    Risk count, Total Domains, Improving count — each with a trend %
+    versus the previous 7-day window. Reuses the domain_map already built
+    in get_dashboard_stats for the current snapshot; only the historical
+    baseline requires extra queries."""
+    now = datetime.utcnow()
+    week_start = now - timedelta(days=TREND_WINDOW_DAYS)
+    prev_week_start = now - timedelta(days=TREND_WINDOW_DAYS * 2)
+
+    all_domains = list(domain_map.values())
+    for d in all_domains:
+        denom_d = d["safe"] + d["risky"] + d["unsafe"]
+        d["risk_pct"] = round(((d["risky"] + d["unsafe"]) / denom_d) * 100) if denom_d > 0 else 0
+
+    sample_domains = [d for d in all_domains if (d["safe"] + d["risky"] + d["unsafe"]) >= LOW_SAMPLE_THRESHOLD]
+    total_domains_count = len(all_domains)
+    avg_reputation = (
+        round(sum(100 - d["risk_pct"] for d in sample_domains) / len(sample_domains))
+        if sample_domains else 0
+    )
+    high_risk_count = sum(1 for d in sample_domains if d["risk_pct"] >= RISK_WATCH_MAX)
+
+    def pct_delta(cur, prev):
+        if prev:
+            return round(((cur - prev) / prev) * 100, 1)
+        return 100.0 if cur else 0.0
+
+    # Per-domain 7d-vs-prev-7d trend (same pattern as /domains) -> improving_count
+    domain_trend = {}
+    domain_names = [d["domain"] for d in sample_domains]
+    if domain_names:
+        window_expr = case((Email.created_at >= week_start, "recent"), else_="previous")
+        rows = (
+            await db.execute(
+                select(
+                    Email.domain,
+                    window_expr.label("window"),
+                    func.sum(case((bucket_expr.in_(["risky", "unsafe"]), 1), else_=0)).label("bad"),
+                    func.count(Email.id).label("total"),
+                )
+                .where(Email.domain.in_(domain_names), Email.created_at >= prev_week_start)
+                .group_by(Email.domain, window_expr)
+            )
+        ).all()
+        stats = {}
+        for domain, window, bad, tot in rows:
+            stats.setdefault(domain, {})[window] = (bad, tot)
+        for domain, windows in stats.items():
+            r_bad, r_tot = windows.get("recent", (0, 0))
+            p_bad, p_tot = windows.get("previous", (0, 0))
+            if r_tot and p_tot:
+                delta = (r_bad / r_tot * 100) - (p_bad / p_tot * 100)
+                domain_trend[domain] = (
+                    "down" if delta < -TREND_DELTA_PCT else ("up" if delta > TREND_DELTA_PCT else "stable")
+                )
+            else:
+                domain_trend[domain] = "stable"
+
+    improving_count = sum(1 for t in domain_trend.values() if t == "down")
+
+    # Previous-period snapshot (data older than 7 days) -> baseline for all 4 trend %s
+    prev_rows = (
+        await db.execute(
+            select(Email.domain, bucket_expr.label("bucket"), func.count(Email.id))
+            .where(Email.domain.isnot(None), Email.created_at < week_start)
+            .group_by(Email.domain, bucket_expr)
+        )
+    ).all()
+    prev_map = {}
+    for domain, bucket, count in prev_rows:
+        entry = prev_map.setdefault(domain, {"safe": 0, "risky": 0, "unsafe": 0})
+        entry[bucket] = entry.get(bucket, 0) + count
+
+    prev_sample = []
+    for domain, e in prev_map.items():
+        denom_p = e.get("safe", 0) + e.get("risky", 0) + e.get("unsafe", 0)
+        if denom_p >= LOW_SAMPLE_THRESHOLD:
+            risk_pct_p = round(((e.get("risky", 0) + e.get("unsafe", 0)) / denom_p) * 100)
+            prev_sample.append(risk_pct_p)
+
+    prev_total_domains = len(prev_map)
+    prev_avg_reputation = round(sum(100 - r for r in prev_sample) / len(prev_sample)) if prev_sample else 0
+    prev_high_risk_count = sum(1 for r in prev_sample if r >= RISK_WATCH_MAX)
+
+    return DomainSummary(
+        avg_reputation=avg_reputation,
+        avg_reputation_trend_pct=pct_delta(avg_reputation, prev_avg_reputation),
+        high_risk_count=high_risk_count,
+        high_risk_trend_pct=pct_delta(high_risk_count, prev_high_risk_count),
+        total_domains=total_domains_count,
+        total_domains_trend_pct=pct_delta(total_domains_count, prev_total_domains),
+        improving_count=improving_count,
+        improving_trend_pct=pct_delta(improving_count, max(len(domain_trend) - improving_count, 0)),
+    )
+
+
 @router.get("/dashboard/stats", response_model=DashboardStats)
 async def get_dashboard_stats(days: int = Query(7, ge=1, le=365), db: AsyncSession = Depends(get_db)):
     """Aggregate stats for the dashboard overview — safe/risky/unsafe bucket logic,
-    trust score, flagged counts, top domains, daily volume, active job, and
-    the 24h trend / speed / processing-time metrics used by the Status Breakdown card."""
+    trust score, flagged counts, top domains, daily volume, active job, the 24h
+    trend / speed / processing-time metrics used by the Status Breakdown card,
+    and the Flagged Emails / Worst Domains card overview rows."""
 
     # 1. Total emails
     total_result = await db.execute(select(func.count(Email.id)))
@@ -324,11 +497,15 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365), db: AsyncSessi
             "total": active_job_row.total,
         }
 
-    # 9. NEW — 24h trends (per-status count delta + per-bucket % change)
+    # 9. 24h trends (per-status count delta + per-bucket % change)
     per_status_trend, bucket_trend_pct = await _compute_dashboard_trends(db)
 
-    # 10. NEW — live verification speed + avg processing time
+    # 10. Live verification speed + avg processing time
     verification_speed, avg_processing_time_ms = await _compute_speed_and_processing_time(db)
+
+    # 11. Flagged Emails overview + Worst Domains summary
+    flagged_overview = await _compute_flagged_overview(db)
+    domain_summary = await _compute_domain_summary(db, domain_map, bucket_expr)
 
     return DashboardStats(
         total_emails=total_emails,
@@ -343,6 +520,8 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365), db: AsyncSessi
         bucket_trend_pct=bucket_trend_pct,
         verification_speed=verification_speed,
         avg_processing_time_ms=avg_processing_time_ms,
+        flagged_overview=flagged_overview,
+        domain_summary=domain_summary,
         generated_at=datetime.utcnow(),
     )
 
@@ -390,26 +569,78 @@ async def list_emails(
     search: str | None = Query(default=None),
     status: str | None = Query(default=None),
     domain: str | None = Query(default=None),
+    score_min: int | None = Query(default=None, ge=0, le=100),
+    score_max: int | None = Query(default=None, ge=0, le=100),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    flagged: str | None = Query(default=None),
+    order: str = Query(default="asc"),   # ← NEW LINE
     db: AsyncSession = Depends(get_db),
 ):
-    """Paginated, searchable, filterable email list."""
+    """Paginated, searchable, filterable email list.
+
+    `status` accepts EITHER a bucket name (safe/risky/unsafe/processing —
+    filtered via the same bucket_case() the dashboard/domains pages use, so
+    disposable/role_based/catch_all overrides are respected) OR a raw
+    EmailStatus value (verified/deliverable/trusted/probably_valid/risky/
+    unconfirmed/uncertain/invalid/undeliverable/processing) for callers that
+    want a specific granular status.
+
+    `flagged` powers the Dashboard's "Review Now" deep-link
+    (/emails?filter=flagged -> flagged=any) as well as the Email List page's
+    own Flagged dropdown filter:
+      - "any": disposable OR role_based OR catch_all
+      - "disposable" / "role_based" / "catch_all": that single flag only
+    """
     query = select(Email)
 
     if search:
         query = query.where(Email.email.ilike(f"%{search}%"))
+
+    BUCKET_NAMES = {"safe", "risky", "unsafe", "processing"}
     if status:
+        if status in BUCKET_NAMES:
+            query = query.where(bucket_case() == status)
+        else:
+            try:
+                query = query.where(Email.status == EmailStatus(status))
+            except ValueError:
+                pass
+
+    if domain:
+        query = query.where(Email.domain.ilike(f"%{domain}%"))
+
+    if score_min is not None:
+        query = query.where(Email.score >= score_min)
+    if score_max is not None:
+        query = query.where(Email.score <= score_max)
+
+    if date_from:
         try:
-            query = query.where(Email.status == EmailStatus(status))
+            df = datetime.strptime(date_from, "%Y-%m-%d")
+            query = query.where(Email.created_at >= df)
         except ValueError:
             pass
-    if domain:
-        query = query.where(Email.domain == domain)
+    if date_to:
+        try:
+            dt = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+            query = query.where(Email.created_at < dt)
+        except ValueError:
+            pass
+
+    if flagged == "any":
+        query = query.where(
+            or_(Email.disposable.is_(True), Email.role_based.is_(True), Email.catch_all.is_(True))
+        )
+    elif flagged in FLAGGED_FILTER_OPTIONS:
+        query = query.where(getattr(Email, flagged).is_(True))
 
     total_result = await db.execute(select(func.count()).select_from(query.subquery()))
     total = total_result.scalar_one()
 
     offset = (page - 1) * size
-    items_result = await db.execute(query.order_by(Email.created_at).offset(offset).limit(size))
+    order_col = Email.created_at.desc() if order == "desc" else Email.created_at
+    items_result = await db.execute(query.order_by(order_col).offset(offset).limit(size))
     items = items_result.scalars().all()
 
     return PaginatedEmailsResponse(
@@ -419,7 +650,6 @@ async def list_emails(
         size=size,
         pages=(total + size - 1) // size,
     )
-
 
 @router.get("/emails/export")
 async def export_emails(

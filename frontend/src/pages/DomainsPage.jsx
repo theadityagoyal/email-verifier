@@ -1,18 +1,20 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
-import {
-  LineChart,
-  Line,
-  AreaChart,
-  Area,
-  ResponsiveContainer,
-  XAxis,
-  YAxis,
-  Tooltip,
-} from 'recharts';
+
+import { listDomains, getDomainOverview, getDashboardStats } from '@/services/api';
+import Button from '@/components/ui/Button';
+
+// Import our new components
+import DomainHeader from '@/components/pages/DomainHeader';
+import DomainStats from '@/components/pages/DomainStats';
+import DomainAnalytics from '@/components/pages/DomainAnalytics';
+import DomainFilters from '@/components/pages/DomainFilters';
+import DomainTable from '@/components/pages/DomainTable';
+import DomainPagination from '@/components/pages/DomainPagination';
+
 import {
   Search,
   Filter,
@@ -38,8 +40,6 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
-import { listDomains, getDomainOverview, getDashboardStats } from '@/services/api';
-import Button from '@/components/ui/Button';
 
 const VERDICT_CONFIG = {
   Healthy: {
@@ -67,7 +67,6 @@ const MX_STATUS_COLOR = {
 };
 
 const TREND_CONFIG = {
-  // Tracks risk % moving up or down over the last 7 days — up is bad.
   up: { icon: TrendingUp, color: 'text-red-500' },
   down: { icon: TrendingDown, color: 'text-emerald-500' },
   stable: { icon: Minus, color: 'text-[var(--foreground)]/40' },
@@ -84,19 +83,6 @@ const SORT_OPTIONS = [
 function formatDate(value) {
   if (!value) return '—';
   return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-function pageWindow(page, pages) {
-  // Compact page list: 1 ... p-1 p p+1 ... last
-  if (pages <= 7) return Array.from({ length: pages }, (_, i) => i + 1);
-  const set = new Set([1, pages, page - 1, page, page + 1]);
-  const sorted = [...set].filter((p) => p >= 1 && p <= pages).sort((a, b) => a - b);
-  const result = [];
-  sorted.forEach((p, i) => {
-    if (i > 0 && p - sorted[i - 1] > 1) result.push('…');
-    result.push(p);
-  });
-  return result;
 }
 
 function downloadCsv(rows, filename) {
@@ -116,6 +102,8 @@ function downloadCsv(rows, filename) {
 }
 
 export default function DomainsPage() {
+  const navigate = useNavigate();
+
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(20);
   const [search, setSearch] = useState('');
@@ -133,6 +121,30 @@ export default function DomainsPage() {
   const [flagsFilter, setFlagsFilter] = useState('All');
   const [minEmails, setMinEmails] = useState('');
 
+  // --- BUG A FIX -----------------------------------------------------------
+  // search/sort changes must reset to page 1, otherwise a stale `page` can
+  // point past the end of the new, smaller/differently-ordered result set.
+  // DomainFilters intentionally left the "// setPage(1)" as the parent's
+  // job (see its own comments) — these wrappers are that job.
+  const handleSearchChange = (value) => {
+    setSearch(value);
+    setPage(1);
+  };
+
+  const handleSortChange = (value) => {
+    setSort(value);
+    setPage(1);
+  };
+
+  // --- BUG B FIX -------------------------------------------------------------
+  // `selected` must not silently carry over across pages/search/sort — the
+  // "select all" checkbox has no way to show "N selected across other pages",
+  // so keeping stale selections around causes it to render as checked/mixed
+  // for rows the user never actually picked on the new page.
+  useEffect(() => {
+    setSelected([]);
+  }, [page, search, sort]);
+
   const { data: domainsData, isLoading, error, refetch } = useQuery({
     queryKey: ['domains', page, size, search, sort],
     queryFn: () => listDomains({ page, size, search: search || undefined, sort }),
@@ -147,11 +159,6 @@ export default function DomainsPage() {
   const { data: topRiskData } = useQuery({
     queryKey: ['domains-top-risk'],
     queryFn: () => listDomains({ page: 1, size: 5, sort: 'risk' }),
-  });
-
-  const { data: newestData } = useQuery({
-    queryKey: ['domains-newest'],
-    queryFn: () => listDomains({ page: 1, size: 20, sort: 'newest' }),
   });
 
   const { data: trendStats } = useQuery({
@@ -195,19 +202,28 @@ export default function DomainsPage() {
     setMinEmails('');
   };
 
-  // 7-day risk trend, derived from the same bucket_counts the dashboard
-  // already exposes via /dashboard/stats — no separate endpoint needed.
+  // --- BUG D FIX -------------------------------------------------------------
+  // Single source of truth for the 7-day risk trend + sparkline data.
+  // Previously this exact calculation was duplicated inside DomainAnalytics
+  // (with a typo bug that crashed the page). Now it's computed once here and
+  // passed down as props, so there's only one place to fix if the logic
+  // ever needs to change.
   const dailyRiskTrend = useMemo(() => {
     const daily = trendStats?.daily_volume || [];
-    return daily.map((d) => {
-      const denom = d.safe + d.risky + d.unsafe;
-      const riskPct = denom > 0 ? Math.round(((d.risky + d.unsafe) / denom) * 100 * 10) / 10 : 0;
-      return {
-        date: d.date,
-        label: new Date(d.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-        riskPct,
-      };
-    });
+    return daily
+      .filter((d) => d?.date)
+      .map((d) => {
+        const safe = d.safe || 0;
+        const risky = d.risky || 0;
+        const unsafe = d.unsafe || 0;
+        const denom = safe + risky + unsafe;
+        const riskPct = denom > 0 ? Math.round(((risky + unsafe) / denom) * 100 * 10) / 10 : 0;
+        return {
+          date: d.date,
+          label: new Date(d.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+          riskPct,
+        };
+      });
   }, [trendStats]);
 
   const overallTrendDelta = useMemo(() => {
@@ -219,7 +235,12 @@ export default function DomainsPage() {
 
   const newDomainsSparkline = useMemo(() => {
     const daily = trendStats?.daily_volume || [];
-    return daily.map((d) => ({ date: d.date, count: d.safe + d.risky + d.unsafe + d.processing }));
+    return daily
+      .filter((d) => d?.date)
+      .map((d) => ({
+        date: d.date,
+        count: (d.safe || 0) + (d.risky || 0) + (d.unsafe || 0) + (d.processing || 0),
+      }));
   }, [trendStats]);
 
   const newDomainsPct =
@@ -231,6 +252,7 @@ export default function DomainsPage() {
     overview && overview.safe + overview.risky + overview.unsafe > 0
       ? Math.round((overview.safe / (overview.safe + overview.risky + overview.unsafe)) * 1000) / 10
       : 0;
+
   const riskyUnsafe = overview ? overview.risky + overview.unsafe : 0;
   const riskyUnsafePct =
     overview && overview.safe + overview.risky + overview.unsafe > 0
@@ -257,356 +279,54 @@ export default function DomainsPage() {
   return (
     <div className="space-y-6" onClick={() => openMenu && setOpenMenu(null)}>
       {/* Header */}
-      <motion.div
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
-        className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4"
-      >
-        <div>
-          <h1 className="text-3xl font-bold text-[var(--foreground)] mb-1">Domains</h1>
-          <p className="text-[var(--foreground)]/60">Domain analytics and deliverability insights</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <Button variant="outline" onClick={exportFiltered}>
-            <Download className="h-4 w-4" />
-            Export
-          </Button>
-          <Button variant="danger" disabled={selected.length === 0}>
-            <Trash2 className="h-4 w-4" />
-            Delete Selected ({selected.length})
-          </Button>
-        </div>
-      </motion.div>
+      <DomainHeader
+        selected={selected}
+        selectedLength={selected.length}
+        onExport={exportFiltered}
+        onDeleteSelected={() => {
+          // Implement delete functionality if needed
+        }}
+        openMenu={openMenu}
+        setOpenMenu={setOpenMenu}
+        sort={sort}
+        setSort={setSort}
+        SORT_OPTIONS={SORT_OPTIONS}
+      />
 
       {/* Stat cards */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, delay: 0.1 }}
-        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4"
-      >
-        <div className="card">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-indigo-100 dark:bg-indigo-900/20">
-              <Globe className="h-5 w-5 text-indigo-600" />
-            </div>
-            <div>
-              <p className="text-sm text-[var(--foreground)]/50">Total Domains</p>
-              <p className="text-2xl font-bold text-[var(--foreground)] tabular-nums">
-                {(overview?.total_domains ?? 0).toLocaleString()}
-              </p>
-            </div>
-          </div>
-          <p className="mt-3 text-sm text-[var(--foreground)]/50">Across all time</p>
-        </div>
-
-        <div className="card">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-indigo-100 dark:bg-indigo-900/20">
-              <Mail className="h-5 w-5 text-indigo-600" />
-            </div>
-            <div>
-              <p className="text-sm text-[var(--foreground)]/50">Total Emails</p>
-              <p className="text-2xl font-bold text-[var(--foreground)] tabular-nums">
-                {(overview?.total_emails ?? 0).toLocaleString()}
-              </p>
-            </div>
-          </div>
-          <p className="mt-3 text-sm text-[var(--foreground)]/50">Across all domains</p>
-        </div>
-
-        <div className="card">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900/20">
-              <ShieldCheck className="h-5 w-5 text-emerald-600" />
-            </div>
-            <div>
-              <p className="text-sm text-[var(--foreground)]/50">Safe</p>
-              <p className="text-2xl font-bold text-[var(--foreground)] tabular-nums">
-                {(overview?.safe ?? 0).toLocaleString()}
-              </p>
-            </div>
-          </div>
-          <p className="mt-3 text-sm font-medium text-emerald-600">{safePct}% of total</p>
-        </div>
-
-        <div className="card">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/20">
-              <ShieldAlert className="h-5 w-5 text-amber-600" />
-            </div>
-            <div>
-              <p className="text-sm text-[var(--foreground)]/50">Risky + Unsafe</p>
-              <p className="text-2xl font-bold text-[var(--foreground)] tabular-nums">
-                {riskyUnsafe.toLocaleString()}
-              </p>
-            </div>
-          </div>
-          <p className="mt-3 text-sm font-medium text-amber-600">{riskyUnsafePct}% of total</p>
-        </div>
-
-        <div className="card">
-          <p className="text-sm font-semibold text-[var(--foreground)] mb-3">Flagged Domains</p>
-          <div className="grid grid-cols-3 gap-2">
-            <div className="flex items-center gap-2 rounded-lg bg-red-50 dark:bg-red-900/10 px-2 py-2">
-              <Trash2 className="h-4 w-4 text-red-500 shrink-0" />
-              <div>
-                <p className="text-[10px] text-[var(--foreground)]/50 leading-none">Disposable</p>
-                <p className="text-sm font-bold text-[var(--foreground)] tabular-nums">
-                  {overview?.disposable_domains ?? 0}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 rounded-lg bg-indigo-50 dark:bg-indigo-900/10 px-2 py-2">
-              <Mail className="h-4 w-4 text-indigo-500 shrink-0" />
-              <div>
-                <p className="text-[10px] text-[var(--foreground)]/50 leading-none">Catch-all</p>
-                <p className="text-sm font-bold text-[var(--foreground)] tabular-nums">
-                  {overview?.catch_all_domains ?? 0}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 rounded-lg bg-amber-50 dark:bg-amber-900/10 px-2 py-2">
-              <Ban className="h-4 w-4 text-amber-500 shrink-0" />
-              <div>
-                <p className="text-[10px] text-[var(--foreground)]/50 leading-none">No MX</p>
-                <p className="text-sm font-bold text-[var(--foreground)] tabular-nums">
-                  {overview?.no_mx_domains ?? 0}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </motion.div>
+      <DomainStats
+        overview={overview}
+        safePct={safePct}
+        riskyUnsafePct={riskyUnsafePct}
+      />
 
       {/* Analytics section */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, delay: 0.15 }}
-        className="grid grid-cols-1 lg:grid-cols-3 gap-4"
-      >
-        {/* Top 5 Riskiest Domains */}
-        <div className="card">
-          <h3 className="text-sm font-semibold text-[var(--foreground)] mb-4">Top 5 Riskiest Domains</h3>
-          <div className="space-y-3">
-            {topRiskDomains.length === 0 && (
-              <p className="text-sm text-[var(--foreground)]/40">No data yet</p>
-            )}
-            {topRiskDomains.map((d) => (
-              <div key={d.domain}>
-                <div className="flex items-center justify-between text-sm mb-1">
-                  <span className="truncate text-[var(--foreground)] font-medium">{d.domain}</span>
-                  <span className="font-semibold text-red-500 tabular-nums">{d.risk_percent}%</span>
-                </div>
-                <div className="h-1.5 rounded-full bg-[var(--muted)] overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-red-500"
-                    style={{ width: `${Math.min(d.risk_percent, 100)}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-          <button
-            onClick={() => {
-              setSort('risk');
-              setPage(1);
-            }}
-            className="mt-4 w-full text-center text-sm font-medium text-[var(--accent)] hover:underline"
-          >
-            View all
-          </button>
-        </div>
-
-        {/* 7-Day Risk Trend */}
-        <div className="card">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-semibold text-[var(--foreground)]">7-Day Risk Trend (All Domains)</h3>
-            {overallTrendDelta !== null && (
-              <span
-                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${overallTrendDelta > 0
-                  ? 'bg-red-100 text-red-600 dark:bg-red-900/20 dark:text-red-400'
-                  : overallTrendDelta < 0
-                    ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-400'
-                    : 'bg-[var(--muted)] text-[var(--foreground)]/50'
-                  }`}
-              >
-                {overallTrendDelta > 0 ? <TrendingUp className="h-3 w-3" /> : overallTrendDelta < 0 ? <TrendingDown className="h-3 w-3" /> : <Minus className="h-3 w-3" />}
-                {Math.abs(overallTrendDelta)}% vs last 7 days
-              </span>
-            )}
-          </div>
-          <div className="h-40 -ml-2">
-            {dailyRiskTrend.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={dailyRiskTrend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="riskTrendFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#ef4444" stopOpacity={0.25} />
-                      <stop offset="100%" stopColor="#ef4444" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <XAxis
-                    dataKey="label"
-                    tick={{ fontSize: 11, fill: 'var(--foreground)', opacity: 0.5 }}
-                    axisLine={false}
-                    tickLine={false}
-                  />
-                  <YAxis hide domain={[0, 'dataMax + 10']} />
-                  <Tooltip
-                    formatter={(value) => [`${value}%`, 'Risk']}
-                    contentStyle={{
-                      background: 'var(--background)',
-                      border: '1px solid var(--muted)',
-                      borderRadius: 8,
-                      fontSize: 12,
-                    }}
-                  />
-                  <Area type="monotone" dataKey="riskPct" stroke="#ef4444" strokeWidth={2} fill="url(#riskTrendFill)" />
-                </AreaChart>
-              </ResponsiveContainer>
-            ) : (
-              <p className="text-sm text-[var(--foreground)]/40 h-full flex items-center justify-center">No data yet</p>
-            )}
-          </div>
-        </div>
-
-        {/* New Domains */}
-        <div className="card">
-          <h3 className="text-sm font-semibold text-[var(--foreground)] mb-1">New Domains (Last 7 Days)</h3>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-3xl font-bold text-[var(--foreground)] tabular-nums">
-                {overview?.new_domains_count ?? 0}
-              </p>
-              <p className="text-sm text-indigo-600 font-medium">{newDomainsPct}% of total domains</p>
-            </div>
-            <div className="h-14 w-24">
-              {newDomainsSparkline.length > 0 && (
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={newDomainsSparkline}>
-                    <Line type="monotone" dataKey="count" stroke="#6366f1" strokeWidth={2} dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-4 w-full"
-            onClick={() => {
-              setSort('newest');
-              setPage(1);
-            }}
-          >
-            View new domains
-          </Button>
-        </div>
-      </motion.div>
+      <DomainAnalytics
+        overview={overview}
+        topRiskDomains={topRiskDomains}
+        dailyRiskTrend={dailyRiskTrend}
+        overallTrendDelta={overallTrendDelta}
+        newDomainsSparkline={newDomainsSparkline}
+        newDomainsPct={newDomainsPct}
+        navigate={navigate}
+      />
 
       {/* Search & Filters */}
-      <motion.div
-        initial={{ opacity: 0, height: 0 }}
-        animate={{ opacity: 1, height: 'auto' }}
-        className="card overflow-hidden !p-0"
-      >
-        <div className="p-4 flex flex-wrap gap-3 items-center">
-          <div className="relative flex-1 min-w-[220px] max-w-sm">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--foreground)]/40" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-              placeholder="Search domains, MX records..."
-              className="input pl-10 w-full"
-              aria-label="Search domains"
-            />
-          </div>
-
-          <button
-            onClick={() => setShowFilters(!showFilters)}
-            className="flex items-center gap-1.5 rounded-full border border-[var(--muted)] px-3 py-1.5 text-sm font-medium text-[var(--foreground)]/70 hover:bg-[var(--muted)]/40 transition-colors"
-          >
-            <Filter className="h-3.5 w-3.5" />
-            Filters
-            {showFilters ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-          </button>
-
-          <select
-            value={riskFilter}
-            onChange={(e) => setRiskFilter(e.target.value)}
-            className="rounded-full border border-[var(--muted)] bg-[var(--background)] px-3 py-1.5 text-sm text-[var(--foreground)]/70"
-          >
-            <option value="All">Risk Level: All</option>
-            <option value="Healthy">Healthy</option>
-            <option value="Watch">Watch</option>
-            <option value="High Risk">High Risk</option>
-            <option value="Low Sample">Low Sample</option>
-          </select>
-
-          <select
-            value={flagsFilter}
-            onChange={(e) => setFlagsFilter(e.target.value)}
-            className="rounded-full border border-[var(--muted)] bg-[var(--background)] px-3 py-1.5 text-sm text-[var(--foreground)]/70"
-          >
-            <option value="All">Has Flags: All</option>
-            <option value="Disposable">Disposable</option>
-            <option value="Role Based">Role Based</option>
-            <option value="Catch All">Catch All</option>
-          </select>
-
-          <select
-            value={mxFilter}
-            onChange={(e) => setMxFilter(e.target.value)}
-            className="rounded-full border border-[var(--muted)] bg-[var(--background)] px-3 py-1.5 text-sm text-[var(--foreground)]/70"
-          >
-            <option value="All">MX Status: All</option>
-            <option value="Valid">Valid</option>
-            <option value="No MX">No MX</option>
-            <option value="Unknown">Unknown</option>
-          </select>
-
-          <input
-            type="number"
-            min="0"
-            value={minEmails}
-            onChange={(e) => setMinEmails(e.target.value)}
-            placeholder="Min Emails"
-            className="w-32 rounded-full border border-[var(--muted)] bg-[var(--background)] px-3 py-1.5 text-sm text-[var(--foreground)]/70"
-          />
-
-          <button
-            onClick={clearFilters}
-            className="rounded-full px-3 py-1.5 text-sm font-medium text-[var(--foreground)]/50 hover:text-[var(--foreground)] transition-colors"
-          >
-            Clear
-          </button>
-
-          <div className="ml-auto">
-            <select
-              value={sort}
-              onChange={(e) => {
-                setSort(e.target.value);
-                setPage(1);
-              }}
-              className="rounded-full border border-[var(--muted)] bg-[var(--background)] px-3 py-1.5 text-sm font-medium text-[var(--foreground)]"
-              aria-label="Sort domains"
-            >
-              {SORT_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  Sort by: {opt.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-      </motion.div>
+      <DomainFilters
+        search={search}
+        setSearch={handleSearchChange}
+        riskFilter={riskFilter}
+        setRiskFilter={setRiskFilter}
+        mxFilter={mxFilter}
+        setMxFilter={setMxFilter}
+        flagsFilter={flagsFilter}
+        setFlagsFilter={setFlagsFilter}
+        minEmails={minEmails}
+        setMinEmails={setMinEmails}
+        showFilters={showFilters}
+        setShowFilters={setShowFilters}
+        clearFilters={clearFilters}
+      />
 
       {/* Table */}
       <motion.div
@@ -637,305 +357,29 @@ export default function DomainsPage() {
           </div>
         ) : (
           <>
-            <div className="overflow-x-auto">
-              <table className="w-full" role="grid">
-                <thead>
-                  <tr className="border-b border-[var(--muted)] bg-[var(--muted)]/30">
-                    <th className="px-4 py-3 w-10">
-                      <input
-                        type="checkbox"
-                        checked={selected.length === filteredDomains.length && filteredDomains.length > 0}
-                        onChange={toggleSelectAll}
-                        aria-label="Select all domains"
-                      />
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider min-w-[180px]">
-                      Domain
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-24">
-                      Total Emails
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-20">
-                      Safe
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-20">
-                      Risky
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-20">
-                      Unsafe
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-32">
-                      Risk %
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-24">
-                      7D Trend
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-24">
-                      MX Status
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-24">
-                      Flags
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-28">
-                      First Seen
-                    </th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-40">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[var(--muted)]">
-                  {filteredDomains.map((domain, rowIndex) => {
-                    const { icon: VerdictIcon, badge } = VERDICT_CONFIG[domain.verdict] || VERDICT_CONFIG.Healthy;
-                    const { icon: TrendIcon, color: trendColor } = TREND_CONFIG[domain.trend] || TREND_CONFIG.stable;
-                    const isRisky = domain.verdict === 'High Risk' || domain.verdict === 'Watch';
-                    const isLowSample = domain.low_sample;
+            <DomainTable
+              filteredDomains={filteredDomains}
+              selected={selected}
+              setSelected={setSelected}
+              toggleSelectAll={toggleSelectAll}
+              toggleSelectOne={toggleSelectOne}
+              openMenu={openMenu}
+              setOpenMenu={setOpenMenu}
+            />
 
-                    return (
-                      <motion.tr
-                        key={domain.domain}
-                        initial={{ opacity: 0, x: -20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ duration: 0.3, delay: rowIndex * 0.02 }}
-                        className="hover:bg-[var(--muted)]/30 transition-colors cursor-pointer"
-                        onClick={() => {
-                          window.location.href = `/emails?domain=${encodeURIComponent(domain.domain)}`;
-                        }}
-                      >
-                        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                          <input
-                            type="checkbox"
-                            checked={selected.includes(domain.domain)}
-                            onChange={() => toggleSelectOne(domain.domain)}
-                            aria-label={`Select ${domain.domain}`}
-                          />
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2 font-medium text-[var(--foreground)]">
-                            <Globe className="h-4 w-4 text-[var(--foreground)]/40 shrink-0" />
-                            {domain.domain}
-                            <ExternalLink
-                              className="h-3 w-3 text-[var(--foreground)]/30 hover:text-[var(--accent)]"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                window.open(`https://${domain.domain}`, '_blank');
-                              }}
-                            />
-                          </div>
-                          <div className="flex items-center gap-1.5 mt-1">
-                            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${badge}`}>
-                              <VerdictIcon className="h-3 w-3" />
-                              {domain.verdict}
-                            </span>
-                            {domain.is_new && (
-                              <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 dark:bg-indigo-900/20 text-indigo-600 px-2 py-0.5 text-[10px] font-semibold">
-                                <Sparkles className="h-3 w-3" />
-                                New
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 font-mono tabular-nums text-[var(--foreground)]">
-                          {(domain.total_emails || 0).toLocaleString()}
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className="font-medium text-success tabular-nums">
-                            {(domain.safe_count || 0).toLocaleString()}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className="font-medium text-warning tabular-nums">
-                            {(domain.risky_count || 0).toLocaleString()}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className="font-medium text-error tabular-nums">
-                            {(domain.unsafe_count || 0).toLocaleString()}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          {isLowSample ? (
-                            <div>
-                              <span className="text-sm text-[var(--foreground)]/40">—</span>
-                              <p className="text-[10px] text-[var(--foreground)]/40">Low volume</p>
-                            </div>
-                          ) : (
-                            <div className="min-w-[90px]">
-                              <span className="text-sm font-semibold tabular-nums text-[var(--foreground)]">
-                                {(domain.risk_percent ?? 0).toFixed(1)}%
-                              </span>
-                              <div className="h-1.5 rounded-full bg-[var(--muted)] overflow-hidden mt-1">
-                                <div
-                                  className={`h-full rounded-full ${domain.risk_percent >= 30 ? 'bg-red-500' : domain.risk_percent >= 10 ? 'bg-amber-500' : 'bg-emerald-500'
-                                    }`}
-                                  style={{ width: `${Math.min(domain.risk_percent ?? 0, 100)}%` }}
-                                />
-                              </div>
-                            </div>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          {domain.trend_delta_pct === null || domain.trend_delta_pct === undefined ? (
-                            <span className="text-sm text-[var(--foreground)]/40">—</span>
-                          ) : (
-                            <span className={`inline-flex items-center gap-1 text-sm font-medium tabular-nums ${trendColor}`}>
-                              <TrendIcon className="h-3.5 w-3.5" />
-                              {domain.trend_delta_pct > 0 ? '+' : ''}
-                              {domain.trend_delta_pct}%
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className={`text-xs font-medium ${MX_STATUS_COLOR[domain.mx_status] || ''}`}>
-                            {domain.mx_status}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-1">
-                            {domain.disposable_count > 0 && (
-                              <span title="Disposable" className="p-1 rounded bg-red-100 dark:bg-red-900/20">
-                                <Trash2 className="h-3.5 w-3.5 text-red-500" />
-                              </span>
-                            )}
-                            {domain.catch_all_count > 0 && (
-                              <span title="Catch All" className="p-1 rounded bg-indigo-100 dark:bg-indigo-900/20">
-                                <Mail className="h-3.5 w-3.5 text-indigo-500" />
-                              </span>
-                            )}
-                            {domain.role_based_count > 0 && (
-                              <span title="Role Based" className="p-1 rounded bg-amber-100 dark:bg-amber-900/20">
-                                <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
-                              </span>
-                            )}
-                            {!domain.disposable_count && !domain.catch_all_count && !domain.role_based_count && (
-                              <span className="text-xs text-[var(--foreground)]/40">—</span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-sm text-[var(--foreground)]/60">
-                          {formatDate(domain.first_seen)}
-                        </td>
-                        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                          <div className="flex items-center justify-end gap-1 relative">
-                            {isRisky ? (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="text-error border-error/40 hover:bg-error/10"
-                              >
-                                <Ban className="h-3.5 w-3.5" />
-                                Block Domain
-                              </Button>
-                            ) : (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => {
-                                  window.location.href = `/emails?domain=${encodeURIComponent(domain.domain)}`;
-                                }}
-                              >
-                                <Mail className="h-3.5 w-3.5" />
-                                View Emails
-                              </Button>
-                            )}
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenMenu(openMenu === domain.domain ? null : domain.domain);
-                              }}
-                              className="p-1.5 rounded-lg text-[var(--foreground)]/50 hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-                              aria-label={`More actions for ${domain.domain}`}
-                            >
-                              <MoreVertical className="h-4 w-4" />
-                            </button>
-                            {openMenu === domain.domain && (
-                              <div className="absolute right-0 top-8 z-10 w-40 rounded-lg border border-[var(--muted)] bg-[var(--background)] shadow-lg py-1">
-                                <button
-                                  onClick={() => {
-                                    window.location.href = `/emails?domain=${encodeURIComponent(domain.domain)}`;
-                                  }}
-                                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)]/80 hover:bg-[var(--muted)]/40"
-                                >
-                                  <Mail className="h-3.5 w-3.5" />
-                                  View Emails
-                                </button>
-                                <button className="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)]/80 hover:bg-[var(--muted)]/40">
-                                  <RefreshCw className="h-3.5 w-3.5" />
-                                  Reverify
-                                </button>
-                                <button
-                                  onClick={() => window.open(`https://${domain.domain}`, '_blank')}
-                                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)]/80 hover:bg-[var(--muted)]/40"
-                                >
-                                  <ExternalLink className="h-3.5 w-3.5" />
-                                  Website
-                                </button>
-                                <button className="flex w-full items-center gap-2 px-3 py-2 text-sm text-error hover:bg-error/10">
-                                  <Ban className="h-3.5 w-3.5" />
-                                  Block Domain
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        </td>
-                      </motion.tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Pagination */}
-            <div className="px-4 py-3 border-t border-[var(--muted)] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div className="flex items-center gap-3 text-sm text-[var(--foreground)]/50">
-                <span>{selected.length} of {filteredDomains.length} selected</span>
-                <span className="hidden sm:inline">
-                  · {(page - 1) * size + 1}–{(page - 1) * size + domains.length} of {total} domains
-                </span>
-                <div className="flex items-center gap-2">
-                  <span>Rows per page:</span>
-                  <select
-                    value={size}
-                    onChange={(e) => {
-                      setSize(Number(e.target.value));
-                      setPage(1);
-                    }}
-                    className="rounded-lg border border-[var(--muted)] bg-[var(--background)] px-2 py-1 text-sm"
-                  >
-                    <option value={10}>10</option>
-                    <option value={20}>20</option>
-                    <option value={50}>50</option>
-                    <option value={100}>100</option>
-                  </select>
-                </div>
-              </div>
-              <div className="flex items-center gap-1">
-                <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                {pageWindow(page, pages).map((p, i) =>
-                  p === '…' ? (
-                    <span key={`ellipsis-${i}`} className="px-2 text-sm text-[var(--foreground)]/40">
-                      …
-                    </span>
-                  ) : (
-                    <button
-                      key={p}
-                      onClick={() => setPage(p)}
-                      className={`h-8 w-8 rounded-lg text-sm font-medium ${p === page
-                        ? 'bg-[var(--primary)] text-white'
-                        : 'text-[var(--foreground)]/70 hover:bg-[var(--muted)]/40'
-                        }`}
-                    >
-                      {p}
-                    </button>
-                  )
-                )}
-                <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.min(pages, p + 1))} disabled={page >= pages}>
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
+            <DomainPagination
+              page={page}
+              pages={pages}
+              selectedLength={selected.length}
+              filteredDomainsLength={filteredDomains.length}
+              onPageChange={(newPage) => setPage(newPage)}
+              onSizeChange={(newSize) => {
+                setSize(newSize);
+                setPage(1); // Reset to first page when size changes
+              }}
+              size={size}
+              sizeOptions={[10, 20, 50, 100]}
+            />
           </>
         )}
       </motion.div>

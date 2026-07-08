@@ -1,17 +1,180 @@
 import axios from 'axios'
 
+// Simple development check
+const isDevelopment = () => {
+  return import.meta.env.MODE === 'development'
+}
+
+// Create base API instance
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api/v1',
-  timeout: 30_000,
+  timeout: 30000,
 })
 
-api.interceptors.response.use(
-  (res) => res,
-  (err) => {
-    const message = err.response?.data?.detail || err.message || 'Request failed'
-    return Promise.reject(new Error(message))
+// Request interceptor for logging and headers
+api.interceptors.request.use(
+  (config) => {
+    // Log requests in development
+    if (isDevelopment()) {
+      console.debug(`[API Request] ${config.method.toUpperCase()} ${config.url}`, {
+        params: config.params,
+        data: config.data,
+        headers: config.headers,
+      })
+    }
+
+    // Add auth token if available
+    const token = localStorage.getItem('accessToken')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
+
+    return config
+  },
+  (error) => {
+    return Promise.reject(error)
   }
 )
+
+// Response interceptor for enhanced error handling
+api.interceptors.response.use(
+  (response) => {
+    // Log successful responses in development
+    if (isDevelopment()) {
+      console.debug(`[API Response] ${response.config.method.toUpperCase()} ${response.config.url}`, {
+        status: response.status,
+        data: response.data,
+      })
+    }
+    return response
+  },
+  (error) => {
+    // Log error responses in development
+    if (isDevelopment()) {
+      console.error(`[API Error] ${error.config?.method?.toUpperCase() || 'UNKNOWN'} ${error.config?.url || 'unknown'}`, {
+        status: error.response?.status,
+        message: error.message,
+        code: error.code,
+      })
+    }
+
+    // Enhance error with more context
+    if (error.response) {
+      // Server responded with error status
+      const message =
+        error.response.data?.detail ||
+        error.response.data?.message ||
+        error.response.data?.error ||
+        `HTTP ${error.response.status}: ${error.response.statusText}`
+
+      // Create enhanced error with original info
+      const enhancedError = new Error(message)
+      enhancedError.status = error.response.status
+      enhancedError.data = error.response.data
+      enhancedError.originalError = error
+      return Promise.reject(enhancedError)
+    } else if (error.request) {
+      // Request was made but no response received
+      const enhancedError = new Error('Network error: No response received')
+      enhancedError.code = 'NETWORK_ERROR'
+      enhancedError.originalError = error
+      return Promise.reject(enhancedError)
+    } else {
+      // Something happened in setting up the request
+      const enhancedError = new Error(error.message || 'Request failed')
+      enhancedError.code = 'REQUEST_ERROR'
+      enhancedError.originalError = error
+      return Promise.reject(enhancedError)
+    }
+  }
+)
+
+// Simple retry queue for deduplication of GET requests
+const retryQueue = new Map()
+
+const getRetryKey = (config) => {
+  if ((config.method || 'get').toLowerCase() !== 'get') return null
+
+  const base = config.baseURL
+    ? new URL(config.baseURL, window.location.origin).href
+    : window.location.origin
+
+  const url = new URL(config.url, base)
+
+  if (config.params) {
+    Object.entries(config.params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        url.searchParams.set(key, value)
+      }
+    })
+  }
+
+  url.searchParams.delete('_t')
+
+  return `${config.method}:${url.toString()}`
+}
+
+// Create enhanced API instance with deduplication capabilities.
+// IMPORTANT: this instance carries baseURL ('/api/v1') + the same
+// interceptors as `api`. All requests MUST go through this instance
+// (or a config that explicitly sets baseURL) — using the bare, unconfigured
+// `axios` import here was the bug that sent every apiEnhanced.* call to a
+// relative URL resolved against the current page instead of the backend,
+// e.g. POST /bulk-upload instead of POST /api/v1/bulk-upload, which nginx's
+// static SPA location then rejected with 405 for non-GET methods.
+const apiEnhanced = axios.create({
+  baseURL: import.meta.env.VITE_API_URL || '/api/v1',
+  timeout: 30000,
+})
+
+apiEnhanced.interceptors.request.use(
+  api.interceptors.request.handlers[0].fulfilled,
+  api.interceptors.request.handlers[0].rejected
+)
+apiEnhanced.interceptors.response.use(
+  api.interceptors.response.handlers[0].fulfilled,
+  api.interceptors.response.handlers[0].rejected
+)
+
+const axiosRequest = async (config) => {
+  const retryKey = getRetryKey({ ...config, baseURL: apiEnhanced.defaults.baseURL })
+
+  // If we have a retry key and there's already a request in flight, return the existing promise
+  if (retryKey && retryQueue.has(retryKey)) {
+    return retryQueue.get(retryKey)
+  }
+
+  // Route through the configured apiEnhanced instance (baseURL + interceptors),
+  // not the bare global `axios`.
+  const promise = apiEnhanced.request(config)
+    .then(response => {
+      // Remove from queue when done
+      if (retryKey) retryQueue.delete(retryKey)
+      return response
+    })
+    .catch(error => {
+      // Remove from queue when done
+      if (retryKey) retryQueue.delete(retryKey)
+      throw error
+    })
+
+  // Store promise for deduplication
+  if (retryKey) {
+    retryQueue.set(retryKey, promise)
+
+    // Clean up after completion
+    promise.finally(() => retryQueue.delete(retryKey))
+  }
+
+  return promise
+}
+
+// Override the public methods to go through the deduplicating wrapper,
+// which itself now correctly delegates to the `apiEnhanced` axios instance.
+apiEnhanced.get = (url, config) => axiosRequest({ ...config, method: 'get', url })
+apiEnhanced.post = (url, data, config) => axiosRequest({ ...config, method: 'post', url, data })
+apiEnhanced.put = (url, data, config) => axiosRequest({ ...config, method: 'put', url, data })
+apiEnhanced.delete = (url, config) => axiosRequest({ ...config, method: 'delete', url })
 
 // Map backend EmailStatus to frontend safe/risky/invalid bucket
 // (kept in sync with the dashboard's safe/risky/unsafe logic —
@@ -43,47 +206,47 @@ const normalizeVerifyResponse = (data) => normalizeEmail(data)
 // ── Verification ─────────────────────────────────────────────────────────────
 
 export const verifyEmail = (email) =>
-  api.post('/verify-email', { email }).then((r) => normalizeVerifyResponse(r.data))
+  apiEnhanced.post('/verify-email', { email }).then((r) => normalizeVerifyResponse(r.data))
 
 export const bulkUpload = (file) => {
   const form = new FormData()
   form.append('file', file)
-  return api.post('/bulk-upload', form, {
+  return apiEnhanced.post('/bulk-upload', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   }).then((r) => r.data)
 }
 
 export const getJobStatus = (jobId) =>
-  api.get(`/jobs/${jobId}`).then((r) => r.data)
+  apiEnhanced.get(`/jobs/${jobId}`).then((r) => r.data)
 
 export const listJobs = () =>
-  api.get('/jobs').then((r) => r.data)
+  apiEnhanced.get('/jobs').then((r) => r.data)
 
 export const exportJobResults = (jobId) =>
-  `${api.defaults.baseURL}/jobs/${jobId}/export`
+  `${apiEnhanced.defaults.baseURL}/jobs/${jobId}/export`
 
 export const deleteJob = (jobId) =>
-  api.delete(`/jobs/${jobId}`).then((r) => r.data);
+  apiEnhanced.delete(`/jobs/${jobId}`).then((r) => r.data)
 
 // ── Dashboard ─────────────────────────────────────────────────────────────
 
 export const getDashboardStats = (days = 7) =>
-  api.get('/dashboard/stats', { params: { days }, }).then((r) => r.data)
+  apiEnhanced.get('/dashboard/stats', { params: { days }, }).then((r) => r.data)
 
 export const getTrends = (days = 30) =>
-  api.get('/dashboard/trends', { params: { days } }).then((r) => r.data)
+  apiEnhanced.get('/dashboard/trends', { params: { days } }).then((r) => r.data)
 
 // ── Emails ────────────────────────────────────────────────────────────────
 
 export const listEmails = (params) =>
-  api.get('/emails', { params }).then((r) => normalizeEmailList(r.data))
+  apiEnhanced.get('/emails', { params }).then((r) => normalizeEmailList(r.data))
 
 export const deleteEmail = (email) =>
-  api.delete(`/emails/${encodeURIComponent(email)}`).then((r) => r.data)
+  apiEnhanced.delete(`/emails/${encodeURIComponent(email)}`).then((r) => r.data)
 
 export const exportEmails = (params) => {
   const qs = new URLSearchParams(params).toString()
-  return `${api.defaults.baseURL}/emails/export?${qs}`
+  return `${apiEnhanced.defaults.baseURL}/emails/export?${qs}`
 }
 
 // ── Domains ───────────────────────────────────────────────────────────────
@@ -94,7 +257,7 @@ export const exportEmails = (params) => {
 // Response shape: { items, total, page, size, pages }.
 
 export const listDomains = (params) =>
-  api.get('/domains', { params }).then((r) => r.data)
+  apiEnhanced.get('/domains', { params }).then((r) => r.data)
 
 export const getDomainOverview = () =>
-  api.get('/domains/overview').then((r) => r.data)
+  apiEnhanced.get('/domains/overview').then((r) => r.data)

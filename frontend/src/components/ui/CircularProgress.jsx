@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react';
+import { useTheme } from '@/styles/theme';
 
 export default function CircularProgress({
   value,
   size = 120,
   strokeWidth = 10,
   color = 'success',
+  label = 'Trust',
 }) {
+  const theme = useTheme();
   const [percent, setPercent] = useState(0);
 
   useEffect(() => {
@@ -17,29 +20,31 @@ export default function CircularProgress({
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (percent / 100) * circumference;
 
-  const colors = {
-    success: '#10B981',
-    warning: '#F59E0B',
-    error: '#EF4444',
-    info: '#3B82F6',
-  };
+  // Get color from theme, fallback to the raw color value if not a predefined theme color
+  const progressColor = color in theme ? theme[color] : color;
 
-  const progressColor = colors[color] || color;
+  // Background color from theme's muted
+  const backgroundColor = theme.muted;
 
   return (
-    <div className="relative flex items-center justify-center">
+    <div
+      className="relative flex items-center justify-center"
+      role="img"
+      aria-label={`Progress: ${percent}% ${label}`}
+    >
       <svg
         width={size}
         height={size}
         className="-rotate-90"
       >
+        <title>Progress: {percent}% {label}</title>
         {/* Background */}
         <circle
           cx={size / 2}
           cy={size / 2}
           r={radius}
           fill="none"
-          stroke="#E5E7EB"
+          stroke={backgroundColor}
           strokeWidth={strokeWidth}
         />
 
@@ -67,7 +72,7 @@ export default function CircularProgress({
         </div>
 
         <div className="mt-1 text-xs uppercase tracking-wider text-[var(--foreground)]/50">
-          Trust
+          {label}
         </div>
       </div>
     </div>

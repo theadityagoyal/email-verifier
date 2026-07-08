@@ -15,6 +15,10 @@
   --error: #EF4444;
   --warning: #F59E0B;
   --info: #3B82F6;
+  /* RGB variables for gradients */
+  --primary-rgb: 99, 102, 241;
+  --accent-rgb: 16, 185, 129;
+  --accent-hover-rgb: 52, 211, 153; /* #34D399 */
 }
 
 .dark {
@@ -29,6 +33,10 @@
   --error: #EF4444;
   --warning: #F59E0B;
   --info: #3B82F6;
+  /* RGB variables */
+  --primary-rgb: 99, 102, 241;
+  --accent-rgb: 34, 197, 94; /* #22C55E */
+  --accent-hover-rgb: 52, 211, 153; /* #34D399 */
 }
 
 @layer base {
@@ -36,8 +44,8 @@
     @apply bg-[var(--background)] text-[var(--foreground)] antialiased;
 
     background-image:
-      radial-gradient(circle at top right, rgba(99, 102, 241, .08), transparent 35%),
-      radial-gradient(circle at bottom left, rgba(16, 185, 129, .05), transparent 30%);
+      radial-gradient(circle at top right, rgba(var(--primary-rgb), .08), transparent 35%),
+      radial-gradient(circle at bottom left, rgba(var(--accent-rgb), .05), transparent 30%);
   }
 }
 
@@ -57,7 +65,12 @@
   }
 
   .btn-primary {
-    @apply bg-[var(--accent)] hover:bg-[#34D399] text-white font-semibold px-4 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply font-semibold px-4 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+    background-color: var(--accent);
+    color: white;
+  }
+  .btn-primary:hover {
+    background-color: var(--accent-hover);
   }
 
   .btn-secondary {

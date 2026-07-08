@@ -59,11 +59,10 @@ INVALID_CHARS = re.compile(r'["\'\`\[\]\(\)\{\}\\\/<>:;,\s\!\#\$\^\&\*\=\?\|~]')
 # Emoji detection
 EMOJI_PATTERN = re.compile(
     "[\U00010000-\U0010ffff"
-    "\U0001F600-\U0001F64F"
     "\U0001F300-\U0001F5FF"
     "\U0001F680-\U0001F9FF"
-    "\u2600-\u26FF"
-    "\u2700-\u27BF]+",
+    "☀-⛿"
+    "✀-➿]+",
     flags=re.UNICODE
 )
 
@@ -81,6 +80,7 @@ def validate_syntax(email: str) -> tuple[bool, str | None, str | None]:
     - Valid TLD check
     """
     if not email or not isinstance(email, str):
+        logger.warning("syntax_invalid_not_string", email=email)
         return False, None, None
 
     # Strip only leading/trailing spaces
@@ -88,76 +88,78 @@ def validate_syntax(email: str) -> tuple[bool, str | None, str | None]:
 
     # Empty check
     if not email:
+        logger.warning("syntax_invalid_empty_after_strip", email=email)
         return False, None, None
 
     # Emoji check
     if EMOJI_PATTERN.search(email):
-        logger.debug("syntax_invalid_emoji", email=email)
+        logger.warning("syntax_invalid_emoji", email=email)
         return False, None, None
 
     # Space anywhere in email
     if " " in email or "\t" in email:
-        logger.debug("syntax_invalid_space", email=email)
+        logger.warning("syntax_invalid_space", email=email)
         return False, None, None
 
     # Length check
     if len(email) > 254:
-        logger.debug("syntax_invalid_too_long", email=email)
+        logger.warning("syntax_invalid_too_long", email=email)
         return False, None, None
 
     # Exactly one @ check
     if email.count("@") != 1:
-        logger.debug("syntax_invalid_at_sign", email=email)
+        logger.warning("syntax_invalid_at_sign", email=email)
         return False, None, None
 
     local, domain = email.split("@")
 
     # Local part empty or too long
     if not local or len(local) > 64:
+        logger.warning("syntax_invalid_local_part", email=email, local=local, length=len(local) if local else 0)
         return False, None, None
 
     # Domain basic checks
     if not domain or len(domain) < 3:
+        logger.warning("syntax_invalid_domain", email=email, domain=domain, length=len(domain) if domain else 0)
         return False, None, None
 
     # Invalid special characters check
     if INVALID_CHARS.search(local):
-        logger.debug("syntax_invalid_special_chars", email=email, local=local)
+        logger.warning("syntax_invalid_special_chars", email=email, local=local)
         return False, None, None
 
     # Only allowed chars in local part
     if not ALLOWED_LOCAL_CHARS.match(local):
-        logger.debug("syntax_invalid_chars", email=email)
+        logger.warning("syntax_invalid_chars", email=email)
         return False, None, None
 
     # Quotes check - single, double, backtick
     if any(c in email for c in ['"', "'", '`']):
-        logger.debug("syntax_invalid_quotes", email=email)
+        logger.warning("syntax_invalid_quotes", email=email)
         return False, None, None
 
     # Consecutive dots check
     if ".." in email:
-        logger.debug("syntax_invalid_consecutive_dots", email=email)
+        logger.warning("syntax_invalid_consecutive_dots", email=email)
         return False, None, None
 
     # Starting or ending with dot
     if local.startswith(".") or local.endswith("."):
+        logger.warning("syntax_invalid_local_dot", email=email, local=local)
         return False, None, None
 
     if domain.startswith(".") or domain.endswith("."):
+        logger.warning("syntax_invalid_domain_dot", email=email, domain=domain)
         return False, None, None
 
     # No TLD check
     if "." not in domain:
-        return False, None, None
-
-    # TLD length check
-    tld = domain.split(".")[-1]
-    if len(tld) < 2 or len(tld) > 6:
+        logger.warning("syntax_invalid_no_dot_in_domain", email=email, domain=domain)
         return False, None, None
 
     # Domain invalid chars
     if INVALID_CHARS.search(domain):
+        logger.warning("syntax_invalid_domain_chars", email=email, domain=domain)
         return False, None, None
 
     # Full validation using email-validator library
@@ -168,7 +170,16 @@ def validate_syntax(email: str) -> tuple[bool, str | None, str | None]:
         logger.debug("syntax_valid", email=email)
         return True, normalized, domain
     except EmailNotValidError as exc:
-        logger.debug("syntax_invalid", email=email, reason=str(exc))
+        # Changed to ERROR (was DEBUG) so the exact rejection reason
+        # actually shows up in logs instead of being silently swallowed.
+        logger.error("syntax_invalid_library_reason", email=email, reason=str(exc))
+        return False, None, None
+    except Exception as exc:
+        # email_validator can raise non-EmailNotValidError exceptions too
+        # (e.g. IDNA/encoding errors) — these were previously NOT caught here,
+        # so they'd escape and get swallowed by verify_email()'s broad except,
+        # showing up as a generic 0%/invalid with zero clue why.
+        logger.error("syntax_validation_unexpected_error", email=email, error=str(exc))
         return False, None, None
 
 

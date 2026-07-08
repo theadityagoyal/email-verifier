@@ -7,6 +7,7 @@ List is cached in memory and refreshed every 24 hours.
 import threading
 import time
 import urllib.request
+from utils.config import settings
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -104,7 +105,7 @@ FALLBACK_DOMAINS: frozenset[str] = frozenset({
     "disposed.it", "disposemail.com", "divermail.com",
     "dm.w3internet.co.uk", "dmtc.edu.pl", "dog.com",
     "dominozzermail.com", "dontregyou.com", "dotman.de",
-    "douchelounge.com", "drdrb.com", "drdrb.net",
+    "drdrb.com", "drdrb.net",
     "dsiplus.net", "duck2.club", "durandinterstellar.com",
     "duskmail.com", "e-mail.com.ar", "e-mail.ru",
     "e4ward.com", "easytrashmail.com", "ee1.pl",
@@ -127,22 +128,29 @@ FALLBACK_DOMAINS: frozenset[str] = frozenset({
 _live_domains: set[str] = set()
 _last_fetch_time: float = 0
 _fetch_lock = threading.Lock()
-_CACHE_TTL = 86400  # 24 hours
+_CACHE_TTL = getattr(settings, 'DISPOSABLE_CACHE_TTL', 86400)  # 24 hours
 
 # Free public lists of disposable domains
-_SOURCES = [
+_SOURCES: list[str] = getattr(settings, 'DISPOSABLE_SOURCES', [
     "https://raw.githubusercontent.com/disposable-email-domains/disposable-email-domains/master/disposable_email_blocklist.conf",
     "https://raw.githubusercontent.com/FGRibreau/mailchecker/master/list.txt",
-]
+])
 
 
 def _fetch_live_domains() -> set[str]:
-    """Fetch disposable domains from public GitHub lists."""
+    """Fetch disposable domains from public GitHub lists.
+
+    Fetches from multiple sources and returns the union of all domains found.
+    Each source is fetched with a 10-second timeout to prevent hanging.
+
+    Returns:
+        set[str]: Set of disposable domains (lowercased, stripped)
+    """
     domains: set[str] = set()
     for url in _SOURCES:
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "EmailVerifier/1.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=10) as resp:  # 10s timeout to prevent hanging
                 content = resp.read().decode("utf-8")
                 for line in content.splitlines():
                     line = line.strip().lower()
@@ -154,7 +162,7 @@ def _fetch_live_domains() -> set[str]:
     return domains
 
 
-def _refresh_if_needed():
+def _refresh_if_needed() -> None:
     """Refresh live domains list if cache expired."""
     global _live_domains, _last_fetch_time
 
@@ -179,7 +187,7 @@ def _refresh_if_needed():
             logger.warning("disposable_list_using_fallback")
 
 
-def _init_background():
+def _init_background() -> None:
     """Fetch list in background thread on startup so API isn't blocked."""
     t = threading.Thread(target=_refresh_if_needed, daemon=True)
     t.start()
@@ -187,6 +195,45 @@ def _init_background():
 
 # Start background fetch immediately on import
 _init_background()
+
+
+def get_disposable_stats() -> dict:
+    """
+    Get statistics about the disposable domain list.
+
+    Returns:
+        dict: Statistics including count, age, and source info
+    """
+    now = time.time()
+    age_seconds = now - _last_fetch_time if _last_fetch_time > 0 else -1
+
+    return {
+        "live_domains_count": len(_live_domains),
+        "fallback_domains_count": len(FALLBACK_DOMAINS),
+        "total_unique_domains": len(_live_domains.union(FALLBACK_DOMAINS)),
+        "last_update_seconds_ago": age_seconds if age_seconds >= 0 else None,
+        "cache_ttl_seconds": _CACHE_TTL,
+        "sources": _SOURCES,
+        "is_expired": age_seconds > _CACHE_TTL if _last_fetch_time > 0 else True
+    }
+
+
+def refresh_disposable_list() -> bool:
+    """
+    Manually trigger a refresh of the disposable domain list.
+
+    Returns:
+        bool: True if refresh was successful, False otherwise
+    """
+    logger.info("manual_refresh_triggered")
+    old_count = len(_live_domains)
+    # Force refresh by making cache appear expired
+    global _last_fetch_time
+    _last_fetch_time = 0
+    _refresh_if_needed()
+    new_count = len(_live_domains)
+    logger.info("manual_refresh_completed", old_count=old_count, new_count=new_count)
+    return new_count > 0
 
 
 def is_disposable(domain: str) -> bool:

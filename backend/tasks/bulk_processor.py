@@ -16,12 +16,13 @@ from models.models import Email, Domain, Job, EmailStatus, JobStatus
 from services.email_service import verify_email
 from utils.email_utils import detect_email_column
 from utils.logging import get_logger
-from utils.executor import get_executor
+from utils.executor import get_executor, init_executor
 
 logger = get_logger(__name__)
 
 
 IST = ZoneInfo("Asia/Kolkata")
+
 
 def _ist_now():
     return datetime.now(IST).replace(tzinfo=None)
@@ -102,11 +103,11 @@ def verify_single_email_sync(email: str, job_id: str | None = None):
         db.close()
 
 
-def _update_domain_stats(db, result):
+def _update_domain_stats(db, result) -> None:
     """Update domain statistics atomically using MySQL ON DUPLICATE KEY UPDATE."""
     if not result.domain:
         return
-    
+
     verified_inc = 1 if result.status in (EmailStatus.verified, EmailStatus.deliverable, EmailStatus.trusted, EmailStatus.probably_valid) else 0
     invalid_inc = 1 if result.status in (EmailStatus.invalid, EmailStatus.undeliverable) else 0
     risky_inc = 1 if result.status in (EmailStatus.risky, EmailStatus.unconfirmed, EmailStatus.uncertain) else 0
@@ -130,7 +131,7 @@ def _update_domain_stats(db, result):
     })
 
 
-def _update_job_counter(db, job_id: str, status: EmailStatus):
+def _update_job_counter(db, job_id: str, status: EmailStatus) -> None:
     """Update job counters and progress for a single email verification result."""
     job = db.execute(
         select(Job).where(Job.job_id == job_id).with_for_update()
@@ -194,10 +195,15 @@ def _update_job_counter(db, job_id: str, status: EmailStatus):
             job.current_stage = 'completed'
 
 
-def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email"):
+def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email") -> None:
     """
     Process bulk job using ThreadPoolExecutor (synchronous, no Celery).
     This runs in a background thread pool worker thread from BackgroundTasks.
+
+    Args:
+        job_id: The unique identifier for the job
+        s3_key: The S3 key (or local path indicator) of the file to process
+        email_col: The column name containing email addresses (default: "email")
     """
     logger.info("process_bulk_job_sync_started", job_id=job_id)
     db = SyncSessionLocal()
@@ -271,7 +277,7 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email"):
         # Source of truth for the progress denominator. Whatever estimate the
         # upload endpoint may have stored, this guarantees job.total always
         # matches the actual number of emails this run will process — fixes
-        # progress_percent staying stuck at 0 when that earlier value was
+        # percent staying stuck at 0 when that earlier value was
         # missing/incorrect.
         job.total = len(emails)
 
@@ -284,7 +290,12 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email"):
         logger.info("bulk_job_processing", job_id=job_id, count=len(emails))
 
         # Process emails in parallel using ThreadPoolExecutor
-        executor = get_executor()
+        try:
+            executor = get_executor()
+        except RuntimeError:
+            logger.warning("Executor not initialized, initializing now")
+            executor = init_executor()
+
         futures = {executor.submit(verify_single_email_sync, email, job_id): email for email in emails}
 
         for future in as_completed(futures):

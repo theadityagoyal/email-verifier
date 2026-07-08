@@ -26,6 +26,8 @@ TRUSTED_DOMAINS = frozenset({
     "protonmail.com", "protonmail.ch", "proton.me", "pm.me",
     "tutanota.com", "tutanota.de", "tutamail.com",
     "fastmail.com", "fastmail.fm", "fastmail.net",
+    "tutanota.com", "tutanota.de", "tutamail.com",
+    "fastmail.com", "fastmail.fm", "fastmail.net",
     "hushmail.com", "mailfence.com", "runbox.com",
 
     # ── German ────────────────────────────────────────────────────────────────
@@ -154,7 +156,7 @@ TRUSTED_DOMAINS = frozenset({
     "timelabs.in", "timelabs.com",
     "uknowva.com", "uknowva.in",
     "hrmantra.com", "hrmantra.in",
-    "ascentsoftware.in", "ascentsoftware.com", "zinghr.com", 
+    "ascentsoftware.in", "ascentsoftware.com", "zinghr.com",
 })
 
 # ── Keyboard walk patterns ────────────────────────────────────────────────────
@@ -218,7 +220,7 @@ def _has_char_repetition(username: str) -> bool:
 def analyze_username_quality(username: str) -> dict:
     """
     Username ko analyze karke quality score, flags aur verdict return karta hai.
-    
+
     Returns:
         {
             "score": 0-100,
@@ -306,8 +308,8 @@ def calculate_score(
     disposable: bool,
     catch_all: bool,
     domain: str = "",
-    username: str = "",        # ← naya parameter
-) -> tuple[int, dict]:         # ← ab tuple return karega (score, username_analysis)
+    username: str = "",
+) -> tuple[int, dict]:
     """
     Returns (final_score, username_analysis)
     """
@@ -326,28 +328,33 @@ def calculate_score(
     if not syntax_valid:
         return 0, username_analysis
 
+    # Calculate base score based on validation results
+    base_score = 0
+
     # Domain nahi = 40
     if not domain_exists:
-        return max(0, 40 - penalty), username_analysis
-
+        base_score = 40
     # Domain hai but MX nahi = 60
-    if not mx_found:
-        return max(0, 60 - penalty), username_analysis
-
-    # Trusted domain = 90
-    if domain.lower() in TRUSTED_DOMAINS:
-        return max(0, 90 - penalty), username_analysis
-
+    elif not mx_found:
+        base_score = 60
     # MX hai + Catch-All = 70
-    if catch_all:
-        return max(0, 70 - penalty), username_analysis
-
+    elif catch_all:
+        base_score = 70
     # MX hai + SMTP fail = 80
-    if not smtp_valid:
-        return max(0, 80 - penalty), username_analysis
-
+    elif not smtp_valid:
+        base_score = 80
     # MX hai + SMTP pass = 100
-    return max(0, 100 - penalty), username_analysis
+    else:
+        base_score = 100
+
+    # Apply trusted domain bonus (+10, max 100)
+    trusted_bonus = 10 if domain.lower() in TRUSTED_DOMAINS else 0
+    score_with_trusted_bonus = min(100, base_score + trusted_bonus)
+
+    # Apply username quality penalty
+    final_score = max(0, score_with_trusted_bonus - penalty)
+
+    return final_score, username_analysis
 
 
 def determine_status(

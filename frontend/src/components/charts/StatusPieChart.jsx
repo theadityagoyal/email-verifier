@@ -13,26 +13,25 @@ export default function StatusPieChart({ stats, data }) {
     { name: 'Processing', value: stats.processing, fill: theme.info },
   ].filter(d => d.value > 0) : []);
 
+  // Handle empty data case
   if (chartData.length === 0) {
     return (
-      <ResponsiveContainer width="100%" height={260}>
-        <PieChart>
-          <Pie
-            data={[{ value: 1 }]}
-            cx="50%"
-            cy="50%"
-            innerRadius="60%"
-            outerRadius="80%"
-            fill="var(--foreground) / 10"
-            dataKey="value"
-          />
-        </PieChart>
+      <ResponsiveContainer width="100%" height={260} aria-label="Status distribution chart - no data">
+        <text
+          x="50%"
+          y="50%"
+          dominantBaseline="middle"
+          textAnchor="middle"
+          fill="var(--muted)"
+        >
+          No status data available
+        </text>
       </ResponsiveContainer>
     );
   }
 
   return (
-    <ResponsiveContainer width="100%" height={260}>
+    <ResponsiveContainer width="100%" height={260} aria-label="Status distribution chart">
       <PieChart>
         <Pie
           data={chartData}
@@ -53,11 +52,20 @@ export default function StatusPieChart({ stats, data }) {
             background: 'var(--background)',
             border: '1px solid var(--muted)',
             borderRadius: 8,
+            padding: '8px 12px',
           }}
-          labelStyle={{ fill: 'var(--foreground)' }}
+          labelStyle={{ fill: 'var(--foreground)', fontSize: '0.875rem' }}
           formatter={(value, name) => `${name}: ${value}`}
         />
-        <Legend verticalAlign="top" height={36} wrapperStyle={{ justSelf: 'center' }} />
+        <Legend
+          verticalAlign="top"
+          height={36}
+          wrapperStyle={{
+            display: 'flex',
+            justifyContent: 'center',
+            marginTop: '-10px'
+          }}
+        />
       </PieChart>
     </ResponsiveContainer>
   );

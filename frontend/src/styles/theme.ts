@@ -1,7 +1,17 @@
-// Design tokens for light and dark modes
-// Based on UI/UX Pro Max recommendations for EmailVerifier Pro Dashboard
+export type Theme = {
+  background: string;
+  foreground: string;
+  primary: string;
+  secondary: string;
+  accent: string;
+  muted: string;
+  success: string;
+  error: string;
+  warning: string;
+  info: string;
+};
 
-export const light = {
+export const light: Theme = {
   background: '#F5F3FF',
   foreground: '#1E1B4B',
   primary: '#6366F1',
@@ -15,7 +25,7 @@ export const light = {
   info: '#3B82F6',
 };
 
-export const dark = {
+export const dark: Theme = {
   background: '#0F172A',
   foreground: '#F8FAFC',
   primary: '#6366F1',
@@ -27,8 +37,6 @@ export const dark = {
   warning: '#F59E0B',
   info: '#3B82F6',
 };
-
-export type Theme = typeof light;
 
 export const useTheme = (): Theme => {
   // Assuming we use class 'dark' on <html> for dark mode via tailwind
