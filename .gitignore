@@ -172,4 +172,6 @@ Temporary Items
 .apdisk
 
 # Windows
-Thumbs.dbgraphify-out/
+Thumbs.db
+
+graphify-out/
