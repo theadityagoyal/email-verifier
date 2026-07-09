@@ -9,8 +9,55 @@ import {
   MoreVertical,
   RefreshCw,
   AlertTriangle,
+  ShieldCheck,
+  ShieldAlert,
+  ShieldX,
+  TrendingUp,
+  TrendingDown,
+  Minus,
 } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import SortHeader from './SortHeader';
+
+// FIX: the previous local "mock" configs rendered <span className="..." />
+// with no children — that's an empty, invisible element, so verdict badges
+// and trend arrows never actually showed an icon. Using the real lucide
+// components (same set DomainsPage.jsx defines) fixes that.
+const VERDICT_CONFIG = {
+  Healthy: {
+    icon: ShieldCheck,
+    badge: 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-400',
+  },
+  Watch: {
+    icon: ShieldAlert,
+    badge: 'bg-amber-100 text-amber-600 dark:bg-amber-900/20 dark:text-amber-400',
+  },
+  'High Risk': {
+    icon: ShieldX,
+    badge: 'bg-red-100 text-red-600 dark:bg-red-900/20 dark:text-red-400',
+  },
+  'Low Sample': {
+    icon: AlertTriangle,
+    badge: 'bg-slate-100 text-slate-500 dark:bg-slate-800/40 dark:text-slate-400',
+  },
+};
+
+const TREND_CONFIG = {
+  up: { icon: TrendingUp, color: 'text-red-500' },
+  down: { icon: TrendingDown, color: 'text-emerald-500' },
+  stable: { icon: Minus, color: 'text-[var(--foreground)]/40' },
+};
+
+const MX_STATUS_COLOR = {
+  Valid: 'text-emerald-600',
+  'No MX': 'text-red-600',
+  Unknown: 'text-[var(--foreground)]/40',
+};
+
+function formatDate(value) {
+  if (!value) return '—';
+  return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
 
 export default function DomainTable({
   filteredDomains,
@@ -20,45 +67,12 @@ export default function DomainTable({
   toggleSelectOne,
   openMenu,
   setOpenMenu,
+  // ── Sorting (new) ────────────────────────────────────────────────────────
+  sortBy,
+  sortOrder,
+  onSort,
+  isSorting = false, // true while a sort-triggered refetch is in flight
 }) {
-  // Mock VERDICT_CONFIG and TREND_CONFIG - these would normally be imported
-  const VERDICT_CONFIG = {
-    Healthy: {
-      icon: <span className="text-emerald-600" />, // Simplified for demo
-      badge: 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-400',
-    },
-    Watch: {
-      icon: <span className="text-amber-600" />,
-      badge: 'bg-amber-100 text-amber-600 dark:bg-amber-900/20 dark:text-amber-400',
-    },
-    'High Risk': {
-      icon: <span className="text-red-600" />,
-      badge: 'bg-red-100 text-red-600 dark:bg-red-900/20 dark:text-red-400',
-    },
-    'Low Sample': {
-      icon: <span className="text-slate-500" />,
-      badge: 'bg-slate-100 text-slate-500 dark:bg-slate-800/40 dark:text-slate-400',
-    },
-  };
-
-  const TREND_CONFIG = {
-    up: { icon: <span className="text-red-500" />, color: 'text-red-500' },
-    down: { icon: <span className="text-emerald-500" />, color: 'text-emerald-500' },
-    stable: { icon: <span className="text-[var(--foreground)]/40" />, color: 'text-[var(--foreground)]/40' },
-  };
-
-  const MX_STATUS_COLOR = {
-    Valid: 'text-emerald-600',
-    'No MX': 'text-red-600',
-    Unknown: 'text-[var(--foreground)]/40',
-  };
-
-  // Mock formatDate function if not available
-  const formatDateFn = (value) => {
-    if (!value) return '—';
-    return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-  };
-
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -76,7 +90,19 @@ export default function DomainTable({
         </div>
       ) : (
         <>
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto relative">
+            {/* Loading veil while a sort-triggered fetch is in flight — keeps
+                previous rows visible (no layout jump) per react-query's
+                placeholderData, just dims + disables interaction briefly. */}
+            {isSorting && (
+              <div className="absolute inset-0 z-10 bg-[var(--background)]/40 backdrop-blur-[1px] pointer-events-none flex items-start justify-center pt-10">
+                <div className="flex items-center gap-2 rounded-full bg-[var(--background)] border border-[var(--muted)] px-3 py-1.5 text-xs text-[var(--foreground)]/60 shadow-sm">
+                  <span className="h-3 w-3 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                  Sorting…
+                </div>
+              </div>
+            )}
+
             <table className="w-full" role="grid">
               <thead>
                 <tr className="border-b border-[var(--muted)] bg-[var(--muted)]/30">
@@ -88,36 +114,87 @@ export default function DomainTable({
                       aria-label="Select all domains"
                     />
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider min-w-[180px]">
-                    Domain
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-24">
-                    Total Emails
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-20">
-                    Safe
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-20">
-                    Risky
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-20">
-                    Unsafe
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-32">
-                    Risk %
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-24">
-                    7D Trend
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-24">
-                    MX Status
-                  </th>
+
+                  <SortHeader
+                    label="Domain"
+                    field="domain"
+                    sortBy={sortBy}
+                    sortOrder={sortOrder}
+                    onSort={onSort}
+                    className="min-w-[180px]"
+                  />
+                  <SortHeader
+                    label="Total Emails"
+                    field="total_emails"
+                    sortBy={sortBy}
+                    sortOrder={sortOrder}
+                    onSort={onSort}
+                    className="w-24"
+                  />
+                  <SortHeader
+                    label="Safe"
+                    field="safe"
+                    sortBy={sortBy}
+                    sortOrder={sortOrder}
+                    onSort={onSort}
+                    className="w-20"
+                  />
+                  <SortHeader
+                    label="Risky"
+                    field="risky"
+                    sortBy={sortBy}
+                    sortOrder={sortOrder}
+                    onSort={onSort}
+                    className="w-20"
+                  />
+                  <SortHeader
+                    label="Unsafe"
+                    field="unsafe"
+                    sortBy={sortBy}
+                    sortOrder={sortOrder}
+                    onSort={onSort}
+                    className="w-20"
+                  />
+                  <SortHeader
+                    label="Risk %"
+                    field="risk_percent"
+                    sortBy={sortBy}
+                    sortOrder={sortOrder}
+                    onSort={onSort}
+                    className="w-32"
+                  />
+                  <SortHeader
+                    label="7D Trend"
+                    field="trend"
+                    sortBy={sortBy}
+                    sortOrder={sortOrder}
+                    onSort={onSort}
+                    className="w-24"
+                  />
+                  <SortHeader
+                    label="MX Status"
+                    field="mx_status"
+                    sortBy={sortBy}
+                    sortOrder={sortOrder}
+                    onSort={onSort}
+                    className="w-24"
+                  />
+
+                  {/* Flags: intentionally NOT sortable (multi-value/badge column, no single scalar to order by) */}
                   <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-24">
                     Flags
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-28">
-                    First Seen
-                  </th>
+
+                  <SortHeader
+                    label="First Seen"
+                    field="first_seen"
+                    sortBy={sortBy}
+                    sortOrder={sortOrder}
+                    onSort={onSort}
+                    className="w-28"
+                  />
+
+                  {/* Actions: intentionally NOT sortable */}
                   <th className="px-4 py-3 text-right text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-40">
                     Actions
                   </th>
@@ -125,9 +202,10 @@ export default function DomainTable({
               </thead>
               <tbody className="divide-y divide-[var(--muted)]">
                 {filteredDomains.map((domain, rowIndex) => {
-                  // Simplified verdict and trend config access
                   const verdictConfig = VERDICT_CONFIG[domain.verdict] || VERDICT_CONFIG.Healthy;
                   const trendConfig = TREND_CONFIG[domain.trend] || TREND_CONFIG.stable;
+                  const VerdictIcon = verdictConfig.icon;
+                  const TrendIcon = trendConfig.icon;
                   const isRisky = domain.verdict === 'High Risk' || domain.verdict === 'Watch';
                   const isLowSample = domain.low_sample;
 
@@ -164,7 +242,7 @@ export default function DomainTable({
                         </div>
                         <div className="flex items-center gap-1.5 mt-1">
                           <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${verdictConfig.badge}`}>
-                            {verdictConfig.icon}
+                            <VerdictIcon className="h-3 w-3" />
                             {domain.verdict}
                           </span>
                           {domain.is_new && (
@@ -219,7 +297,7 @@ export default function DomainTable({
                           <span className="text-sm text-[var(--foreground)]/40">—</span>
                         ) : (
                           <span className={`inline-flex items-center gap-1 text-sm font-medium tabular-nums ${trendConfig.color}`}>
-                            {trendConfig.icon}
+                            <TrendIcon className="h-3.5 w-3.5" />
                             {domain.trend_delta_pct > 0 ? '+' : ''}
                             {domain.trend_delta_pct}%
                           </span>
@@ -253,7 +331,7 @@ export default function DomainTable({
                         </div>
                       </td>
                       <td className="px-4 py-3 text-sm text-[var(--foreground)]/60">
-                        {formatDateFn(domain.first_seen)}
+                        {formatDate(domain.first_seen)}
                       </td>
                       <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1 relative">

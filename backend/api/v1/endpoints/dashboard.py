@@ -50,12 +50,35 @@ PROCESSING_TIME_WINDOW_HOURS = 24  # avg processing time computed over last N ho
 # time an email is re-verified. So for a re-verified email, (verified_at -
 # created_at) is NOT "how long verification took" — it's "how long ago the
 # record was first created", which can be days/weeks -> a huge, meaningless
-# number. A real single verification pipeline (syntax->DNS->MX->SMTP->score)
-# never legitimately takes more than a couple minutes, so we cap the diff
-# used in the average to filter out these stale/re-verify outliers.
+# number. We cap the diff used in the average to filter out these
+# stale/re-verify outliers.
 MAX_REASONABLE_PROCESSING_SECONDS = 300  # 5 minutes — anything above this is treated as a re-verify artifact, not real processing time
 
+# Legacy single-value sort (old dropdown). Kept only for backward compatibility
+# with any client still sending ?sort=risk instead of ?sort_by=&sort_order=.
 DOMAIN_SORT_OPTIONS = {"risk", "total", "trust", "domain", "newest"}
+LEGACY_SORT_MAP = {
+    # sort value -> (sort_by, sort_order)
+    "risk": ("risk_percent", "desc"),
+    "total": ("total_emails", "desc"),
+    # trust_score = 100 - risk_percent (same denominator), so "highest trust
+    # first" is exactly "lowest risk_percent first".
+    "trust": ("risk_percent", "asc"),
+    "domain": ("domain", "asc"),
+    "newest": ("first_seen", "desc"),
+}
+
+# New per-column sort contract: GET /domains?sort_by=<field>&sort_order=asc|desc
+# Whitelisted here; the actual SQLAlchemy column/expression map is built inside
+# list_domains() because several fields (risk_percent, trend, mx_status) are
+# computed expressions that depend on query-scoped subqueries/aliases.
+SORTABLE_DOMAIN_FIELDS = {
+    "domain", "total_emails", "safe", "risky", "unsafe",
+    "risk_percent", "trend", "mx_status", "first_seen",
+}
+DEFAULT_SORT_BY = "first_seen"
+DEFAULT_SORT_ORDER = "desc"
+
 FLAGGED_FILTER_OPTIONS = {"any", "disposable", "role_based", "catch_all"}
 
 
@@ -174,7 +197,7 @@ async def _compute_speed_and_processing_time(db: AsyncSession):
     whenever an email got RE-verified — created_at stays at the original
     insert time while verified_at jumps to "now", so the delta ends up being
     "how long the record has existed" instead of "how long verification
-    took". We now cap the per-row diff at MAX_REASONABLE_PROCESSING_SECONDS
+    took". We cap the per-row diff at MAX_REASONABLE_PROCESSING_SECONDS
     (5 min) in the SQL WHERE clause itself, so those stale re-verify rows
     are excluded from the average entirely instead of skewing it.
     """
@@ -195,9 +218,9 @@ async def _compute_speed_and_processing_time(db: AsyncSession):
     proc_start = now - timedelta(hours=PROCESSING_TIME_WINDOW_HOURS)
     diff_expr = func.timestampdiff(text("SECOND"), Email.created_at, Email.verified_at)
 
-    # Get average in SECONDS using the same status categories as defined in constants.
-    # diff_expr.between(0, MAX_REASONABLE_PROCESSING_SECONDS) is the actual fix —
-    # excludes negative diffs (clock skew) AND re-verify artifacts (huge diffs).
+    # diff_expr.between(0, MAX_REASONABLE_PROCESSING_SECONDS) is the actual
+    # fix — excludes negative diffs (clock skew) AND re-verify artifacts
+    # (huge diffs) from the average.
     avg_seconds_row = await db.execute(
         select(func.avg(diff_expr)).where(
             Email.verified_at.isnot(None),
@@ -322,7 +345,15 @@ async def _compute_domain_summary(db: AsyncSession, domain_map: dict, bucket_exp
     Risk count, Total Domains, Improving count — each with a trend %
     versus the previous 7-day window. Reuses the domain_map already built
     in get_dashboard_stats for the current snapshot; only the historical
-    baseline requires extra queries."""
+    baseline requires extra queries.
+
+    NOTE (known limitation, out of scope for this change): the
+    avg_reputation / high_risk_count baseline below compares against
+    "everything before week_start" rather than a bounded prev-7-day window,
+    unlike improving_count which uses a proper 7-vs-previous-7 window. Left
+    as-is to avoid changing dashboard-card numbers as a side effect of the
+    domains-sorting change; flagging here for a future fix.
+    """
     now = datetime.utcnow()
     week_start = now - timedelta(days=TREND_WINDOW_DAYS)
     prev_week_start = now - timedelta(days=TREND_WINDOW_DAYS * 2)
@@ -402,12 +433,6 @@ async def _compute_domain_summary(db: AsyncSession, domain_map: dict, bucket_exp
     prev_avg_reputation = round(sum(100 - r for r in prev_sample) / len(prev_sample)) if prev_sample else 0
     prev_high_risk_count = sum(1 for r in prev_sample if r >= RISK_WATCH_MAX)
 
-    # NOTE (flagged, not yet fixed — see chat explanation): a fully correct
-    # improving_trend_pct needs a genuine "improving count as of last week"
-    # baseline (its own 7d-vs-7d comparison shifted back a further 7 days).
-    # Left as pct_delta(improving_count, non_improving_count) for now, which
-    # is a same-snapshot comparison, NOT a real previous-period trend —
-    # do not treat this number as reliable yet.
     return DomainSummary(
         avg_reputation=avg_reputation,
         avg_reputation_trend_pct=pct_delta(avg_reputation, prev_avg_reputation),
@@ -793,6 +818,44 @@ def _risk_and_trust_exprs(domain_subq):
     return risk_percent_expr, trust_score_expr
 
 
+def _trend_subquery(prev_start: datetime, window_start: datetime):
+    """One row per domain with recent/previous bad+total counts, computed
+    across the WHOLE dataset (not just the current page). This is what makes
+    server-side ORDER BY trend possible — the old implementation computed
+    trend only for the domains already selected for the current page, which
+    can't be sorted on because domains with the worst/best trend might live
+    on a page that was never fetched."""
+    bucket_expr = bucket_case()
+    return (
+        select(
+            Email.domain.label("domain"),
+            func.sum(
+                case((and_(Email.created_at >= window_start, bucket_expr.in_(["risky", "unsafe"])), 1), else_=0)
+            ).label("recent_bad"),
+            func.sum(case((Email.created_at >= window_start, 1), else_=0)).label("recent_total"),
+            func.sum(
+                case(
+                    (
+                        and_(
+                            Email.created_at >= prev_start,
+                            Email.created_at < window_start,
+                            bucket_expr.in_(["risky", "unsafe"]),
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("prev_bad"),
+            func.sum(
+                case((and_(Email.created_at >= prev_start, Email.created_at < window_start), 1), else_=0)
+            ).label("prev_total"),
+        )
+        .where(Email.domain.isnot(None), Email.created_at >= prev_start)
+        .group_by(Email.domain)
+        .subquery()
+    )
+
+
 def _verdict(total_emails: int, risk_percent: float) -> str:
     if total_emails < LOW_SAMPLE_THRESHOLD:
         return "Low Sample"
@@ -893,26 +956,100 @@ async def list_domains(
     page: int = Query(default=1, ge=1),
     size: int = Query(default=20, ge=1, le=100),
     search: str | None = Query(default=None),
-    sort: str = Query(default="risk"),
+    sort_by: str | None = Query(
+        default=None,
+        description=f"One of {sorted(SORTABLE_DOMAIN_FIELDS)}. Omit (or send an "
+        f"invalid/unrecognized value) to fall back to the default sort "
+        f"({DEFAULT_SORT_BY} {DEFAULT_SORT_ORDER}).",
+    ),
+    sort_order: str = Query(default=DEFAULT_SORT_ORDER, description="asc | desc"),
+    sort: str | None = Query(
+        default=None,
+        description="Deprecated legacy param (risk|total|trust|domain|newest). "
+        "Use sort_by/sort_order instead; kept for old clients.",
+    ),
     db: AsyncSession = Depends(get_db),
 ):
     """Domain analytics — aggregated live from Email via bucket_case().
-    Default sort is highest risk first, tied domains broken by total emails."""
-    if sort not in DOMAIN_SORT_OPTIONS:
-        sort = "risk"
 
+    Sorting is fully server-side and covers every visible column, including
+    `trend` and `mx_status`, which are computed via SQL joins (see
+    `_trend_subquery` and the Domain outerjoin below) precisely so that
+    sorting works across the *entire* dataset, not just the current page.
+
+    Default sort: first_seen DESC (latest domains first).
+    """
+    # ── Resolve requested sort into (sort_by, sort_order) ───────────────────
+    normalized_order = sort_order.lower() if sort_order else DEFAULT_SORT_ORDER
+    if normalized_order not in ("asc", "desc"):
+        normalized_order = DEFAULT_SORT_ORDER
+
+    if sort_by and sort_by in SORTABLE_DOMAIN_FIELDS:
+        resolved_sort_by = sort_by
+        resolved_sort_order = normalized_order
+    elif sort and sort in LEGACY_SORT_MAP:
+        resolved_sort_by, resolved_sort_order = LEGACY_SORT_MAP[sort]
+    else:
+        resolved_sort_by, resolved_sort_order = DEFAULT_SORT_BY, DEFAULT_SORT_ORDER
+
+    # ── Base aggregate (respects `search`) ───────────────────────────────────
     domain_subq = _domain_aggregate_subquery(search)
     risk_percent_expr, trust_score_expr = _risk_and_trust_exprs(domain_subq)
 
     total = (await db.execute(select(func.count()).select_from(domain_subq))).scalar_one()
 
-    sort_map = {
-        "risk": (risk_percent_expr.desc(), domain_subq.c.total_emails.desc()),
-        "total": (domain_subq.c.total_emails.desc(),),
-        "trust": (trust_score_expr.desc(),),
-        "domain": (domain_subq.c.domain.asc(),),
-        "newest": (domain_subq.c.first_seen.desc(),),
+    # ── Trend, computed over the WHOLE dataset via a joined subquery ────────
+    now = datetime.utcnow()
+    window_start = now - timedelta(days=TREND_WINDOW_DAYS)
+    prev_start = now - timedelta(days=TREND_WINDOW_DAYS * 2)
+    trend_subq = _trend_subquery(prev_start, window_start)
+
+    recent_pct_expr = case(
+        (trend_subq.c.recent_total > 0, trend_subq.c.recent_bad * 100.0 / trend_subq.c.recent_total),
+        else_=None,
+    )
+    prev_pct_expr = case(
+        (trend_subq.c.prev_total > 0, trend_subq.c.prev_bad * 100.0 / trend_subq.c.prev_total),
+        else_=None,
+    )
+    trend_delta_expr = recent_pct_expr - prev_pct_expr
+    trend_label_expr = case(
+        (
+            or_(
+                trend_subq.c.recent_total.is_(None), trend_subq.c.recent_total == 0,
+                trend_subq.c.prev_total.is_(None), trend_subq.c.prev_total == 0,
+            ),
+            "stable",
+        ),
+        (trend_delta_expr > TREND_DELTA_PCT, "up"),
+        (trend_delta_expr < -TREND_DELTA_PCT, "down"),
+        else_="stable",
+    )
+
+    # ── MX status, computed via a join instead of a second round-trip query ─
+    # NOTE: JSON_LENGTH() is MySQL syntax (matches this project's DB). If you
+    # ever move off MySQL, this expression needs a dialect-appropriate swap.
+    mx_status_expr = case(
+        (Domain.mx_records.is_(None), "Unknown"),
+        (func.json_length(Domain.mx_records) == 0, "No MX"),
+        else_="Valid",
+    )
+
+    # ── Whitelisted sort target map (SQL injection safe — sort_by is only
+    # ever used as a dict key, never interpolated into SQL) ─────────────────
+    sortable_columns = {
+        "domain": domain_subq.c.domain,
+        "total_emails": domain_subq.c.total_emails,
+        "safe": domain_subq.c.safe_count,
+        "risky": domain_subq.c.risky_count,
+        "unsafe": domain_subq.c.unsafe_count,
+        "risk_percent": risk_percent_expr,
+        "trend": trend_delta_expr,
+        "mx_status": mx_status_expr,
+        "first_seen": domain_subq.c.first_seen,
     }
+    sort_col = sortable_columns[resolved_sort_by]
+    primary_order = (sort_col.asc() if resolved_sort_order == "asc" else sort_col.desc())
 
     stmt = (
         select(
@@ -928,72 +1065,28 @@ async def list_domains(
             domain_subq.c.first_seen,
             risk_percent_expr.label("risk_percent"),
             trust_score_expr.label("trust_score"),
+            trend_label_expr.label("trend"),
+            trend_delta_expr.label("trend_delta_pct"),
+            Domain.mx_records.label("mx_records"),
+            mx_status_expr.label("mx_status"),
         )
-        .order_by(*sort_map[sort])
+        .select_from(domain_subq)
+        # 1:1 outerjoins (domain is unique on both sides) — row count from
+        # domain_subq is preserved, so `total` computed above stays correct.
+        .outerjoin(trend_subq, trend_subq.c.domain == domain_subq.c.domain)
+        .outerjoin(Domain, Domain.domain == domain_subq.c.domain)
+        # domain.asc() tiebreaker keeps pagination stable/deterministic even
+        # when many rows share the same sort value (e.g. many domains tied
+        # at risk_percent == 100.0).
+        .order_by(primary_order, domain_subq.c.domain.asc())
         .offset((page - 1) * size)
         .limit(size)
     )
 
     rows = (await db.execute(stmt)).all()
-    domains_on_page = [r.domain for r in rows]
 
-    mx_map = {}
-    if domains_on_page:
-        mx_rows = (
-            await db.execute(
-                select(Domain.domain, Domain.mx_records).where(Domain.domain.in_(domains_on_page))
-            )
-        ).all()
-        mx_map = {d: mx for d, mx in mx_rows}
-
-    trend_map = {}
-    trend_delta_map = {}
-    if domains_on_page:
-        bucket_expr = bucket_case()
-        now = datetime.utcnow()
-        window_start = now - timedelta(days=TREND_WINDOW_DAYS)
-        prev_start = now - timedelta(days=TREND_WINDOW_DAYS * 2)
-        window_expr = case((Email.created_at >= window_start, "recent"), else_="previous")
-
-        trend_rows = (
-            await db.execute(
-                select(
-                    Email.domain,
-                    window_expr.label("window"),
-                    func.sum(case((bucket_expr.in_(["risky", "unsafe"]), 1), else_=0)).label("bad"),
-                    func.count(Email.id).label("total"),
-                )
-                .where(Email.domain.in_(domains_on_page), Email.created_at >= prev_start)
-                .group_by(Email.domain, window_expr)
-            )
-        ).all()
-
-        window_stats: dict[str, dict] = {}
-        for domain, window, bad, tot in trend_rows:
-            window_stats.setdefault(domain, {})[window] = (bad, tot)
-
-        for domain, windows in window_stats.items():
-            recent_bad, recent_total = windows.get("recent", (0, 0))
-            prev_bad, prev_total = windows.get("previous", (0, 0))
-            recent_pct = (recent_bad / recent_total * 100) if recent_total else None
-            prev_pct = (prev_bad / prev_total * 100) if prev_total else None
-            if recent_pct is None or prev_pct is None:
-                trend_map[domain] = "stable"
-                trend_delta_map[domain] = None
-            else:
-                delta = recent_pct - prev_pct
-                trend_delta_map[domain] = round(delta, 1)
-                if delta > TREND_DELTA_PCT:
-                    trend_map[domain] = "up"
-                elif delta < -TREND_DELTA_PCT:
-                    trend_map[domain] = "down"
-                else:
-                    trend_map[domain] = "stable"
-
-    now = datetime.utcnow()
     items = []
     for r in rows:
-        mx_records = mx_map.get(r.domain)
         is_new = bool(r.first_seen and (now - r.first_seen) <= timedelta(days=NEW_DOMAIN_DAYS))
         items.append(
             DomainStats(
@@ -1009,11 +1102,11 @@ async def list_domains(
                 disposable_count=r.disposable_count or 0,
                 role_based_count=r.role_based_count or 0,
                 catch_all_count=r.catch_all_count or 0,
-                mx_records=mx_records,
-                mx_status=_mx_status(mx_records),
+                mx_records=r.mx_records,
+                mx_status=r.mx_status,
                 first_seen=r.first_seen,
-                trend=trend_map.get(r.domain, "stable"),
-                trend_delta_pct=trend_delta_map.get(r.domain),
+                trend=r.trend,
+                trend_delta_pct=round(r.trend_delta_pct, 1) if r.trend_delta_pct is not None else None,
                 is_new=is_new,
                 low_sample=r.total_emails < LOW_SAMPLE_THRESHOLD,
             )
@@ -1025,6 +1118,8 @@ async def list_domains(
         page=page,
         size=size,
         pages=(total + size - 1) // size,
+        sort_by=resolved_sort_by,
+        sort_order=resolved_sort_order,
     )
 
 

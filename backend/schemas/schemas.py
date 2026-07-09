@@ -168,6 +168,14 @@ class PaginatedDomainsResponse(BaseModel):
     size: int
     pages: int
 
+    # ── NEW: echoes back the sort actually applied (post-validation/fallback)
+    # so the frontend can sync its column-header UI + URL query params to
+    # what the server really did, instead of assuming the request params
+    # were honored verbatim (e.g. an invalid sort_by silently falls back to
+    # the default on the backend — the frontend needs to know that happened).
+    sort_by: str = "first_seen"
+    sort_order: str = "desc"
+
     model_config = {"from_attributes": True}
 
 
@@ -322,7 +330,6 @@ class DashboardStats(BaseModel):
 
     generated_at: datetime                     # server timestamp this response was built at;
                                                 # frontend derives "2 min ago" / "Just now" from this
-                                                # (must be timezone-aware UTC — see dashboard.py)
 
     model_config = {"from_attributes": True}
 

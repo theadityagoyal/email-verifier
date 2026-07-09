@@ -1,5 +1,5 @@
-import { useState, useMemo, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -72,6 +72,9 @@ const TREND_CONFIG = {
   stable: { icon: Minus, color: 'text-[var(--foreground)]/40' },
 };
 
+// Kept for the legacy DomainHeader dropdown, if it's still wired up. New
+// per-column header sorting (SortHeader inside DomainTable) is the primary
+// UI now — this dropdown just maps onto the same sortBy/sortOrder state.
 const SORT_OPTIONS = [
   { value: 'risk', label: 'Risk % (High to Low)' },
   { value: 'total', label: 'Total Emails (High to Low)' },
@@ -79,6 +82,14 @@ const SORT_OPTIONS = [
   { value: 'domain', label: 'Domain (A–Z)' },
   { value: 'newest', label: 'Newest First' },
 ];
+
+// ── Server-side sort contract (must match backend SORTABLE_DOMAIN_FIELDS) ──
+const SORTABLE_FIELDS = new Set([
+  'domain', 'total_emails', 'safe', 'risky', 'unsafe',
+  'risk_percent', 'trend', 'mx_status', 'first_seen',
+]);
+const DEFAULT_SORT_BY = 'first_seen';
+const DEFAULT_SORT_ORDER = 'desc';
 
 function formatDate(value) {
   if (!value) return '—';
@@ -103,19 +114,35 @@ function downloadCsv(rows, filename) {
 
 export default function DomainsPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(() => {
+    const p = Number(searchParams.get('page'));
+    return Number.isFinite(p) && p > 0 ? p : 1;
+  });
   const [size, setSize] = useState(20);
-  const [search, setSearch] = useState('');
-  const [sort, setSort] = useState('risk');
+  const [search, setSearch] = useState(() => searchParams.get('search') || '');
+
+  // ── Sort state, seeded from the URL so refresh/deep-link keeps the sort ──
+  const [sortBy, setSortBy] = useState(() => {
+    const fromUrl = searchParams.get('sort_by');
+    return fromUrl && SORTABLE_FIELDS.has(fromUrl) ? fromUrl : DEFAULT_SORT_BY;
+  });
+  const [sortOrder, setSortOrder] = useState(() => {
+    const fromUrl = searchParams.get('sort_order');
+    return fromUrl === 'asc' || fromUrl === 'desc' ? fromUrl : DEFAULT_SORT_ORDER;
+  });
+
   const [showFilters, setShowFilters] = useState(false);
   const [selected, setSelected] = useState([]);
   const [openMenu, setOpenMenu] = useState(null);
 
   // Client-side refinements on top of the current page. The backend only
-  // accepts { page, size, search, sort } — Risk/MX/Flags/Min Emails narrow
-  // whatever page is currently loaded, same limitation the old search filter
-  // had, so a wider net (bigger page size) may be needed to see everything.
+  // accepts { page, size, search, sort_by, sort_order } — Risk/MX/Flags/Min
+  // Emails narrow whatever page is currently loaded, same limitation the
+  // old search filter had, so a wider net (bigger page size) may be needed
+  // to see everything. (Pre-existing limitation — not changed here; moving
+  // these to server-side filters is a good follow-up.)
   const [riskFilter, setRiskFilter] = useState('All');
   const [mxFilter, setMxFilter] = useState('All');
   const [flagsFilter, setFlagsFilter] = useState('All');
@@ -124,16 +151,43 @@ export default function DomainsPage() {
   // --- BUG A FIX -----------------------------------------------------------
   // search/sort changes must reset to page 1, otherwise a stale `page` can
   // point past the end of the new, smaller/differently-ordered result set.
-  // DomainFilters intentionally left the "// setPage(1)" as the parent's
-  // job (see its own comments) — these wrappers are that job.
   const handleSearchChange = (value) => {
     setSearch(value);
     setPage(1);
   };
 
-  const handleSortChange = (value) => {
-    setSort(value);
+  // ── Per-column sort click handler (3-state cycle) ────────────────────────
+  // nextOrder is 'asc' | 'desc' | null, as produced by SortHeader.
+  // null ("no sort") reverts to the default sort rather than sending an
+  // empty sort_by — the table should never be visually "unsorted".
+  const handleSort = useCallback((field, nextOrder) => {
+    if (nextOrder === null) {
+      setSortBy(DEFAULT_SORT_BY);
+      setSortOrder(DEFAULT_SORT_ORDER);
+    } else {
+      setSortBy(field);
+      setSortOrder(nextOrder);
+    }
     setPage(1);
+  }, []);
+
+  // Legacy dropdown (DomainHeader) support — maps its single `sort` value
+  // onto the same sortBy/sortOrder state so both controls stay in sync
+  // instead of fighting each other.
+  const LEGACY_SORT_TO_FIELD = {
+    risk: ['risk_percent', 'desc'],
+    total: ['total_emails', 'desc'],
+    trust: ['risk_percent', 'asc'],
+    domain: ['domain', 'asc'],
+    newest: ['first_seen', 'desc'],
+  };
+  const handleLegacySortChange = (value) => {
+    const mapped = LEGACY_SORT_TO_FIELD[value];
+    if (mapped) {
+      setSortBy(mapped[0]);
+      setSortOrder(mapped[1]);
+      setPage(1);
+    }
   };
 
   // --- BUG B FIX -------------------------------------------------------------
@@ -143,13 +197,42 @@ export default function DomainsPage() {
   // for rows the user never actually picked on the new page.
   useEffect(() => {
     setSelected([]);
-  }, [page, search, sort]);
+  }, [page, search, sortBy, sortOrder]);
 
-  const { data: domainsData, isLoading, error, refetch } = useQuery({
-    queryKey: ['domains', page, size, search, sort],
-    queryFn: () => listDomains({ page, size, search: search || undefined, sort }),
+  // ── Keep sort/search/page in the URL so a refresh preserves them ────────
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams);
+    next.set('page', String(page));
+    if (search) next.set('search', search); else next.delete('search');
+    next.set('sort_by', sortBy);
+    next.set('sort_order', sortOrder);
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, search, sortBy, sortOrder]);
+
+  const {
+    data: domainsData,
+    isLoading,
+    isFetching,
+    error,
+    refetch,
+  } = useQuery({
+    queryKey: ['domains', page, size, search, sortBy, sortOrder],
+    queryFn: () =>
+      listDomains({
+        page,
+        size,
+        search: search || undefined,
+        sort_by: sortBy,
+        sort_order: sortOrder,
+      }),
     placeholderData: (previousData) => previousData,
   });
+
+  // True only for a background refetch (sort/page/search change) with data
+  // already on screen — not the very first load, which already has its own
+  // full-page spinner below.
+  const isSorting = isFetching && !isLoading;
 
   const { data: overview } = useQuery({
     queryKey: ['domains-overview'],
@@ -158,7 +241,7 @@ export default function DomainsPage() {
 
   const { data: topRiskData } = useQuery({
     queryKey: ['domains-top-risk'],
-    queryFn: () => listDomains({ page: 1, size: 5, sort: 'risk' }),
+    queryFn: () => listDomains({ page: 1, size: 5, sort_by: 'risk_percent', sort_order: 'desc' }),
   });
 
   const { data: trendStats } = useQuery({
@@ -288,8 +371,13 @@ export default function DomainsPage() {
         }}
         openMenu={openMenu}
         setOpenMenu={setOpenMenu}
-        sort={sort}
-        setSort={setSort}
+        sort={sortBy === 'risk_percent' && sortOrder === 'desc' ? 'risk'
+          : sortBy === 'total_emails' && sortOrder === 'desc' ? 'total'
+          : sortBy === 'risk_percent' && sortOrder === 'asc' ? 'trust'
+          : sortBy === 'domain' && sortOrder === 'asc' ? 'domain'
+          : sortBy === 'first_seen' && sortOrder === 'desc' ? 'newest'
+          : ''}
+        setSort={handleLegacySortChange}
         SORT_OPTIONS={SORT_OPTIONS}
       />
 
@@ -365,6 +453,10 @@ export default function DomainsPage() {
               toggleSelectOne={toggleSelectOne}
               openMenu={openMenu}
               setOpenMenu={setOpenMenu}
+              sortBy={sortBy}
+              sortOrder={sortOrder}
+              onSort={handleSort}
+              isSorting={isSorting}
             />
 
             <DomainPagination
