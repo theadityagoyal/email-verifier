@@ -139,7 +139,7 @@ async def bulk_upload(
             job_id=job_id,
             file_name=file.filename,
             s3_key=s3_key,
-            status=JobStatus.pending,
+            status=JobStatus.processing,
             current_stage='uploading',
             progress_percent=0,
             estimated_time_remaining=None,

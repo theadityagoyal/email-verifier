@@ -108,6 +108,8 @@ EMAIL-VERIFIER/
 │   │   │   │
 │   │   │   └── layout/
 │   │   │       └── ThemeToggle.jsx             SAFE — Dark/light mode toggle button
+
+                pages 
 │   │   │
 │   │   ├── layouts/
 │   │   │   ├── Layout.jsx                      ★ CRITICAL — App shell: sidebar + header + outlet

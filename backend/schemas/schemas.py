@@ -311,6 +311,8 @@ class DashboardStats(BaseModel):
     # ── Powers the enhanced Status Breakdown card ────────────────────────────
     per_status_trend: Dict[str, int] = {}      # raw count delta per status vs previous 24h
     bucket_trend_pct: Dict[str, float] = {}    # % change per bucket vs previous 24h
+    total_emails_trend_pct: float = 0.0        # % change in total email count vs previous 24h
+                                                # (powers the "Total Emails" stat card trend arrow)
     verification_speed: float = 0.0            # emails/sec, live (last 5 min window)
     avg_processing_time_ms: Optional[float] = None  # avg time from created_at -> verified_at, last 24h
 
@@ -320,6 +322,7 @@ class DashboardStats(BaseModel):
 
     generated_at: datetime                     # server timestamp this response was built at;
                                                 # frontend derives "2 min ago" / "Just now" from this
+                                                # (must be timezone-aware UTC — see dashboard.py)
 
     model_config = {"from_attributes": True}
 

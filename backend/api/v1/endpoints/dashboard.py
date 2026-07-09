@@ -1,5 +1,5 @@
 import io
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -83,6 +83,9 @@ async def _compute_dashboard_trends(db: AsyncSession):
                          (e.g. {"probably_valid": 12, "unconfirmed": -8, ...})
       bucket_trend_pct: % change in bucket count (safe/risky/unsafe/processing)
                         vs the previous 24h window, e.g. {"safe": 2.4, "risky": -1.1}
+      total_trend_pct: % change in total email count vs the previous 24h window
+                        (sum across all buckets — powers the "Total Emails" stat
+                        card trend arrow on the dashboard)
 
     Uses the same bucket_case() as the rest of the dashboard, so these numbers
     can never disagree with the main safe/risky/unsafe/processing counts.
@@ -128,17 +131,26 @@ async def _compute_dashboard_trends(db: AsyncSession):
         bucket_window_map.setdefault(bucket, {})[window] = count
 
     bucket_trend_pct = {}
+    total_recent = 0
+    total_prev = 0
     for b in ["safe", "risky", "unsafe", "processing"]:
         windows = bucket_window_map.get(b, {})
         recent = windows.get("recent", 0)
         prev = windows.get("previous", 0)
+        total_recent += recent
+        total_prev += prev
         if prev > 0:
             bucket_trend_pct[b] = round(((recent - prev) / prev) * 100, 1)
         else:
             # No baseline yesterday: report 100% if anything came in today, else flat 0%
             bucket_trend_pct[b] = 100.0 if recent > 0 else 0.0
 
-    return per_status_trend, bucket_trend_pct
+    if total_prev > 0:
+        total_trend_pct = round(((total_recent - total_prev) / total_prev) * 100, 1)
+    else:
+        total_trend_pct = 100.0 if total_recent > 0 else 0.0
+
+    return per_status_trend, bucket_trend_pct, total_trend_pct
 
 
 async def _compute_speed_and_processing_time(db: AsyncSession):
@@ -147,6 +159,12 @@ async def _compute_speed_and_processing_time(db: AsyncSession):
       based on verified_at timestamps (actual throughput, not an estimate).
     avg_processing_time_ms: avg(verified_at - created_at) over the last
       PROCESSING_TIME_WINDOW_HOURS, in milliseconds.
+
+    NOTE: this can read high for domains/emails that get RE-verified, since
+    created_at stays at the original insert time while verified_at moves to
+    "now" — the delta then includes however long the record sat in the DB
+    since its first verification, not actual processing time. Flagged for a
+    follow-up fix (needs a dedicated processing-start timestamp column).
     """
     now = datetime.utcnow()
 
@@ -201,7 +219,7 @@ async def _compute_speed_and_processing_time(db: AsyncSession):
             # Convert seconds to milliseconds
             avg_processing_time_ms = round(float(fallback_seconds) * 1000, 1)
         else:
-            avg_processing_time_ms = None
+            avg_processing_time_ms = 0.0
 
     return verification_speed, avg_processing_time_ms
 
@@ -375,6 +393,12 @@ async def _compute_domain_summary(db: AsyncSession, domain_map: dict, bucket_exp
     prev_avg_reputation = round(sum(100 - r for r in prev_sample) / len(prev_sample)) if prev_sample else 0
     prev_high_risk_count = sum(1 for r in prev_sample if r >= RISK_WATCH_MAX)
 
+    # NOTE (flagged, not yet fixed — see chat explanation): a fully correct
+    # improving_trend_pct needs a genuine "improving count as of last week"
+    # baseline (its own 7d-vs-7d comparison shifted back a further 7 days).
+    # Left as pct_delta(improving_count, non_improving_count) for now, which
+    # is a same-snapshot comparison, NOT a real previous-period trend —
+    # do not treat this number as reliable yet.
     return DomainSummary(
         avg_reputation=avg_reputation,
         avg_reputation_trend_pct=pct_delta(avg_reputation, prev_avg_reputation),
@@ -497,8 +521,8 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365), db: AsyncSessi
             "total": active_job_row.total,
         }
 
-    # 9. 24h trends (per-status count delta + per-bucket % change)
-    per_status_trend, bucket_trend_pct = await _compute_dashboard_trends(db)
+    # 9. 24h trends (per-status count delta + per-bucket % change + total % change)
+    per_status_trend, bucket_trend_pct, total_emails_trend_pct = await _compute_dashboard_trends(db)
 
     # 10. Live verification speed + avg processing time
     verification_speed, avg_processing_time_ms = await _compute_speed_and_processing_time(db)
@@ -518,11 +542,18 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365), db: AsyncSessi
         active_job=active_job,
         per_status_trend=per_status_trend,
         bucket_trend_pct=bucket_trend_pct,
+        total_emails_trend_pct=total_emails_trend_pct,
         verification_speed=verification_speed,
         avg_processing_time_ms=avg_processing_time_ms,
         flagged_overview=flagged_overview,
         domain_summary=domain_summary,
-        generated_at=datetime.utcnow(),
+        # FIX: timezone-aware UTC instant, not a naive datetime.utcnow().
+        # Naive datetimes serialize without a 'Z'/offset, so the frontend's
+        # `new Date(isoString)` was interpreting this as LOCAL browser time
+        # instead of UTC — on an IST browser that manufactured a fake ~5.5hr
+        # gap, which is exactly the "Last updated / Last Sync 5 hr ago" bug
+        # even though the dashboard refetches every 3 seconds.
+        generated_at=datetime.now(timezone.utc),
     )
 
 

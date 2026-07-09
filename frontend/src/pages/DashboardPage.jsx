@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
+import { AreaChart, Area, ResponsiveContainer } from 'recharts';
 import CircularProgress from '@/components/ui/CircularProgress';
 import StackedBarChart from '@/components/charts/StackedBarChart';
 import { getDashboardStats } from '@/services/api';
@@ -30,6 +31,9 @@ import {
   HelpCircle,
   Clock,
   CalendarClock,
+  Mail,
+  Sparkles,
+  Star,
 } from 'lucide-react';
 
 // Motion variants
@@ -108,13 +112,74 @@ function MiniStat({ label, value, trend, Icon, iconBg, iconColor }) {
   );
 }
 
+// Tiny inline sparkline used inside the four top stat cards (Total / Safe /
+// Risky / Unsafe). Built straight from the same daily_volume the big
+// Verification Volume chart uses — no separate data source, so it can never
+// disagree with the stacked bar chart below it.
+function MiniSparkline({ data, color }) {
+  if (!data || data.length < 2) return null;
+  const gradId = `spark-${color.replace('#', '')}`;
+  return (
+    <ResponsiveContainer width="100%" height={40}>
+      <AreaChart data={data} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
+        <defs>
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity={0.35} />
+            <stop offset="100%" stopColor={color} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <Area
+          type="monotone"
+          dataKey="v"
+          stroke={color}
+          strokeWidth={2}
+          fill={`url(#${gradId})`}
+          isAnimationActive={false}
+        />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+}
+
+// Top stat cards row: Total Emails / Safe / Risky / Unsafe, each with an
+// icon, a 24h trend arrow (from bucket_trend_pct / total_emails_trend_pct —
+// real backend numbers, not estimated), and a sparkline over daily_volume.
+function TopStatCard({ label, value, trendPct, sparkData, color, Icon, iconBg, iconColor }) {
+  const isPositive = trendPct >= 0;
+  return (
+    <motion.div variants={itemVariants} className="card !p-5">
+      <div className="flex items-center justify-between mb-3">
+        <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${iconBg}`}>
+          <Icon className={`h-5 w-5 ${iconColor}`} />
+        </div>
+        <span className={`text-xs font-semibold ${isPositive ? 'text-success' : 'text-error'}`}>
+          {isPositive ? '↑' : '↓'} {Math.abs(trendPct)}%
+        </span>
+      </div>
+      <p className="text-sm text-[var(--foreground)]/50">{label}</p>
+      <p className="text-2xl font-bold text-[var(--foreground)] tabular-nums mt-1">
+        {value.toLocaleString()}
+      </p>
+      <div className="mt-2 h-10">
+        <MiniSparkline data={sparkData} color={color} />
+      </div>
+    </motion.div>
+  );
+}
+
 // Status Group component
-function StatusGroup({ title, statuses, perStatusCounts, totalEmails, perStatusTrend, bucketTrendPct }) {
+function StatusGroup({ title, statuses, perStatusCounts, bucketTotal, totalEmails, perStatusTrend, bucketTrendPct }) {
   const rows = statuses
     .filter((s) => title === 'Processing' || (perStatusCounts[s] || 0) > 0)
     .sort((a, b) => (perStatusCounts[b] || 0) - (perStatusCounts[a] || 0));
 
-  const total = rows.reduce((sum, status) => sum + (perStatusCounts[status] || 0), 0);
+  // FIX: total now comes from bucket_counts (the same source used by the
+  // top-level stat cards), not a sum of raw per_status_counts. Those two
+  // used to disagree whenever an email was safe-status-but-flagged
+  // (disposable/role_based/catch_all downgrades it into risky/unsafe in the
+  // bucket count but not in the raw status count) — e.g. "Safe 2,017" up top
+  // vs "Safe 2,028" here. Now both numbers always match.
+  const total = bucketTotal ?? 0;
   const percent = totalEmails > 0 ? ((total / totalEmails) * 100).toFixed(1) : '0.0';
 
   const bucketKey = title.toLowerCase();
@@ -257,60 +322,42 @@ function StatusGroup({ title, statuses, perStatusCounts, totalEmails, perStatusT
   );
 }
 
-// Trust Score Card component
+// Trust Score hero card — big score ring + a lightweight decorative graphic
+// on the right (icon composition, since we don't have a custom illustration
+// asset) to echo the reference design's shield/badge artwork.
 function TrustScoreCard({ trustScore, trustScoreColor, trustScoreLabel, textClassMap, badgeClassMap }) {
   return (
-    <motion.div variants={itemVariants} className="card">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium text-[var(--foreground)]/60">Trust score</p>
-          <p className={`text-5xl font-bold mt-1 ${textClassMap[trustScoreColor]}`}>{trustScore}%</p>
-          <div className="mt-2">
-            <span className={`text-xs font-medium px-2.5 py-0.5 rounded-md ${badgeClassMap[trustScoreColor]}`}>
-              {trustScoreLabel}
-            </span>
+    <motion.div variants={itemVariants} className="card overflow-hidden relative">
+      <div className="flex items-center justify-between gap-6 flex-wrap">
+        <div className="flex items-center gap-6">
+          <CircularProgress value={trustScore} size={110} strokeWidth={9} color={trustScoreColor} />
+          <div>
+            <p className="text-sm font-medium text-[var(--foreground)]/60 flex items-center gap-1">
+              Trust Score <HelpCircle className="h-3.5 w-3.5 text-[var(--foreground)]/30" />
+            </p>
+            <p className={`text-5xl font-bold mt-1 ${textClassMap[trustScoreColor]}`}>{trustScore}%</p>
+            <div className="mt-2">
+              <span className={`text-xs font-medium px-2.5 py-0.5 rounded-md ${badgeClassMap[trustScoreColor]}`}>
+                {trustScoreLabel}
+              </span>
+            </div>
           </div>
         </div>
-        <CircularProgress value={trustScore} size={90} strokeWidth={8} color={trustScoreColor} />
+
+        {/* Decorative right-side graphic */}
+        <div className="hidden md:flex relative h-28 w-40 items-center justify-center flex-shrink-0">
+          <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-[var(--primary)]/15 to-[var(--accent)]/15" />
+          <ShieldCheck className="h-16 w-16 text-[var(--primary)]" strokeWidth={1.5} />
+          <Star className="absolute top-2 right-6 h-5 w-5 text-warning fill-warning/30" />
+          <Sparkles className="absolute bottom-3 left-4 h-5 w-5 text-[var(--accent)]" />
+        </div>
       </div>
     </motion.div>
   );
 }
 
-// Stats Grid component
-function StatsGrid({ totalEmails, bucketCounts }) {
-  return (
-    <div className="grid grid-cols-4 gap-4 pt-4 mt-4 border-t border-[var(--muted)]">
-      <div>
-        <p className="text-xs text-[var(--foreground)]/50">Total emails</p>
-        <p className="text-xl font-bold text-[var(--foreground)] tabular-nums mt-1">
-          {totalEmails.toLocaleString()}
-        </p>
-      </div>
-      <div>
-        <p className="text-xs text-[var(--foreground)]/50">Safe</p>
-        <p className="text-xl font-bold text-success tabular-nums mt-1">
-          {(bucketCounts.safe ?? 0).toLocaleString()}
-        </p>
-      </div>
-      <div>
-        <p className="text-xs text-[var(--foreground)]/50">Risky</p>
-        <p className="text-xl font-bold text-warning tabular-nums mt-1">
-          {(bucketCounts.risky ?? 0).toLocaleString()}
-        </p>
-      </div>
-      <div>
-        <p className="text-xs text-[var(--foreground)]/50">Unsafe</p>
-        <p className="text-xl font-bold text-error tabular-nums mt-1">
-          {(bucketCounts.unsafe ?? 0).toLocaleString()}
-        </p>
-      </div>
-    </div>
-  );
-}
-
 // Active Job Section component
-function ActiveJobSection({ activeJob }) {
+function ActiveJobSection({ activeJob, navigate }) {
   return (
     <motion.div variants={itemVariants} className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-stretch">
       <div className="card h-full">
@@ -334,11 +381,11 @@ function ActiveJobSection({ activeJob }) {
       </div>
 
       <div className="card flex h-full items-center justify-center">
-        <p className="text-sm text-[var(--foreground)]/50">Credits tracking not implemented</p>
+        <p className="text-[var(--foreground)]/50">Credits tracking not implemented</p>
       </div>
 
       <div className="card flex h-full items-center justify-center">
-        <Button variant="success" size="lg" className="w-full">
+        <Button variant="success" size="lg" className="w-full" onClick={() => navigate('/verify')}>
           <Zap className="h-5 w-5 text-[var(--foreground)]" />
           Verify Email
         </Button>
@@ -356,13 +403,13 @@ function StatusBreakdownSection({
   flaggedOverview,
   domainSummary,
   perStatusCounts,
+  bucketCounts,
   perStatusTrend,
   bucketTrendPct,
   flaggedCounts,
   worstDomains,
   dailyVolume,
   days,
-  setDays,
   verificationSpeed,
   avgProcessingTimeMs,
   navigate,
@@ -372,6 +419,8 @@ function StatusBreakdownSection({
     ? Math.round(dailyTotals.reduce((sum, v) => sum + v, 0) / dailyTotals.length)
     : 0;
   const peakDay = dailyTotals.length > 0 ? Math.max(...dailyTotals) : 0;
+
+  const daysLabelMap = { 7: 'Last 7 Days', 30: 'Last 30 Days', 90: 'Last 90 Days', 365: 'All Time' };
 
   return (
     <motion.div variants={itemVariants} className="grid grid-cols-1 gap-6 items-start">
@@ -433,6 +482,7 @@ function StatusBreakdownSection({
               title="Safe"
               statuses={SAFE_STATUSES}
               perStatusCounts={perStatusCounts}
+              bucketTotal={bucketCounts.safe}
               totalEmails={totalEmails}
               perStatusTrend={perStatusTrend}
               bucketTrendPct={bucketTrendPct}
@@ -443,6 +493,7 @@ function StatusBreakdownSection({
               title="Risky"
               statuses={RISKY_STATUSES}
               perStatusCounts={perStatusCounts}
+              bucketTotal={bucketCounts.risky}
               totalEmails={totalEmails}
               perStatusTrend={perStatusTrend}
               bucketTrendPct={bucketTrendPct}
@@ -453,6 +504,7 @@ function StatusBreakdownSection({
               title="Unsafe"
               statuses={UNSAFE_STATUSES}
               perStatusCounts={perStatusCounts}
+              bucketTotal={bucketCounts.unsafe}
               totalEmails={totalEmails}
               perStatusTrend={perStatusTrend}
               bucketTrendPct={bucketTrendPct}
@@ -463,6 +515,7 @@ function StatusBreakdownSection({
               title="Processing"
               statuses={['processing']}
               perStatusCounts={perStatusCounts}
+              bucketTotal={bucketCounts.processing}
               totalEmails={totalEmails}
               perStatusTrend={perStatusTrend}
               bucketTrendPct={bucketTrendPct}
@@ -507,16 +560,9 @@ function StatusBreakdownSection({
             <p className="mt-1 text-sm text-[var(--foreground)]/60">Daily email verification activity</p>
           </div>
 
-          <select
-            value={days}
-            onChange={(e) => setDays(Number(e.target.value))}
-            className="rounded-xl border border-[var(--muted)] bg-[var(--background)] px-4 py-2 text-sm shadow-sm"
-          >
-            <option value={7}>Last 7 Days</option>
-            <option value={30}>Last 30 Days</option>
-            <option value={90}>Last 90 Days</option>
-            <option value={365}>All Time</option>
-          </select>
+          <span className="rounded-xl border border-[var(--muted)] bg-[var(--background)] px-4 py-2 text-sm shadow-sm text-[var(--foreground)]/70">
+            {daysLabelMap[days] || `Last ${days} Days`}
+          </span>
         </div>
 
         <div className="h-[430px] w-full">
@@ -839,6 +885,7 @@ export default function DashboardPage() {
     active_job: activeJob = null,
     per_status_trend: perStatusTrend = {},
     bucket_trend_pct: bucketTrendPct = {},
+    total_emails_trend_pct: totalEmailsTrendPct = 0,
     verification_speed: verificationSpeed = 0,
     avg_processing_time_ms: avgProcessingTimeMs = 0,
     flagged_overview: flaggedOverview = { total_flagged: 0, high_priority: 0, flag_rate: 0, last_7_days: 0, total_flagged_trend_pct: 0, high_priority_trend_pct: 0, flag_rate_trend_pct: 0, last_7_days_trend_pct: 0 },
@@ -867,6 +914,13 @@ export default function DashboardPage() {
     .sort((a, b) => b.risk_pct - a.risk_pct)
     .slice(0, 5);
 
+  // Sparkline series for the top 4 stat cards — derived from the same
+  // daily_volume the Verification Volume chart uses.
+  const sparkTotal = dailyVolume.map((d) => ({ v: dayTotal(d) }));
+  const sparkSafe = dailyVolume.map((d) => ({ v: d.safe || 0 }));
+  const sparkRisky = dailyVolume.map((d) => ({ v: d.risky || 0 }));
+  const sparkUnsafe = dailyVolume.map((d) => ({ v: d.unsafe || 0 }));
+
   return (
     <motion.div id="main-content" initial="hidden" animate="visible" variants={containerVariants} className="space-y-6">
       {/* Skip navigation link for accessibility */}
@@ -874,9 +928,22 @@ export default function DashboardPage() {
         Skip to main content
       </a>
 
-      <motion.div variants={itemVariants}>
-        <h1 className="text-3xl font-bold text-[var(--foreground)]">Dashboard</h1>
-        <p className="text-sm text-[var(--foreground)]/60">Overview of your email verification activity</p>
+      {/* Welcome header + period selector */}
+      <motion.div variants={itemVariants} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-bold text-[var(--foreground)]">Welcome back, Aditya! 👋</h1>
+          <p className="text-sm text-[var(--foreground)]/60">Here's your email verification overview for the selected period.</p>
+        </div>
+        <select
+          value={days}
+          onChange={(e) => setDays(Number(e.target.value))}
+          className="rounded-xl border border-[var(--muted)] bg-[var(--background)] px-4 py-2 text-sm shadow-sm text-[var(--foreground)]"
+        >
+          <option value={7}>Last 7 Days</option>
+          <option value={30}>Last 30 Days</option>
+          <option value={90}>Last 90 Days</option>
+          <option value={365}>All Time</option>
+        </select>
       </motion.div>
 
       <TrustScoreCard
@@ -887,12 +954,51 @@ export default function DashboardPage() {
         badgeClassMap={badgeClassMap}
       />
 
-      <StatsGrid
-        totalEmails={totalEmails}
-        bucketCounts={bucketCounts}
-      />
+      {/* Top stat cards with sparklines */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <TopStatCard
+          label="Total Emails"
+          value={totalEmails}
+          trendPct={totalEmailsTrendPct}
+          sparkData={sparkTotal}
+          color="#6366F1"
+          Icon={Mail}
+          iconBg="bg-indigo-100 dark:bg-indigo-900/20"
+          iconColor="text-indigo-600"
+        />
+        <TopStatCard
+          label="Safe"
+          value={bucketCounts.safe || 0}
+          trendPct={bucketTrendPct.safe ?? 0}
+          sparkData={sparkSafe}
+          color="#10B981"
+          Icon={ShieldCheck}
+          iconBg="bg-emerald-100 dark:bg-emerald-900/20"
+          iconColor="text-emerald-600"
+        />
+        <TopStatCard
+          label="Risky"
+          value={bucketCounts.risky || 0}
+          trendPct={bucketTrendPct.risky ?? 0}
+          sparkData={sparkRisky}
+          color="#F59E0B"
+          Icon={AlertTriangle}
+          iconBg="bg-amber-100 dark:bg-amber-900/20"
+          iconColor="text-amber-600"
+        />
+        <TopStatCard
+          label="Unsafe"
+          value={bucketCounts.unsafe || 0}
+          trendPct={bucketTrendPct.unsafe ?? 0}
+          sparkData={sparkUnsafe}
+          color="#EF4444"
+          Icon={ShieldX}
+          iconBg="bg-red-100 dark:bg-red-900/20"
+          iconColor="text-red-600"
+        />
+      </div>
 
-      <ActiveJobSection activeJob={activeJob} />
+      <ActiveJobSection activeJob={activeJob} navigate={navigate} />
 
       <StatusBreakdownSection
         trustScore={trustScore}
@@ -902,13 +1008,13 @@ export default function DashboardPage() {
         flaggedOverview={flaggedOverview}
         domainSummary={domainSummary}
         perStatusCounts={perStatusCounts}
+        bucketCounts={bucketCounts}
         perStatusTrend={perStatusTrend}
         bucketTrendPct={bucketTrendPct}
         flaggedCounts={flaggedCounts}
         worstDomains={worstDomains}
         dailyVolume={dailyVolume}
         days={days}
-        setDays={setDays}
         verificationSpeed={verificationSpeed}
         avgProcessingTimeMs={avgProcessingTimeMs}
         navigate={navigate}
