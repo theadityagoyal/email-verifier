@@ -45,6 +45,16 @@ DAY_TREND_HOURS = 24               # "vs yesterday" comparison window
 SPEED_WINDOW_MINUTES = 5           # verification speed measured over last N minutes
 PROCESSING_TIME_WINDOW_HOURS = 24  # avg processing time computed over last N hours
 
+# FIX (bug: "Avg Check Time: 17860843.9s"):
+# created_at is set once, at first insert. verified_at gets OVERWRITTEN every
+# time an email is re-verified. So for a re-verified email, (verified_at -
+# created_at) is NOT "how long verification took" — it's "how long ago the
+# record was first created", which can be days/weeks -> a huge, meaningless
+# number. A real single verification pipeline (syntax->DNS->MX->SMTP->score)
+# never legitimately takes more than a couple minutes, so we cap the diff
+# used in the average to filter out these stale/re-verify outliers.
+MAX_REASONABLE_PROCESSING_SECONDS = 300  # 5 minutes — anything above this is treated as a re-verify artifact, not real processing time
+
 DOMAIN_SORT_OPTIONS = {"risk", "total", "trust", "domain", "newest"}
 FLAGGED_FILTER_OPTIONS = {"any", "disposable", "role_based", "catch_all"}
 
@@ -160,11 +170,13 @@ async def _compute_speed_and_processing_time(db: AsyncSession):
     avg_processing_time_ms: avg(verified_at - created_at) over the last
       PROCESSING_TIME_WINDOW_HOURS, in milliseconds.
 
-    NOTE: this can read high for domains/emails that get RE-verified, since
-    created_at stays at the original insert time while verified_at moves to
-    "now" — the delta then includes however long the record sat in the DB
-    since its first verification, not actual processing time. Flagged for a
-    follow-up fix (needs a dedicated processing-start timestamp column).
+    FIXED: previously this could blow up to absurd values (e.g. "17860843.9s")
+    whenever an email got RE-verified — created_at stays at the original
+    insert time while verified_at jumps to "now", so the delta ends up being
+    "how long the record has existed" instead of "how long verification
+    took". We now cap the per-row diff at MAX_REASONABLE_PROCESSING_SECONDS
+    (5 min) in the SQL WHERE clause itself, so those stale re-verify rows
+    are excluded from the average entirely instead of skewing it.
     """
     now = datetime.utcnow()
 
@@ -181,18 +193,18 @@ async def _compute_speed_and_processing_time(db: AsyncSession):
 
     # ── Average Processing Time (in SECONDS) ─────────────────────────────
     proc_start = now - timedelta(hours=PROCESSING_TIME_WINDOW_HOURS)
+    diff_expr = func.timestampdiff(text("SECOND"), Email.created_at, Email.verified_at)
 
-    # Get average in SECONDS using the same status categories as defined in constants
+    # Get average in SECONDS using the same status categories as defined in constants.
+    # diff_expr.between(0, MAX_REASONABLE_PROCESSING_SECONDS) is the actual fix —
+    # excludes negative diffs (clock skew) AND re-verify artifacts (huge diffs).
     avg_seconds_row = await db.execute(
-        select(
-            func.avg(
-                func.timestampdiff(text("SECOND"), Email.created_at, Email.verified_at)
-            )
-        ).where(
+        select(func.avg(diff_expr)).where(
             Email.verified_at.isnot(None),
             Email.created_at.isnot(None),
             Email.verified_at >= proc_start,
-            Email.status.in_(ALL_STATUSES)
+            Email.status.in_(ALL_STATUSES),
+            diff_expr.between(0, MAX_REASONABLE_PROCESSING_SECONDS),
         )
     )
     avg_seconds = avg_seconds_row.scalar()
@@ -202,16 +214,13 @@ async def _compute_speed_and_processing_time(db: AsyncSession):
         # Convert seconds to milliseconds (timestampdiff with SECOND returns seconds)
         avg_processing_time_ms = round(float(avg_seconds) * 1000, 1)
     else:
-        # Fallback: check a wider window
+        # Fallback: check a wider window (still capped — same reasoning as above)
         fallback_row = await db.execute(
-            select(
-                func.avg(
-                    func.timestampdiff(text("SECOND"), Email.created_at, Email.verified_at)
-                )
-            ).where(
+            select(func.avg(diff_expr)).where(
                 Email.verified_at.isnot(None),
                 Email.created_at.isnot(None),
-                Email.verified_at >= now - timedelta(hours=48)
+                Email.verified_at >= now - timedelta(hours=48),
+                diff_expr.between(0, MAX_REASONABLE_PROCESSING_SECONDS),
             )
         )
         fallback_seconds = fallback_row.scalar()

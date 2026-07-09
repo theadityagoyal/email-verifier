@@ -30,6 +30,21 @@ const detailItems = [
   { key: 'catch_all', label: 'Catch-all', icon: AlertCircle, description: 'Domain accepts all emails', inverted: true },
 ];
 
+// Each check gets its own accent color (matches the target design's colored
+// pills — Syntax=blue, MX=green, SMTP=teal, Disposable=purple, Catch-All=indigo,
+// Reputation=orange, Score=emerald). Used by both checkPills (static hint strip
+// under the input) and quickCheckItems (idle-state placeholder grid).
+const CHECK_COLORS = {
+  Syntax: { text: 'text-blue-600', bg: 'bg-blue-100 dark:bg-blue-900/20', border: 'border-blue-200 dark:border-blue-800/30' },
+  'MX Records': { text: 'text-emerald-600', bg: 'bg-emerald-100 dark:bg-emerald-900/20', border: 'border-emerald-200 dark:border-emerald-800/30' },
+  SMTP: { text: 'text-teal-600', bg: 'bg-teal-100 dark:bg-teal-900/20', border: 'border-teal-200 dark:border-teal-800/30' },
+  Disposable: { text: 'text-purple-600', bg: 'bg-purple-100 dark:bg-purple-900/20', border: 'border-purple-200 dark:border-purple-800/30' },
+  'Catch-All': { text: 'text-indigo-600', bg: 'bg-indigo-100 dark:bg-indigo-900/20', border: 'border-indigo-200 dark:border-indigo-800/30' },
+  Reputation: { text: 'text-orange-600', bg: 'bg-orange-100 dark:bg-orange-900/20', border: 'border-orange-200 dark:border-orange-800/30' },
+  Score: { text: 'text-green-600', bg: 'bg-green-100 dark:bg-green-900/20', border: 'border-green-200 dark:border-green-800/30' },
+  Risk: { text: 'text-green-600', bg: 'bg-green-100 dark:bg-green-900/20', border: 'border-green-200 dark:border-green-800/30' },
+};
+
 // Static strip of all 7 signals we check — shown under the input at all times
 const checkPills = [
   { icon: CheckCircle, label: 'Syntax' },
@@ -215,15 +230,19 @@ export default function VerifyEmailPage() {
               </Button>
             </form>
 
+            {/* Colored pills — each check gets its own accent color instead of flat gray */}
             <div className="flex flex-wrap gap-2 mt-4">
-              {checkPills.map(({ icon: Icon, label }) => (
-                <span
-                  key={label}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-[var(--muted)]/40 text-[var(--foreground)]/60 border border-[var(--muted)]"
-                >
-                  <Icon className="h-3.5 w-3.5" aria-hidden="true" /> {label}
-                </span>
-              ))}
+              {checkPills.map(({ icon: Icon, label }) => {
+                const c = CHECK_COLORS[label] || CHECK_COLORS.Syntax;
+                return (
+                  <span
+                    key={label}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border ${c.bg} ${c.text} ${c.border}`}
+                  >
+                    <Icon className="h-3.5 w-3.5" aria-hidden="true" /> {label}
+                  </span>
+                );
+              })}
             </div>
 
             <p className="text-xs text-[var(--foreground)]/50 text-center mt-3">
@@ -299,15 +318,22 @@ export default function VerifyEmailPage() {
                         className="overflow-hidden"
                       >
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4">
-                          {detailItems.map(({ key, label, icon: Icon, description, inverted }) => {
+                          {/* STAGGERED TICK ANIMATION:
+                              each check card now reveals ~350ms after the
+                              previous one (delay: index * 0.35), so they
+                              visibly tick in one-by-one instead of all
+                              appearing at once. Purely cosmetic — the actual
+                              verification already finished server-side, this
+                              just paces how the result is *revealed*. */}
+                          {detailItems.map(({ key, label, icon: Icon, description, inverted }, index) => {
                             const value = result[key];
                             const isPass = inverted ? !value : value;
                             return (
                               <motion.div
                                 key={key}
-                                initial={{ opacity: 0, x: -20 }}
-                                animate={{ opacity: 1, x: 0 }}
-                                transition={{ duration: 0.3 }}
+                                initial={{ opacity: 0, x: -20, scale: 0.96 }}
+                                animate={{ opacity: 1, x: 0, scale: 1 }}
+                                transition={{ duration: 0.35, delay: index * 0.35, ease: 'easeOut' }}
                                 className="flex items-start gap-3 p-3 rounded-lg bg-[var(--muted)]/30"
                               >
                                 <div className={`p-2 rounded-lg flex-shrink-0 ${isPass ? 'bg-success/20 text-success' : 'bg-error/20 text-error'}`}>
@@ -409,14 +435,18 @@ export default function VerifyEmailPage() {
                   </div>
                 </div>
 
+                {/* Colored idle-state grid — same accent colors as the pills above */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 mt-8 pt-6 border-t border-[var(--muted)]">
-                  {quickCheckItems.map(({ label, icon: Icon }) => (
-                    <div key={label} className="flex flex-col items-center gap-2 p-3 rounded-xl bg-[var(--muted)]/30">
-                      <Icon className="h-5 w-5 text-[var(--foreground)]/40" aria-hidden="true" />
-                      <span className="text-xs font-medium text-[var(--foreground)]/60 text-center">{label}</span>
-                      <span className="text-xs text-[var(--foreground)]/30">--</span>
-                    </div>
-                  ))}
+                  {quickCheckItems.map(({ label, icon: Icon }) => {
+                    const c = CHECK_COLORS[label] || CHECK_COLORS.Syntax;
+                    return (
+                      <div key={label} className={`flex flex-col items-center gap-2 p-3 rounded-xl ${c.bg}`}>
+                        <Icon className={`h-5 w-5 ${c.text}`} aria-hidden="true" />
+                        <span className="text-xs font-medium text-[var(--foreground)]/60 text-center">{label}</span>
+                        <span className="text-xs text-[var(--foreground)]/30">--</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </motion.div>
             )}
@@ -454,19 +484,27 @@ export default function VerifyEmailPage() {
               </div>
             </div>
 
+            {/* Bottom 4 stat cards — colored icon circles matching the target design
+                (purple=checks, green=time, blue=accuracy, green=safe-to-send) */}
             <div className="grid grid-cols-2 gap-3">
               <div className="card flex flex-col items-center justify-center py-5">
-                <Layers className="h-5 w-5 text-[var(--primary)] mb-2" />
+                <div className="p-2 rounded-full bg-primary/10 mb-2">
+                  <Layers className="h-5 w-5 text-primary" />
+                </div>
                 <p className="text-xl font-bold text-[var(--foreground)]">7</p>
                 <p className="text-xs text-[var(--foreground)]/50 text-center">Checks Performed</p>
               </div>
               <div className="card flex flex-col items-center justify-center py-5">
-                <Timer className="h-5 w-5 text-[var(--primary)] mb-2" />
+                <div className="p-2 rounded-full bg-success/10 mb-2">
+                  <Timer className="h-5 w-5 text-success" />
+                </div>
                 <p className="text-xl font-bold text-[var(--foreground)]">{avgSeconds ? `${avgSeconds}s` : '<2s'}</p>
                 <p className="text-xs text-[var(--foreground)]/50 text-center">Avg Check Time</p>
               </div>
               <div className="card flex flex-col items-center justify-center py-5">
-                <ShieldCheck className="h-5 w-5 text-[var(--primary)] mb-2" />
+                <div className="p-2 rounded-full bg-info/10 mb-2">
+                  <ShieldCheck className="h-5 w-5 text-info" />
+                </div>
                 <p className="text-xl font-bold text-[var(--foreground)]">{statsData?.trust_score != null ? `${statsData.trust_score}%` : '--'}</p>
                 <p className="text-xs text-[var(--foreground)]/50 text-center">Accuracy Rate</p>
               </div>
