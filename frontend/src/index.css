@@ -22,11 +22,11 @@
 }
 
 .dark {
-  --background: #0F172A;
+  --background: #060419;
   --foreground: #F8FAFC;
   --card: #1E293B;
   --primary: #6366F1;
-  --secondary: #1E293B;
+  --secondary: #060419;
   --accent: #22C55E;
   --muted: #1E293B;
   --success: #10B981;

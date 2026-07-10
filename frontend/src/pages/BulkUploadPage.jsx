@@ -10,8 +10,8 @@ import {
 import { bulkUpload, getJobStatus, exportJobResults, listJobs, deleteJob } from '@/services/api';
 import StatusBadge from '@/components/ui/StatusBadge';
 import Button from '@/components/ui/Button';
+import { calculateJobStats, getStatusOrder, isJobActive } from '@/utils/jobUtils';
 
-const statusOrder = { pending: 0, processing: 1, completed: 2, failed: 3 };
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const DATE_FILTERS = [
   { key: 'all', label: 'All' },
@@ -84,6 +84,11 @@ const matchesDateFilter = (job, filter) => {
   return true;
 };
 
+// Helper to validate job status
+const isValidStatus = (status) => {
+  return ['pending', 'processing', 'completed', 'failed'].includes(status);
+};
+
 // Extract reusable components for better organization
 
 const FileUploadZone = ({ onDragEnter, onDragLeave, onDragOver, onDrop, dragActive, onFileSelect, fileInputRef }) => (
@@ -150,14 +155,30 @@ const FileInfoDisplay = ({ selectedFile, onRemoveFile, onUpload, uploadPending }
   );
 };
 
+// Reusable progress bar component
+const JobProgressBar = ({ progressPct, isActive }) => {
+  if (!isActive) return null;
+
+  return (
+    <div className="mt-2 max-w-md">
+      <div className="flex items-center justify-between text-xs text-[var(--foreground)]/50 mb-1">
+        <span>Processed: <span className="text-[var(--foreground)] font-medium">{progressPct}%</span></span>
+      </div>
+      <div className="h-2 bg-[var(--muted)] rounded-full overflow-hidden">
+        <motion.div
+          initial={{ width: 0 }}
+          animate={{ width: `${progressPct}%` }}
+          transition={{ duration: 0.4, ease: 'easeOut' }}
+          className="h-full rounded-full bg-[var(--primary)]"
+        />
+      </div>
+    </div>
+  );
+};
+
 const JobStats = ({ job }) => {
-  const safeCount = job.safe ?? job.verified ?? 0;
-  const riskyCount = job.risky ?? 0;
-  const unsafeCount = job.unsafe ?? job.invalid ?? 0;
-  const totalCount = job.total ?? 0;
-  const processedCount = job.processed ?? 0;
-  const progressPct = Math.min(100, Math.max(0, job.progress_percent ?? 0));
-  const isActive = job.status === 'pending' || job.status === 'processing';
+  const { safeCount, riskyCount, unsafeCount, totalCount, processedCount, progressPct } = calculateJobStats(job);
+  const isActive = isJobActive(job);
 
   return (
     <div className="flex items-center gap-4 mt-1 text-sm text-[var(--foreground)]/50 flex-wrap">
@@ -181,11 +202,12 @@ const JobStats = ({ job }) => {
 // (previously this duplicated it AND referenced an undefined `expandedJob`
 // variable, since this component never received it as a prop).
 const JobActions = ({ job, onRetry, onDelete }) => {
-  const progressPct = Math.min(100, Math.max(0, job.progress_percent ?? 0));
+  const { progressPct } = calculateJobStats(job);
+  const isProcessing = job.status === 'processing';
 
   return (
     <div className="flex items-center gap-2 flex-shrink-0">
-      {job.status === 'processing' && (
+      {isProcessing && (
         <div className="inline-flex items-center gap-2 rounded-full bg-info/10 border border-info/20 px-3 py-1.5">
           <Loader2 className="h-4 w-4 animate-spin text-info" />
           <span className="text-sm font-medium text-info">{progressPct}%</span>
@@ -220,13 +242,8 @@ const JobActions = ({ job, onRetry, onDelete }) => {
 };
 
 const JobDetails = ({ job, expandedJob, onToggleExpand, formatDateIST }) => {
-  const isActive = job.status === 'pending' || job.status === 'processing';
-  const safeCount = job.safe ?? job.verified ?? 0;
-  const riskyCount = job.risky ?? 0;
-  const unsafeCount = job.unsafe ?? job.invalid ?? 0;
-  const totalCount = job.total ?? 0;
-  const processedCount = job.processed ?? 0;
-  const progressPct = Math.min(100, Math.max(0, job.progress_percent ?? 0));
+  const { safeCount, riskyCount, unsafeCount, totalCount, processedCount, progressPct } = calculateJobStats(job);
+  const isActive = isJobActive(job);
 
   if (expandedJob !== job.job_id) return null;
 
@@ -372,8 +389,8 @@ export default function BulkUploadPage() {
         progress_percent: 0,
       };
       setSelectedFile(null);
-      setJobs((prev) => [newJob, ...(Array.isArray(prev) ? prev : [])]);
-      setPolling((prev) => ({ ...prev, [newJob.job_id]: true }));
+      setJobs(prev => [newJob, ...prev]);
+      setPolling(prev => ({ ...prev, [newJob.job_id]: true }));
       queryClient.invalidateQueries({ queryKey: ['jobs'] });
       toast.success('File uploaded successfully!');
     },
@@ -388,24 +405,56 @@ export default function BulkUploadPage() {
   const pollJob = useCallback(async (jobId) => {
     try {
       const data = await getJobStatus(jobId);
-      setJobs((prev) =>
-        (Array.isArray(prev) ? prev : []).map((job) => (job.job_id === jobId ? { ...job, ...data } : job))
+      setJobs(prev =>
+        prev.map(job => {
+          if (job.job_id !== jobId) return job;
+
+          // Start with the existing job
+          let updatedJob = { ...job };
+
+          // Update status only if backend returns a valid status
+          if (data.status !== undefined && data.status !== null && isValidStatus(data.status)) {
+            updatedJob.status = data.status;
+          }
+          // If backend returns invalid status, preserve the existing status
+
+          // Update created_at only if backend returns a valid date string
+          if (data.created_at !== undefined && data.created_at !== null) {
+            const testDate = new Date(data.created_at);
+            if (!isNaN(testDate.getTime())) {
+              updatedJob.created_at = data.created_at;
+            }
+            // If backend returns invalid date, preserve the existing created_at
+          }
+
+          // Update other fields from backend response (excluding status and created_at which we handled specially)
+          const { status, created_at, ...otherData } = data;
+          Object.keys(otherData).forEach(key => {
+            // Only update if the value is not undefined or null
+            if (otherData[key] !== undefined && otherData[key] !== null) {
+              updatedJob[key] = otherData[key];
+            }
+          });
+
+          return updatedJob;
+        })
       );
+
       if (data.status === 'completed' || data.status === 'failed') {
-        setPolling((prev) => ({ ...prev, [jobId]: false }));
+        setPolling(prev => ({ ...prev, [jobId]: false }));
         queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
       }
     } catch (err) {
       console.error('Polling error for job:', jobId, err);
-      // Mark job as failed if polling fails consistently
-      setJobs((prev) =>
-        (Array.isArray(prev) ? prev : []).map((job) =>
+      // Mark job as failed if polling fails consistently, preserving error info
+      setJobs(prev =>
+        prev.map(job =>
           job.job_id === jobId && job.status !== 'failed'
-            ? { ...job, status: 'failed', error: 'Failed to update status' }
+            ? { ...job, status: 'failed', error: err.message || 'Failed to update status' }
             : job
         )
       );
-      setPolling((prev) => ({ ...prev, [jobId]: false }));
+      setPolling(prev => ({ ...prev, [jobId]: false }));
     }
   }, [queryClient]);
 
@@ -464,15 +513,15 @@ export default function BulkUploadPage() {
   }, []);
 
   const handleRetry = useCallback((jobId) => {
-    setPolling((prev) => ({ ...prev, [jobId]: true }));
+    setPolling(prev => ({ ...prev, [jobId]: true }));
   }, []);
 
   const handleDelete = useCallback(async (jobId) => {
     if (!window.confirm('Delete this upload permanently? This removes the job, its email records, and the uploaded file.')) return;
     try {
       await deleteJob(jobId);
-      setJobs((prev) => (Array.isArray(prev) ? prev : []).filter((job) => job.job_id !== jobId));
-      setPolling((prev) => {
+      setJobs(prev => prev.filter(job => job.job_id !== jobId));
+      setPolling(prev => {
         const next = { ...prev };
         delete next[jobId];
         return next;
@@ -489,7 +538,7 @@ export default function BulkUploadPage() {
     if (jobs.length === 0) return;
     if (!window.confirm(`Permanently delete all ${jobs.length} uploads? This cannot be undone.`)) return;
     try {
-      await Promise.all(jobs.map((job) => deleteJob(job.job_id)));
+      await Promise.all(jobs.map(job => deleteJob(job.job_id)));
       setJobs([]);
       setPolling({});
       queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
@@ -497,16 +546,12 @@ export default function BulkUploadPage() {
     } catch (err) {
       console.error('Failed to clear all uploads:', err);
       toast.error('Failed to clear uploads');
-      try {
-        setJobs(normalizeJobsList(await listJobs()));
-      } catch (reloadErr) {
-        console.error(reloadErr);
-      }
+      // Reset to current state on error to prevent infinite retry loops
     }
   }, [jobs, queryClient]);
 
   const handleToggleExpand = useCallback((jobId) => {
-    setExpandedJob((prev) => (prev === jobId ? null : jobId));
+    setExpandedJob(prev => (prev === jobId ? null : jobId));
   }, []);
 
   const getStatusIcon = useCallback((status) => {
@@ -522,10 +567,10 @@ export default function BulkUploadPage() {
   const visibleJobs = useMemo(() => {
     const jobsArray = Array.isArray(jobs) ? jobs : [];
     return jobsArray
-      .filter((job) => matchesDateFilter(job, dateFilter))
+      .filter(job => matchesDateFilter(job, dateFilter))
       .sort((a, b) => {
-        const statusA = statusOrder[a.status] ?? 99;
-        const statusB = statusOrder[b.status] ?? 99;
+        const statusA = getStatusOrder()[a.status] ?? 99;
+        const statusB = getStatusOrder()[b.status] ?? 99;
         if (statusA !== statusB) return statusA - statusB;
         return new Date(b.created_at) - new Date(a.created_at);
       });
@@ -604,76 +649,60 @@ export default function BulkUploadPage() {
           </div>
         ) : (
           <div className="space-y-3">
-            {visibleJobs.map((job) => {
-              const processedCount = job.processed ?? 0;
-              const totalCount = job.total ?? 0;
-              const progressPct = Math.min(100, Math.max(0, job.progress_percent ?? 0));
+            {visibleJobs.map((job) => (
+              <motion.div key={job.job_id} layout initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className="card group">
+                <button
+                  onClick={() => handleToggleExpand(job.job_id)}
+                  className="w-full flex items-center gap-4 p-4 text-left hover:bg-[var(--muted)]/30 transition-colors"
+                  aria-expanded={expandedJob === job.job_id}
+                >
+                  <div className={`p-3 rounded-xl flex-shrink-0 min-w-[48px] ${job.status === 'completed' ? 'bg-success/20 text-success' :
+                      job.status === 'failed' ? 'bg-error/20 text-error' :
+                        job.status === 'processing' ? 'bg-info/20 text-info' : 'bg-warning/20 text-warning'
+                    }`}>
+                    {getStatusIcon(job.status)}
+                  </div>
 
-              return (
-                <motion.div key={job.job_id} layout initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className="card group">
-                  <button
-                    onClick={() => handleToggleExpand(job.job_id)}
-                    className="w-full flex items-center gap-4 p-4 text-left hover:bg-[var(--muted)]/30 transition-colors"
-                    aria-expanded={expandedJob === job.job_id}
-                  >
-                    <div className={`p-3 rounded-xl flex-shrink-0 min-w-[48px] ${job.status === 'completed' ? 'bg-success/20 text-success' :
-                        job.status === 'failed' ? 'bg-error/20 text-error' :
-                          job.status === 'processing' ? 'bg-info/20 text-info' : 'bg-warning/20 text-warning'
-                      }`}>
-                      {getStatusIcon(job.status)}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-3 flex-wrap min-w-0">
+                      <p className="font-medium text-[var(--foreground)] max-w-sm truncate">
+                        {job.file_name || `Job ${job.job_id.slice(0, 8)}...`}
+                      </p>
+                      <StatusBadge status={job.status} />
+                      <span className="text-sm text-[var(--foreground)]/50 font-mono">{job.job_id.slice(0, 8)}...</span>
+                      <span className="text-sm text-[var(--foreground)]/50">{formatDateIST(job.created_at)}</span>
                     </div>
 
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-3 flex-wrap min-w-0">
-                        <p className="font-medium text-[var(--foreground)] max-w-sm truncate">
-                          {job.file_name || `Job ${job.job_id.slice(0, 8)}...`}
-                        </p>
-                        <StatusBadge status={job.status} />
-                        <span className="text-sm text-[var(--foreground)]/50 font-mono">{job.job_id.slice(0, 8)}...</span>
-                        <span className="text-sm text-[var(--foreground)]/50">{formatDateIST(job.created_at)}</span>
-                      </div>
+                    <JobStats job={job} />
 
-                      <JobStats job={job} />
-
-                      {(job.status === 'pending' || job.status === 'processing') && (
-                        <div className="mt-2 max-w-md">
-                          <div className="flex items-center justify-between text-xs text-[var(--foreground)]/50 mb-1">
-                            <span>{processedCount} / {totalCount} processed</span>
-                            <span className="font-medium text-[var(--foreground)]">{progressPct}%</span>
-                          </div>
-                          <div className="h-2 bg-[var(--muted)] rounded-full overflow-hidden">
-                            <motion.div
-                              initial={{ width: 0 }}
-                              animate={{ width: `${progressPct}%` }}
-                              transition={{ duration: 0.4, ease: 'easeOut' }}
-                              className="h-full rounded-full bg-[var(--primary)]"
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <JobActions
-                        job={job}
-                        onRetry={handleRetry}
-                        onDelete={handleDelete}
+                    {isJobActive(job) && (
+                      <JobProgressBar
+                        progressPct={calculateJobStats(job).progressPct}
+                        isActive={true}
                       />
-                      <motion.div animate={{ rotate: expandedJob === job.job_id ? 180 : 0 }} transition={{ duration: 0.2 }} className="text-[var(--foreground)]/50">
-                        <ChevronDown className="h-5 w-5" />
-                      </motion.div>
-                    </div>
-                  </button>
+                    )}
+                  </div>
 
-                  <JobDetails
-                    job={job}
-                    expandedJob={expandedJob}
-                    onToggleExpand={handleToggleExpand}
-                    formatDateIST={formatDateIST}
-                  />
-                </motion.div>
-              );
-            })}
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <JobActions
+                      job={job}
+                      onRetry={handleRetry}
+                      onDelete={handleDelete}
+                    />
+                    <motion.div animate={{ rotate: expandedJob === job.job_id ? 180 : 0 }} transition={{ duration: 0.2 }} className="text-[var(--foreground)]/50">
+                      <ChevronDown className="h-5 w-5" />
+                    </motion.div>
+                  </div>
+                </button>
+
+                <JobDetails
+                  job={job}
+                  expandedJob={expandedJob}
+                  onToggleExpand={handleToggleExpand}
+                  formatDateIST={formatDateIST}
+                />
+              </motion.div>
+            ))}
           </div>
         )}
       </motion.div>
