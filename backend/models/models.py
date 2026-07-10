@@ -117,3 +117,22 @@ class Job(Base):
     )
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class ApiKey(Base):
+    """
+    API keys for the external developer platform (/api/external/v1/*).
+    We store only the SHA-256 hash of the key — never the plaintext.
+    Keys are created/managed via scripts/manage_api_keys.py (no admin UI yet).
+    """
+    __tablename__ = "api_keys"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    key_hash = Column(String(64), unique=True, nullable=False, index=True)
+    key_prefix = Column(String(20), nullable=False, index=True)
+    name = Column(String(255), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    rate_limit_per_min = Column(Integer, default=60, nullable=False)
+    bulk_limit_per_hour = Column(Integer, default=5, nullable=False)
+    last_used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())

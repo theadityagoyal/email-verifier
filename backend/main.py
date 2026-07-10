@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 import time
 
 from api.v1.router import api_router
+from api.external.v1.router import api_external_router
 from utils.config import settings
 from utils.logging import configure_logging, get_logger
 from utils.executor import get_executor, shutdown_executor, init_executor
@@ -64,6 +65,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(api_router)
+app.include_router(api_external_router)
 
 
 @app.get("/health", tags=["Health"])
