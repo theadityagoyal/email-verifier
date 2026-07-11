@@ -21,6 +21,7 @@ from models.database import get_db
 from models.models import Job, Email, JobStatus, ApiKey
 from api.external.v1.dependencies import rate_limit_bulk, get_api_key
 from utils.email_utils import detect_email_column
+from utils.file_utils import read_upload_file, FileReadError, SUPPORTED_EXTENSIONS, is_supported_filename
 from utils.logging import get_logger
 from tasks.bulk_processor import process_bulk_job_sync
 
@@ -28,39 +29,18 @@ router = APIRouter(tags=["External API - Bulk"])
 logger = get_logger(__name__)
 
 MAX_FILE_SIZE_MB = 50
-SUPPORTED_EXTENSIONS = [".csv", ".xlsx", ".xls"]
 UPLOAD_BASE_DIR = "/tmp/uploads"
 
 
 def _read_file(content: bytes, filename: str) -> pd.DataFrame:
     """Read CSV or Excel bytes into a DataFrame, raising HTTPException on failure."""
-    if filename.endswith(".csv"):
-        for encoding in ["utf-8", "latin-1", "cp1252"]:
-            try:
-                return pd.read_csv(io.BytesIO(content), encoding=encoding)
-            except UnicodeDecodeError:
-                continue
-            except Exception as e:
-                raise HTTPException(
-                    status_code=400,
-                    detail={"code": "file_read_error", "message": f"CSV parsing failed: {str(e)}"},
-                )
+    try:
+        return read_upload_file(content, filename)
+    except FileReadError as e:
         raise HTTPException(
             status_code=400,
-            detail={"code": "file_read_error", "message": "Could not decode CSV with common encodings"},
+            detail={"code": "file_read_error", "message": str(e)},
         )
-    elif filename.endswith((".xlsx", ".xls")):
-        try:
-            return pd.read_excel(io.BytesIO(content))
-        except Exception as e:
-            raise HTTPException(
-                status_code=400,
-                detail={"code": "file_read_error", "message": f"Excel parsing failed: {str(e)}"},
-            )
-    raise HTTPException(
-        status_code=400,
-        detail={"code": "unsupported_format", "message": f"Only {', '.join(SUPPORTED_EXTENSIONS)} accepted"},
-    )
 
 
 @router.post("/bulk", status_code=status.HTTP_202_ACCEPTED)
@@ -72,7 +52,7 @@ async def external_bulk_upload(
 ):
     """Upload a CSV/Excel file for bulk email verification. Returns a job_id to poll."""
     filename = (file.filename or "").lower()
-    if not any(filename.endswith(ext) for ext in SUPPORTED_EXTENSIONS):
+    if not is_supported_filename(filename):
         raise HTTPException(
             status_code=400,
             detail={"code": "unsupported_format", "message": f"Only {', '.join(SUPPORTED_EXTENSIONS)} files accepted"},
@@ -108,7 +88,7 @@ async def external_bulk_upload(
             f.write(content)
         s3_key = f"local:{job_id}/{file.filename}"
     except OSError as e:
-        logger.error("external_bulk_save_failed", job_id=job_id, error=str(e))
+        logger.error("external_bulk_save_failed", job_id=job_id, error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail={"code": "storage_error", "message": "Failed to save uploaded file"})
 
     job = Job(

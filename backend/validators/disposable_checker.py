@@ -7,6 +7,7 @@ List is cached in memory and refreshed every 24 hours.
 import threading
 import time
 import urllib.request
+from typing import Iterator
 from utils.config import settings
 from utils.logging import get_logger
 
@@ -197,6 +198,21 @@ def _init_background() -> None:
 _init_background()
 
 
+def _domain_and_parents(domain: str) -> Iterator[str]:
+    """
+    Yield the domain itself and each of its parent domains, e.g. for
+    "mail.xyz.mailinator.com" yields:
+        "mail.xyz.mailinator.com", "xyz.mailinator.com", "mailinator.com"
+    (stops before the bare TLD). This lets a listed disposable domain like
+    "mailinator.com" also catch subdomains such as "xyz.mailinator.com" that
+    a service might use for per-user inboxes, which an exact-match check
+    alone would miss.
+    """
+    parts = domain.split(".")
+    for i in range(len(parts) - 1):
+        yield ".".join(parts[i:])
+
+
 def get_disposable_stats() -> dict:
     """
     Get statistics about the disposable domain list.
@@ -238,18 +254,28 @@ def refresh_disposable_list() -> bool:
 
 def is_disposable(domain: str) -> bool:
     """
-    Check if domain is disposable.
+    Check if domain (or any of its parent domains) is disposable.
     Uses live fetched list (100,000+ domains) + fallback hardcoded list.
+    Matches subdomains of known disposable domains too, e.g. checking
+    "xyz.mailinator.com" will match because "mailinator.com" is listed.
     """
     domain = domain.lower().strip()
+    if not domain:
+        return False
 
-    # Always check fallback first (instant, no I/O)
+    # Fast path: exact match against fallback (instant, no I/O)
     if domain in FALLBACK_DOMAINS:
         return True
 
-    # Check live list (fetched from internet)
     _refresh_if_needed()
     if domain in _live_domains:
         return True
+
+    # Subdomain match: walk up the domain hierarchy
+    for candidate in _domain_and_parents(domain):
+        if candidate == domain:
+            continue  # already checked above
+        if candidate in FALLBACK_DOMAINS or candidate in _live_domains:
+            return True
 
     return False

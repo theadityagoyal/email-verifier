@@ -21,6 +21,9 @@ DNS_SERVERS: list[str] = getattr(settings, 'DNS_SERVERS', [
     "1.0.0.1",        # Cloudflare Secondary
 ])
 DNS_TIMEOUT: float = getattr(settings, 'DNS_TIMEOUT', 1.5)
+# Used only when the fast lookup times out on every server/record type —
+# gives DNS one more, more patient, chance before we fall back to "unknown".
+DNS_RETRY_TIMEOUT: float = DNS_TIMEOUT * 3
 
 
 def _make_resolver(timeout: float = DNS_TIMEOUT) -> dns.resolver.Resolver:
@@ -39,8 +42,9 @@ def _make_resolver(timeout: float = DNS_TIMEOUT) -> dns.resolver.Resolver:
     r.lifetime = timeout * 2
     return r
 
-# Global resolver instance
+# Global resolver instances
 _resolver = _make_resolver()
+_retry_resolver = _make_resolver(timeout=DNS_RETRY_TIMEOUT)
 
 
 def check_domain_exists(domain: str) -> bool:
@@ -54,13 +58,20 @@ def check_domain_exists(domain: str) -> bool:
         bool: True if domain has A or MX records, False otherwise
 
     Note:
-        Returns False immediately for NXDOMAIN (domain doesn't exist)
-        Continues on other errors (timeout, no answer, etc.) trying both record types
+        Returns False immediately for NXDOMAIN (domain definitively doesn't exist).
+        On a network-level timeout across all record types/servers, we retry once
+        with a more patient resolver before giving up. If DNS is still unreachable
+        after the retry, we assume the domain exists (benefit of the doubt) rather
+        than silently tanking a legitimate recipient's score because of a transient
+        network hiccup — a false "doesn't exist" is far more costly to a marketing
+        sender than a false "exists".
     """
     domain = domain.lower().strip()
     if not domain or "." not in domain:
         logger.debug("dns_invalid_domain", domain=domain)
         return False
+
+    saw_timeout = False
 
     for rtype in ("A", "MX"):
         try:
@@ -70,9 +81,28 @@ def check_domain_exists(domain: str) -> bool:
         except dns.resolver.NXDOMAIN:
             logger.debug("dns_domain_not_found", domain=domain)
             return False
-        except (dns.resolver.NoAnswer, dns.exception.Timeout, Exception) as exc:
+        except dns.exception.Timeout:
+            saw_timeout = True
+            continue
+        except (dns.resolver.NoAnswer, Exception) as exc:
             logger.debug("dns_query_failed", domain=domain, record_type=rtype, error=str(exc))
             continue
+
+    if saw_timeout:
+        for rtype in ("A", "MX"):
+            try:
+                _retry_resolver.resolve(domain, rtype)
+                logger.debug("dns_domain_found_on_retry", domain=domain, record_type=rtype)
+                return True
+            except dns.resolver.NXDOMAIN:
+                logger.debug("dns_domain_not_found_on_retry", domain=domain)
+                return False
+            except Exception as exc:
+                logger.debug("dns_retry_query_failed", domain=domain, record_type=rtype, error=str(exc))
+                continue
+
+        logger.warning("dns_persistent_timeout_assumed_exists", domain=domain)
+        return True
 
     logger.debug("dns_no_records_found", domain=domain)
     return False
@@ -88,12 +118,14 @@ def get_mx_records(domain: str) -> list[str]:
     Returns:
         list[str]: List of MX hostnames sorted by priority (lowest first).
                   Falls back to [domain] if A record exists but no MX records.
-                  Returns empty list if domain doesn't exist.
+                  Returns empty list if domain doesn't exist / has no records.
     """
     domain = domain.lower().strip()
     if not domain or "." not in domain:
         logger.debug("dns_invalid_domain_for_mx", domain=domain)
         return []
+
+    mx_timed_out = False
 
     try:
         answers = _resolver.resolve(domain, "MX")
@@ -106,9 +138,24 @@ def get_mx_records(domain: str) -> list[str]:
     except dns.resolver.NXDOMAIN:
         logger.debug("dns_domain_not_found_for_mx", domain=domain)
         return []
-    except (dns.resolver.NoAnswer, dns.exception.Timeout, Exception) as exc:
+    except dns.exception.Timeout:
+        mx_timed_out = True
+    except (dns.resolver.NoAnswer, Exception) as exc:
         logger.debug("dns_mx_query_failed", domain=domain, error=str(exc))
-        pass
+
+    if mx_timed_out:
+        try:
+            answers = _retry_resolver.resolve(domain, "MX")
+            records = sorted(answers, key=lambda r: r.preference)
+            mx_list = [str(r.exchange).rstrip(".") for r in records]
+            mx_list = [mx for mx in mx_list if mx and "." in mx]
+            if mx_list:
+                logger.debug("dns_mx_records_found_on_retry", domain=domain, count=len(mx_list))
+                return mx_list
+        except dns.resolver.NXDOMAIN:
+            return []
+        except Exception as exc:
+            logger.debug("dns_mx_retry_query_failed", domain=domain, error=str(exc))
 
     # Fallback to A record if no MX records found
     try:
@@ -117,7 +164,6 @@ def get_mx_records(domain: str) -> list[str]:
         return [domain]
     except Exception as exc:
         logger.debug("dns_a_record_failed_for_mx_fallback", domain=domain, error=str(exc))
-        pass
 
     logger.debug("dns_no_mx_or_a_records", domain=domain)
     return []

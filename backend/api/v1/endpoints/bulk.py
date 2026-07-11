@@ -1,28 +1,23 @@
 import uuid
-import io
 import os
-from typing import List
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, delete
+import io
 import pandas as pd
-from pandas.errors import ParserError
 
 from models.database import get_db
 from models.models import Job, Email, JobStatus
 from schemas.schemas import JobStatusResponse, BulkUploadResponse
-from utils.config import settings
 from utils.logging import get_logger
 from utils.email_utils import detect_email_column
+from utils.file_utils import read_upload_file, FileReadError, SUPPORTED_EXTENSIONS, is_supported_filename
 
 
 # Constants
 MAX_FILE_SIZE_MB = 50
-SUPPORTED_EXTENSIONS = [".csv", ".xlsx", ".xls"]
 UPLOAD_BASE_DIR = "/tmp/uploads"
-
 
 
 # Import the sync processor
@@ -36,40 +31,12 @@ logger = get_logger(__name__)
 
 
 def _read_file(content: bytes, filename: str) -> pd.DataFrame:
-    """Read CSV or Excel file into DataFrame."""
+    """Read CSV or Excel file into DataFrame (delegates to the shared reader)."""
     try:
-        if filename.endswith(".csv"):
-            for encoding in ["utf-8", "latin-1", "cp1252"]:
-                try:
-                    df = pd.read_csv(io.BytesIO(content), encoding=encoding)
-                    return df
-                except UnicodeDecodeError:
-                    continue
-                except ParserError as e:
-                    logger.warning(f"CSV parsing error with encoding {encoding}: {str(e)}")
-                    # Fallback: treat each line as a single column (email)
-                    try:
-                        text = content.decode(encoding, errors="replace")
-                    except UnicodeDecodeError:
-                        text = content.decode("utf-8", errors="replace")
-                    lines = [line.strip() for line in text.splitlines() if line.strip() != ""]
-                    if not lines:
-                        return pd.DataFrame(columns=["email"])
-                    header = lines[0]
-                    data_lines = lines[1:] if "@" not in header or header.lower().startswith("email") else lines
-                    col_name = "email" if header.lower() == "email" else header
-                    df = pd.DataFrame({col_name: data_lines})
-                    return df
-        elif filename.endswith((".xlsx", ".xls")):
-            try:
-                return pd.read_excel(io.BytesIO(content))
-            except Exception as e:
-                logger.error(f"Excel file reading failed: {str(e)}")
-                raise HTTPException(status_code=400, detail=f"Excel file reading failed: {str(e)}")
-        raise ValueError("Unsupported file format")
-    except Exception as exc:
+        return read_upload_file(content, filename)
+    except FileReadError as exc:
         logger.error(f"File read error: {str(exc)}")
-        raise HTTPException(status_code=400, detail=f"File read error: {str(exc)}")
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 def _detect_email_column(df: pd.DataFrame) -> str:
@@ -90,7 +57,7 @@ async def bulk_upload(
     """Upload CSV or Excel file for bulk email verification."""
     try:
         filename = file.filename.lower()
-        if not any(filename.endswith(ext) for ext in SUPPORTED_EXTENSIONS):
+        if not is_supported_filename(filename):
             raise HTTPException(status_code=400, detail=f"Only {', '.join(SUPPORTED_EXTENSIONS)} files accepted.")
 
         content = await file.read()
@@ -160,7 +127,7 @@ async def bulk_upload(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Unexpected error in bulk_upload: {str(e)}")
+        logger.error(f"Unexpected error in bulk_upload: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.get("/jobs")
@@ -178,7 +145,7 @@ async def list_jobs(db: AsyncSession = Depends(get_db)):
 
         return jobs
     except Exception as e:
-        logger.error(f"Error retrieving jobs: {str(e)}")
+        logger.error(f"Error retrieving jobs: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to retrieve jobs: {str(e)}")
 
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
@@ -191,7 +158,7 @@ async def get_job_status(job_id: str, db: AsyncSession = Depends(get_db)):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error retrieving job {job_id}: {str(e)}")
+        logger.error(f"Error retrieving job {job_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to retrieve job: {str(e)}")
 
 
@@ -235,7 +202,7 @@ async def delete_job(
         raise
     except Exception as e:
         await db.rollback()
-        logger.error(f"Error deleting job {job_id}: {str(e)}")
+        logger.error(f"Error deleting job {job_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to delete job: {str(e)}")
 
 @router.get("/jobs/{job_id}/export")
@@ -275,7 +242,6 @@ async def export_job_results(job_id: str, db: AsyncSession = Depends(get_db)):
             original_df = None
             email_col = "email"
 
-        # Fetch verified results from DB (only for this block
         # Fetch verified results from DB (only for this job)
         emails_db = (await db.execute(select(Email).where(Email.job_id == job_id))).scalars().all()
         results_map = {e.email: e for e in emails_db}
@@ -319,5 +285,5 @@ async def export_job_results(job_id: str, db: AsyncSession = Depends(get_db)):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error exporting job results for {job_id}: {str(e)}")
+        logger.error(f"Error exporting job results for {job_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to export job results: {str(e)}")

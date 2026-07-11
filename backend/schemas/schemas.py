@@ -32,6 +32,13 @@ class EmailVerifyResponse(BaseModel):
     username_quality: Optional[str] = None
     username_flags: Optional[list[str]] = None
     verified_at: Optional[datetime]
+    # New, optional (backward compatible — defaults to None for any caller
+    # not yet aware of it). Populated by the verification pipeline with the
+    # real DNS-resolved MX hostnames so the caller can persist them onto
+    # Domain.mx_records. Left as None when the DNS lookup was skipped
+    # entirely (trusted-domain fast path), so we never overwrite a
+    # previously known-good value with a placeholder.
+    mx_records: Optional[List[str]] = None
 
     model_config = {"from_attributes": True}
 

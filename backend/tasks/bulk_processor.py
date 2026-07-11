@@ -2,19 +2,19 @@
 Sync-compatible bulk processor using ThreadPoolExecutor.
 Replaces Celery-based processing for simpler SaaS integration.
 """
-import io
-import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+import asyncio
+import threading
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import pandas as pd
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from models.database import SyncSessionLocal
-from models.models import Email, Domain, Job, EmailStatus, JobStatus
+from models.models import Job, JobStatus
 from services.email_service import verify_email
+from services.domain_service import sync_upsert_email, sync_upsert_domain
 from utils.email_utils import detect_email_column
+from utils.file_utils import read_upload_file, FileReadError
 from utils.logging import get_logger
 from utils.executor import get_executor, init_executor
 
@@ -28,66 +28,43 @@ def _ist_now():
     return datetime.now(IST).replace(tzinfo=None)
 
 
+# ── Thread-local event loop reuse ────────────────────────────────────────────
+# Each ThreadPoolExecutor worker thread is long-lived and processes many
+# emails over its lifetime. Previously every single email verification
+# created a brand-new asyncio event loop via asyncio.new_event_loop() and
+# tore it down immediately after — for a bulk job of thousands of emails
+# across ~20 worker threads, that's thousands of loop create/destroy cycles,
+# a real performance bottleneck. Instead, each thread creates its event loop
+# exactly once (on first use) and reuses it for every subsequent email it
+# processes.
+_thread_local = threading.local()
+
+
+def _get_thread_event_loop() -> asyncio.AbstractEventLoop:
+    loop = getattr(_thread_local, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        _thread_local.loop = loop
+    return loop
+
+
 def verify_single_email_sync(email: str, job_id: str | None = None):
     """Verify a single email synchronously (for thread pool execution)."""
-    import asyncio
-
     db = SyncSessionLocal()
     try:
-        # Run async verify_email in new event loop
-        loop = asyncio.new_event_loop()
-        try:
-            result = loop.run_until_complete(verify_email(email))
-        finally:
-            loop.close()
-
-        existing = db.execute(
-            select(Email).where(Email.email == email)
-        ).scalar_one_or_none()
+        loop = _get_thread_event_loop()
+        result = loop.run_until_complete(verify_email(email))
 
         now = _ist_now()
 
-        if existing:
-            existing.domain = result.domain
-            existing.status = result.status
-            existing.syntax_valid = result.syntax_valid
-            existing.domain_exists = result.domain_exists
-            existing.mx_found = result.mx_found
-            existing.smtp_valid = result.smtp_valid
-            existing.disposable = result.disposable
-            existing.role_based = result.role_based
-            existing.catch_all = result.catch_all
-            existing.score = result.score
-            existing.verified_at = (
-                result.verified_at.replace(tzinfo=None)
-                if result.verified_at
-                else None
-            )
-            existing.updated_at = now
-            existing.job_id = job_id
-        else:
-            db.add(Email(
-                email=email,
-                domain=result.domain,
-                status=result.status,
-                syntax_valid=result.syntax_valid,
-                domain_exists=result.domain_exists,
-                mx_found=result.mx_found,
-                smtp_valid=result.smtp_valid,
-                disposable=result.disposable,
-                role_based=result.role_based,
-                catch_all=result.catch_all,
-                score=result.score,
-                job_id=job_id,
-                verified_at=(
-                    result.verified_at.replace(tzinfo=None)
-                    if result.verified_at
-                    else None
-                ),
-            ))
+        # Atomic upsert — eliminates the check-then-insert race that could
+        # previously raise an unhandled IntegrityError when the same email
+        # appeared more than once across overlapping bulk jobs / concurrent
+        # single-verify requests.
+        sync_upsert_email(db, result, job_id, now)
 
         if result.domain:
-            _update_domain_stats(db, result)
+            sync_upsert_domain(db, result.domain, result.mx_records, now)
 
         if job_id:
             _update_job_counter(db, job_id, result.status)
@@ -97,42 +74,16 @@ def verify_single_email_sync(email: str, job_id: str | None = None):
 
     except Exception as exc:
         db.rollback()
-        logger.error("verify_task_error", email=email, error=str(exc))
+        logger.error("verify_task_error", email=email, error=str(exc), exc_info=True)
         raise
     finally:
         db.close()
 
 
-def _update_domain_stats(db, result) -> None:
-    """Update domain statistics atomically using MySQL ON DUPLICATE KEY UPDATE."""
-    if not result.domain:
-        return
-
-    verified_inc = 1 if result.status in (EmailStatus.verified, EmailStatus.deliverable, EmailStatus.trusted, EmailStatus.probably_valid) else 0
-    invalid_inc = 1 if result.status in (EmailStatus.invalid, EmailStatus.undeliverable) else 0
-    risky_inc = 1 if result.status in (EmailStatus.risky, EmailStatus.unconfirmed, EmailStatus.uncertain) else 0
-
-    sql = text("""
-        INSERT INTO domains (domain, total_emails, verified_count, invalid_count, risky_count, bounce_rate, created_at, updated_at)
-        VALUES (:domain, 1, :verified_inc, :invalid_inc, :risky_inc, 0.0, NOW(), NOW())
-        ON DUPLICATE KEY UPDATE
-            total_emails = total_emails + 1,
-            verified_count = verified_count + :verified_inc,
-            invalid_count = invalid_count + :invalid_inc,
-            risky_count = risky_count + :risky_inc,
-            bounce_rate = ROUND((invalid_count + :invalid_inc) / (total_emails + 1) * 100, 2),
-            updated_at = NOW()
-    """)
-    db.execute(sql, {
-        "domain": result.domain,
-        "verified_inc": verified_inc,
-        "invalid_inc": invalid_inc,
-        "risky_inc": risky_inc,
-    })
-
-
-def _update_job_counter(db, job_id: str, status: EmailStatus) -> None:
+def _update_job_counter(db, job_id: str, status) -> None:
     """Update job counters and progress for a single email verification result."""
+    from models.models import EmailStatus  # local import to avoid unused-import churn elsewhere
+
     job = db.execute(
         select(Job).where(Job.job_id == job_id).with_for_update()
     ).scalar_one_or_none()
@@ -227,37 +178,14 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email") ->
             filepath = f"/tmp/uploads/{job_id_part}/{filename}"
             with open(filepath, "rb") as f:
                 raw = f.read()
-            filename_lower = filename.lower()
+            filename_for_parsing = filename
         else:
             from services.s3_service import download_file_from_s3
             raw = download_file_from_s3(s3_key)
-            filename_lower = job.file_name.lower()
+            filename_for_parsing = job.file_name
 
-        # Read file — CSV or Excel
-        if filename_lower.endswith(".csv"):
-            for encoding in ["utf-8", "latin-1", "cp1252"]:
-                try:
-                    df = pd.read_csv(io.BytesIO(raw), encoding=encoding)
-                    break
-                except UnicodeDecodeError:
-                    continue
-                except Exception:
-                    # Fallback: treat each line as a single column
-                    try:
-                        text = raw.decode(encoding, errors="replace")
-                    except UnicodeDecodeError:
-                        text = raw.decode("utf-8", errors="replace")
-                    lines = [line.strip() for line in text.splitlines() if line.strip() != ""]
-                    if not lines:
-                        df = pd.DataFrame(columns=["email"])
-                        break
-                    header = lines[0]
-                    data_lines = lines[1:] if "@" not in header or header.lower().startswith("email") else lines
-                    col_name = "email" if header.lower() == "email" else header
-                    df = pd.DataFrame({col_name: data_lines})
-                    break
-        else:
-            df = pd.read_excel(io.BytesIO(raw))
+        # Read file — CSV or Excel (shared reader, same logic as the upload endpoints)
+        df = read_upload_file(raw, filename_for_parsing)
 
         # Use provided email_col or auto detect
         if email_col not in df.columns:
@@ -296,6 +224,8 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email") ->
             logger.warning("Executor not initialized, initializing now")
             executor = init_executor()
 
+        from concurrent.futures import as_completed
+
         futures = {executor.submit(verify_single_email_sync, email, job_id): email for email in emails}
 
         for future in as_completed(futures):
@@ -303,7 +233,7 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email") ->
             try:
                 future.result()
             except Exception as e:
-                logger.error("email_verification_failed", email=email, error=str(e))
+                logger.error("email_verification_failed", email=email, error=str(e), exc_info=True)
 
         # Mark job as completed
         job.status = JobStatus.completed
@@ -314,12 +244,20 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email") ->
 
         logger.info("bulk_job_completed", job_id=job_id, total=len(emails))
 
+    except FileReadError as exc:
+        if job:
+            job.status = JobStatus.failed
+            job.error_message = str(exc)
+            job.error_details = {"error": str(exc), "type": "FileReadError"}
+            db.commit()
+        logger.error("bulk_job_file_read_error", job_id=job_id, error=str(exc), exc_info=True)
     except Exception as exc:
         if job:
             job.status = JobStatus.failed
             job.error_message = str(exc)
+            job.error_details = {"error": str(exc), "type": type(exc).__name__}
             db.commit()
-        logger.error("bulk_job_error", job_id=job_id, error=str(exc))
+        logger.error("bulk_job_error", job_id=job_id, error=str(exc), exc_info=True)
         raise
     finally:
         db.close()

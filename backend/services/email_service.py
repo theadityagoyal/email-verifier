@@ -49,6 +49,13 @@ async def verify_email(email: str) -> EmailVerifyResponse:
         logger.info("disposable_checked", email=email, disposable=disposable)
 
         # 4 & 5. Trusted domain = DNS skip, direct verified
+        # persist_mx_records tracks what should be written to Domain.mx_records:
+        # for the trusted-domain fast path we never actually queried DNS, so we
+        # deliberately leave it as None (meaning "don't touch the stored value")
+        # instead of writing the synthetic "mx.<domain>" placeholder used only
+        # for the (skipped) SMTP probe below.
+        persist_mx_records: Optional[List[str]] = None
+
         if domain.lower() in TRUSTED_DOMAINS:
             domain_exists = True
             mx_found = True
@@ -65,6 +72,7 @@ async def verify_email(email: str) -> EmailVerifyResponse:
             if domain_exists:
                 mx_records = await async_get_mx_records(domain)
                 mx_found = len(mx_records) > 0
+                persist_mx_records = mx_records  # real DNS result, always safe to persist (even if empty)
             logger.info("mx_checked", email=email, mx_records=mx_records, mx_found=mx_found)
 
         # 6. SMTP verification (skip for trusted domains, disposables, or when no MX)
@@ -114,6 +122,7 @@ async def verify_email(email: str) -> EmailVerifyResponse:
             status=status,
             username_quality=username_analysis.get("verdict"),
             username_flags=username_analysis.get("flags"),
+            mx_records=persist_mx_records,
         )
 
     except Exception as e:
@@ -136,6 +145,7 @@ def _build_response(
     status=None,
     username_quality: str | None = None,
     username_flags: Optional[List[str]] = None,
+    mx_records: Optional[List[str]] = None,
 ) -> EmailVerifyResponse:
     """Build a successful verification response."""
     from models.models import EmailStatus
@@ -160,6 +170,7 @@ def _build_response(
         username_quality=username_quality,
         username_flags=username_flags,
         verified_at=verified_at,
+        mx_records=mx_records,
     )
 
 
@@ -184,6 +195,7 @@ def _build_invalid_response(
         username_quality=None,
         username_flags=None,
         verified_at=None,
+        mx_records=None,
     )
 
 
@@ -207,4 +219,5 @@ def _build_error_response(
         username_quality=None,
         username_flags=None,
         verified_at=None,
+        mx_records=None,
     )

@@ -46,8 +46,13 @@ async def get_api_key(
             detail={"code": "revoked_api_key", "message": "This API key has been revoked"},
         )
 
+    # NOTE: no db.commit() here — FastAPI's Depends() caches this dependency
+    # per-request, so this same AsyncSession is shared with the endpoint
+    # handler and its own db.execute() calls. get_db() commits the whole
+    # request's work in one transaction when the request finishes
+    # successfully, so committing here too was just a redundant extra
+    # round-trip to MySQL on every single external API call.
     api_key.last_used_at = datetime.now(timezone.utc).replace(tzinfo=None)
-    await db.commit()
 
     return api_key
 

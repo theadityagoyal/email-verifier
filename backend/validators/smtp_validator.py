@@ -9,12 +9,17 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Configuration from settings with fallbacks
-SENDER_EMAIL = getattr(settings, 'SMTP_SENDER_EMAIL', "verify@emailchecker.com")
-HELO_DOMAIN = getattr(settings, 'SMTP_HELO_DOMAIN', "emailchecker.com")
-SMTP_TIMEOUT = getattr(settings, 'SMTP_TIMEOUT', 10)
-SMTP_RETRIES = getattr(settings, 'SMTP_RETRIES', 2)
-SMTP_MAX_MX_TO_TRY = getattr(settings, 'SMTP_MAX_MX_TO_TRY', 3)
+# These fields are always defined on Settings (utils/config.py) with real
+# defaults, so we read them directly rather than via getattr(..., fallback)
+# — the old getattr fallbacks silently disagreed with config.py's actual
+# defaults (e.g. SMTP_TIMEOUT fallback=10 vs config default=3,
+# SMTP_MAX_MX_TO_TRY fallback=3 vs config default=2) and were dead code
+# that could never trigger, just confusing to read.
+SENDER_EMAIL = settings.SMTP_SENDER_EMAIL
+HELO_DOMAIN = settings.SMTP_HELO_DOMAIN
+SMTP_TIMEOUT = settings.SMTP_TIMEOUT
+SMTP_RETRIES = settings.SMTP_RETRIES
+SMTP_MAX_MX_TO_TRY = settings.SMTP_MAX_MX_TO_TRY
 
 
 def _is_permanent_error(smtp_code: int) -> bool:

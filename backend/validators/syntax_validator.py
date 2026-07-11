@@ -50,10 +50,25 @@ ROLE_BASED_PREFIXES = {
     "helpdesk1", "helpdesk2",
 }
 
+# Minimum prefix length considered for the "prefix + trailing digits" partial
+# match rule (e.g. "admin2", "support3"). Prefixes shorter than this
+# (like "it", "hr", "pr", "ceo") are extremely common as real people's
+# initials/short names — "pr7@company.com" or "hr1@startup.com" are
+# plausible individual mailboxes, not role accounts, so we don't apply the
+# digit-suffix heuristic to them. Exact matches (local == prefix) are
+# unaffected by this and still caught above.
+MIN_PREFIX_LEN_FOR_SUFFIX_MATCH = 4
+# Cap how many trailing digits we'll accept for the heuristic — "support1",
+# "admin99" look like role accounts; a long numeric tail is more likely a
+# coincidental match against a longer, unrelated username.
+MAX_SUFFIX_DIGITS_FOR_MATCH = 3
+
 # Allowed special characters in local part
 ALLOWED_LOCAL_CHARS = re.compile(r'^[a-zA-Z0-9._%+\-]+$')
 
 # NOT allowed - quotes, brackets, special symbols
+# (covers both the local part and domain checks below; also implicitly
+# covers the whole email string since local + "@" + domain == email)
 INVALID_CHARS = re.compile(r'["\'\`\[\]\(\)\{\}\\\/<>:;,\s\!\#\$\^\&\*\=\?\|~]')
 
 # Emoji detection
@@ -74,7 +89,6 @@ def validate_syntax(email: str) -> tuple[bool, str | None, str | None]:
     - Length check
     - Space check
     - Special character check
-    - Quotes check
     - Emoji check
     - Consecutive dots check
     - Valid TLD check
@@ -123,7 +137,7 @@ def validate_syntax(email: str) -> tuple[bool, str | None, str | None]:
         logger.warning("syntax_invalid_domain", email=email, domain=domain, length=len(domain) if domain else 0)
         return False, None, None
 
-    # Invalid special characters check
+    # Invalid special characters check (also catches quotes/backticks in local part)
     if INVALID_CHARS.search(local):
         logger.warning("syntax_invalid_special_chars", email=email, local=local)
         return False, None, None
@@ -131,11 +145,6 @@ def validate_syntax(email: str) -> tuple[bool, str | None, str | None]:
     # Only allowed chars in local part
     if not ALLOWED_LOCAL_CHARS.match(local):
         logger.warning("syntax_invalid_chars", email=email)
-        return False, None, None
-
-    # Quotes check - single, double, backtick
-    if any(c in email for c in ['"', "'", '`']):
-        logger.warning("syntax_invalid_quotes", email=email)
         return False, None, None
 
     # Consecutive dots check
@@ -157,7 +166,7 @@ def validate_syntax(email: str) -> tuple[bool, str | None, str | None]:
         logger.warning("syntax_invalid_no_dot_in_domain", email=email, domain=domain)
         return False, None, None
 
-    # Domain invalid chars
+    # Domain invalid chars (also catches quotes/backticks in domain part)
     if INVALID_CHARS.search(domain):
         logger.warning("syntax_invalid_domain_chars", email=email, domain=domain)
         return False, None, None
@@ -189,11 +198,16 @@ def is_role_based(email: str) -> bool:
         # Exact match
         if local in ROLE_BASED_PREFIXES:
             return True
-        # Partial match - support123, admin2 etc
+        # Partial match - support123, admin2 etc. Only applied to prefixes
+        # long enough that a "word + digits" pattern is unambiguous — short
+        # prefixes (it, hr, pr, ceo...) are common real initials and are
+        # skipped here to avoid false positives like "pr7@company.com".
         for prefix in ROLE_BASED_PREFIXES:
+            if len(prefix) < MIN_PREFIX_LEN_FOR_SUFFIX_MATCH:
+                continue
             if local.startswith(prefix) and len(local) > len(prefix):
                 suffix = local[len(prefix):]
-                if suffix.isdigit():
+                if suffix.isdigit() and len(suffix) <= MAX_SUFFIX_DIGITS_FOR_MATCH:
                     return True
         return False
     except Exception:

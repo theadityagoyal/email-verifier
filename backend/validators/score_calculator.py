@@ -159,6 +159,15 @@ TRUSTED_DOMAINS = frozenset({
     "ascentsoftware.in", "ascentsoftware.com", "zinghr.com",
 })
 
+# Minimum score guaranteed for a trusted domain that passed syntax and isn't
+# disposable — keeps it inside the "Safe" bucket (probably_valid/trusted/
+# deliverable, i.e. score > 75) regardless of how harshly the username
+# pattern heuristics penalize it. Reputation bonuses alone weren't enough:
+# a known-good domain like gmail.com could still get dragged into "risky"
+# (uncertain, score<=65) purely from a random-looking local part, which
+# makes no sense for a domain we already trust.
+TRUSTED_DOMAIN_SCORE_FLOOR = 76
+
 # ── Keyboard walk patterns ────────────────────────────────────────────────────
 KEYBOARD_WALKS = [
     "qwertyuiop", "asdfghjkl", "zxcvbnm",   # horizontal rows
@@ -320,7 +329,8 @@ def calculate_score(
     }
     penalty = username_analysis["penalty"]
 
-    # Disposable = straight 0
+    # Disposable = straight 0 (overrides trust — a disposable domain is
+    # never safe, even if it happened to be in TRUSTED_DOMAINS)
     if disposable:
         return 0, username_analysis
 
@@ -347,12 +357,19 @@ def calculate_score(
     else:
         base_score = 100
 
+    is_trusted = domain.lower() in TRUSTED_DOMAINS
+
     # Apply trusted domain bonus (+10, max 100)
-    trusted_bonus = 10 if domain.lower() in TRUSTED_DOMAINS else 0
+    trusted_bonus = 10 if is_trusted else 0
     score_with_trusted_bonus = min(100, base_score + trusted_bonus)
 
-    # Apply username quality penalty
-    final_score = max(0, score_with_trusted_bonus - penalty)
+    # Apply username quality penalty. Trusted domains get a score floor so
+    # reputation bonus + username penalty can never drag a known-good
+    # domain into the risky/unsafe bucket (see TRUSTED_DOMAIN_SCORE_FLOOR).
+    if is_trusted:
+        final_score = max(TRUSTED_DOMAIN_SCORE_FLOOR, score_with_trusted_bonus - penalty)
+    else:
+        final_score = max(0, score_with_trusted_bonus - penalty)
 
     return final_score, username_analysis
 

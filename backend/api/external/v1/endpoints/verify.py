@@ -6,12 +6,12 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
 from models.database import get_db
-from models.models import Email, Domain, ApiKey
+from models.models import ApiKey
 from schemas.schemas import EmailVerifyRequest
 from services.email_service import verify_email
+from services.domain_service import async_upsert_email, async_upsert_domain
 from api.external.v1.dependencies import rate_limit_verify
 from utils.logging import get_logger
 
@@ -45,67 +45,30 @@ async def external_verify_email(
     try:
         result = await verify_email(email)
     except Exception as e:
-        logger.error("external_verify_failed", email=email, api_key_id=api_key.id, error=str(e))
+        logger.error("external_verify_failed", email=email, api_key_id=api_key.id, error=str(e), exc_info=True)
         return {
             "success": False,
             "error": {"code": "verification_failed", "message": "Email verification service failed"},
         }
 
-    verified_at_naive = result.verified_at.replace(tzinfo=None) if result.verified_at else None
     now = _utc_now_naive()
 
-    # Persist / upsert into the same `emails` table the dashboard reads from,
-    # so external verifications show up in the dashboard/email-list too.
-    existing = (
-        await db.execute(select(Email).where(Email.email == result.email))
-    ).scalar_one_or_none()
+    try:
+        # Atomic upsert — persists into the same `emails` table the
+        # dashboard reads from, so external verifications show up in the
+        # dashboard/email-list too, and can never race on duplicate emails.
+        await async_upsert_email(db, result, job_id=None, now=now)
 
-    if existing:
-        existing.domain = result.domain
-        existing.status = result.status
-        existing.syntax_valid = result.syntax_valid
-        existing.domain_exists = result.domain_exists
-        existing.mx_found = result.mx_found
-        existing.smtp_valid = result.smtp_valid
-        existing.disposable = result.disposable
-        existing.role_based = result.role_based
-        existing.catch_all = result.catch_all
-        existing.score = result.score
-        existing.verified_at = verified_at_naive
-        existing.updated_at = now
-    else:
-        db.add(Email(
-            email=result.email,
-            domain=result.domain,
-            status=result.status,
-            syntax_valid=result.syntax_valid,
-            domain_exists=result.domain_exists,
-            mx_found=result.mx_found,
-            smtp_valid=result.smtp_valid,
-            disposable=result.disposable,
-            role_based=result.role_based,
-            catch_all=result.catch_all,
-            score=result.score,
-            job_id=None,
-            verified_at=verified_at_naive,
-            created_at=now,
-            updated_at=now,
-        ))
-
-    if result.domain:
-        try:
-            domain_rec = (
-                await db.execute(select(Domain).where(Domain.domain == result.domain))
-            ).scalar_one_or_none()
-            if not domain_rec:
-                domain_rec = Domain(domain=result.domain)
-                db.add(domain_rec)
-                await db.flush()
-            domain_rec.total_emails = (domain_rec.total_emails or 0) + 1
-        except Exception as e:
-            logger.warning("external_domain_update_failed", domain=result.domain, error=str(e))
-
-    await db.commit()
+        if result.domain:
+            await async_upsert_domain(db, result.domain, result.mx_records, now)
+    except Exception as e:
+        logger.error(
+            "external_verify_persist_failed", email=email, api_key_id=api_key.id, error=str(e), exc_info=True
+        )
+        return {
+            "success": False,
+            "error": {"code": "storage_failed", "message": "Verification succeeded but failed to save the result"},
+        }
 
     logger.info("external_verify_success", email=email, api_key_id=api_key.id, status=result.status.value)
 

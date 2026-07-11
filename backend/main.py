@@ -57,7 +57,11 @@ async def add_process_time_header(request: Request, call_next):
 # Global exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error("unhandled_exception", path=request.url.path, error=str(exc))
+    # exc_info=True is the whole point of this handler existing — without it
+    # every unhandled crash in production logged only str(exc) (e.g. just
+    # "division by zero") with zero indication of *where* it happened,
+    # making these effectively undebuggable from logs alone.
+    logger.error("unhandled_exception", path=request.url.path, error=str(exc), exc_info=True)
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error. Please try again later."},
