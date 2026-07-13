@@ -175,3 +175,7 @@ Temporary Items
 Thumbs.db
 
 graphify-out/
+
+# Docker
+docker-compose.yml
+docker-compose.override.yml
