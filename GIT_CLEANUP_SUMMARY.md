@@ -1,4 +1,5 @@
 # Git Repository Cleanup Summary
+
 ## Email Verifier Project - Production Ready State
 
 ### What Was Fixed
@@ -29,8 +30,8 @@
 
 4. **Cleanup Actions**
    - Removed unused test files: `backend/tests/test_*.py`
-   - Fixed migration filename typo: 
-     `d0739350dd1a_add_columns_for_job_stages_and_email_.py` → 
+   - Fixed migration filename typo:
+     `d0739350dd1a_add_columns_for_job_stages_and_email_.py` →
      `d0739350dd1a_add_columns_for_job_stages_and_email_status.py`
    - Added new frontend components (`DomainAnalytics.jsx`, `DomainFilters.jsx`, etc.)
    - Updated core backend/frontend logic, config, services, validators
@@ -80,12 +81,13 @@ git check-ignore -v graphify-out            # Shows .gitignore line ignoring it
 ### Verification Steps
 
 After cleanup, run:
+
 ```bash
 git status
 # Should show: "nothing to commit, working tree clean"
 
 git check-ignore -v graphify-out
-# Should show: .gitignore:<line_number>:graphify-/	graphify-out/
+# Should show: .gitignore:<line_number>:graphify-out/
 
 # Also check these are ignored:
 git check-ignore -v backend/.env
@@ -102,6 +104,7 @@ git check-ignore -v dist/
 - **Sensitive data**: If secrets accidentally committed, use `git filter-repo` or `bfg` to rewrite history (beyond scope of this summary)
 
 ### Current State (as of last verification)
+
 - ✅ Working tree clean: `git status` shows nothing to commit
 - ✅ All generated/output files properly ignored
 - ✅ No sensitive data tracked
@@ -109,3 +112,62 @@ git check-ignore -v dist/
 - ✅ Ready for production builds and team collaboration
 
 > **Note**: This document is for reference only. Decide whether to keep it in the repo based on your documentation policies.
+
+---
+
+## Git Ignore & Remove Commands Reference
+
+### Ignore a File (Add to `.gitignore`)
+
+```bash
+# Option 1: Append to .gitignore
+echo "filename" >> .gitignore
+
+# Option 2: Edit .gitignore manually and add patterns
+# e.g., add these lines to .gitignore:
+# .env
+# *.env
+# docker-compose.yml
+# node_modules/
+# dist/
+```
+
+### Remove from Git Tracking (If Already Tracked)
+
+```bash
+# Remove single file from tracking (keeps local file)
+git rm --cached filename
+
+# Remove folder from tracking (keeps local folder)
+git rm --cached -r foldername/
+
+# Remove from tracking AND delete local file
+git rm filename
+```
+
+### Then Commit
+
+```bash
+git add .gitignore
+git commit -m "Ignore filename"
+```
+
+### For `.env` File Specifically
+
+```bash
+# 1. Add to .gitignore (if not already there)
+echo ".env" >> .gitignore
+
+# 2. Remove from git tracking if already tracked
+git rm --cached .env
+
+# 3. Commit
+git add .gitignore && git commit -m "Ignore .env file"
+```
+
+### Quick Check If File Is Ignored
+
+```bash
+git check-ignore filename
+```
+
