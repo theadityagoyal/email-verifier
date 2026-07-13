@@ -17,9 +17,10 @@ A production-ready email verification system with both internal dashboard and ex
 ## Technology Stack
 
 ### Backend
+
 - **Framework**: FastAPI (Python 3.12+)
 - **Database**: MySQL with SQLAlchemy ORM
-- **Validation**: 
+- **Validation**:
   - Syntax: email-validator, custom syntax validation
   - Domain/DNS: dnspython
   - SMTP: Direct SMTP connection verification
@@ -32,6 +33,7 @@ A production-ready email verification system with both internal dashboard and ex
 - **Logging**: Structured logging with structlog
 
 ### Frontend
+
 - **Framework**: React 18+
 - **State Management**: React Query (TanStack Query)
 - **Routing**: React Router DOM v6
@@ -42,20 +44,21 @@ A production-ready email verification system with both internal dashboard and ex
 - **Build Tool**: Vite
 
 ### Infrastructure
+
 - **Containerization**: Docker & Docker Compose
 - **Environment**: Environment variable configuration
 - **File Storage**: Local file storage (configurable for S3)
 
 ## Architecture Overview
 
-```
+```text
 Client (Web Browser/Mobile/App)
          ↓
 [Load Balancer/Reverse Proxy] (Optional - Nginx in Docker)
          ↓
 ┌─────────────────┐              ┌──────────────────┐
-│   Frontend App  ◄────────────►  Backend API        │
-│  (React/Vite)   │              │ (FastAPI)         │
+│   Frontend App  ◄────────────►  Backend API       │
+│  (React/Vite)   │              │ (FastAPI)        │
 └─────────────────┘              └──────────────────┘
          ↓                             ↓
            ┌─────────────────────────────────────┐
@@ -81,12 +84,14 @@ Client (Web Browser/Mobile/App)
 #### Option 1: Docker Compose (Recommended)
 
 1. Clone the repository:
+
 ```bash
 git clone <repository-url>
 cd email-verifier
 ```
 
 2. Copy environment files:
+
 ```bash
 cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env  # If exists
@@ -99,6 +104,7 @@ cp frontend/.env.example frontend/.env  # If exists
    - Rate limiting settings
 
 4. Start the application:
+
 ```bash
 docker-compose up -d
 ```
@@ -111,6 +117,7 @@ docker-compose up -d
 #### Option 2: Manual Installation
 
 ##### Backend Setup
+
 ```bash
 cd backend
 python -m venv venv
@@ -129,6 +136,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ##### Frontend Setup
+
 ```bash
 cd frontend
 npm install
@@ -159,43 +167,51 @@ npm run dev
 ## API Documentation
 
 ### Internal API (/api/v1)
+
 Accessible via the dashboard interface. Provides full dashboard functionality.
 
 ### External Developer API (/api/external/v1)
+
 Designed for programmatic access with API key authentication.
 
 #### Authentication
+
 External API uses `X-API-Key` header for authentication.
 
 #### Endpoints
 
 ##### Single Email Verification
-```
+
+```bash
 POST /api/external/v1/verify
 Headers: X-API-Key: your_api_key
 Body: {"email": "user@example.com"}
 ```
 
 ##### Bulk Upload
-```
+
+```bash
 POST /api/external/v1/bulk
 Headers: X-API-Key: your_api_key
 Body: multipart/form-data (file)
 ```
 
 ##### Job Status
-```
+
+```bash
 GET /api/external/v1/jobs/{job_id}
 Headers: X-API-Key: your_api_key
 ```
 
 ##### Export Results
-```
+
+```bash
 GET /api/external/v1/jobs/{job_id}/export
 Headers: X-API-Key: your_api_key
 ```
 
 ### Internal Dashboard API
+
 Used by the React frontend - same endpoints as external but without API key requirement.
 
 ## Database Schema
@@ -203,6 +219,7 @@ Used by the React frontend - same endpoints as external but without API key requ
 ### Tables
 
 #### emails
+
 Stores individual email verification results.
 
 | Column | Type | Description |
@@ -225,6 +242,7 @@ Stores individual email verification results.
 | updated_at | DateTime | Last update time |
 
 #### domains
+
 Aggregated domain statistics.
 
 | Column | Type | Description |
@@ -241,6 +259,7 @@ Aggregated domain statistics.
 | updated_at | DateTime | Last update time |
 
 #### jobs
+
 Bulk job tracking.
 
 | Column | Type | Description |
@@ -266,6 +285,7 @@ Bulk job tracking.
 | updated_at | DateTime | Last update time |
 
 #### api_keys
+
 External API key management.
 
 | Column | Type | Description |
@@ -290,7 +310,7 @@ The email verification pipeline consists of the following steps:
 4. **Trusted Domain Shortcut**: Skips DNS/SMTP for trusted domains (gmail.com, yahoo.com, etc.)
 5. **Domain DNS Validation**: Verifies domain exists via DNS A/AAAA record lookup
 6. **MX Record Lookup**: Retrieves and validates MX records for the domain
-7. **SMTP Verification**: 
+7. **SMTP Verification**:
    - Connects to mail server
    - Performs SMTP handshake
    - Checks for catch-all configuration
@@ -339,6 +359,7 @@ The system uses a ThreadPoolExecutor for background job processing instead of Ce
 ## Logging
 
 Structured logging using structlog with:
+
 - Request tracking (method, path, duration)
 - Error logging with stack traces
 - Business logic events (verification started/completed)
@@ -352,6 +373,7 @@ For a complete breakdown of the project structure, please refer to [PROJECT_STRU
 ## Testing
 
 Run tests with:
+
 ```bash
 # Backend tests
 cd backend
@@ -367,6 +389,7 @@ npm test
 The project includes Dockerfiles for both frontend and backend:
 
 ### Backend Dockerfile
+
 - Based on Python 3.12-slim
 - Installs system dependencies (gcc, MySQL dev libraries)
 - Installs Python dependencies
@@ -374,12 +397,14 @@ The project includes Dockerfiles for both frontend and backend:
 - Exposes port 8000
 
 ### Frontend Dockerfile
+
 - Multi-stage build:
   1. Builder stage: Node.js 20-alpine for building React app
   2. Production stage: Nginx-alpine serving built assets
 - Includes health check endpoint
 
 ### Docker Compose
+
 - Defines backend and frontend services
 - Configures networking between services
 - Sets up volume mounts for development
@@ -391,6 +416,7 @@ The project includes Dockerfiles for both frontend and backend:
 ## Deployment
 
 ### Production Considerations
+
 1. **Environment Variables**: Use secure secrets management
 2. **Database**: Use managed database service with backups
 3. **Storage**: Consider S3 or similar for file storage in production
@@ -400,6 +426,7 @@ The project includes Dockerfiles for both frontend and backend:
 7. **Email Limits**: Configure SMTP rate limits to avoid blacklisting
 
 ### Scaling
+
 - **Horizontal Scaling**: Multiple backend instances behind load balancer
 - **Database**: Read replicas for read-heavy workloads
 - **Processing**: Increase ThreadPoolExecutor workers based on CPU cores
