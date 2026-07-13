@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     CORS_ORIGINS: str = '["http://localhost:3000"]'
 
+    # Admin dashboard (API Keys management)
+    ADMIN_PASSWORD: str = "change-me-admin-password"
+
     # SMTP
     SMTP_TIMEOUT: int = 3
     SMTP_RETRIES: int = 2

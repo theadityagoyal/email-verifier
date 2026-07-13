@@ -123,7 +123,8 @@ class ApiKey(Base):
     """
     API keys for the external developer platform (/api/external/v1/*).
     We store only the SHA-256 hash of the key — never the plaintext.
-    Keys are created/managed via scripts/manage_api_keys.py (no admin UI yet).
+    Keys are created/managed via scripts/manage_api_keys.py or the admin
+    dashboard (/api/v1/admin/api-keys).
     """
     __tablename__ = "api_keys"
 
@@ -136,3 +137,22 @@ class ApiKey(Base):
     bulk_limit_per_hour = Column(Integer, default=5, nullable=False)
     last_used_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
+
+
+class ApiKeyUsageLog(Base):
+    """
+    Lightweight per-request usage log for external API keys. Powers the
+    admin dashboard's usage chart (verify vs bulk calls per day) and the
+    total-calls / last-used columns on the API Keys table.
+
+    Kept intentionally minimal — no FK constraint (consistent with this
+    project's existing pattern of not enforcing hard FKs, e.g. Email.job_id),
+    just an indexed api_key_id column.
+    """
+    __tablename__ = "api_key_usage_logs"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    api_key_id = Column(BigInteger, nullable=False, index=True)
+    endpoint = Column(String(20), nullable=False)  # "verify" | "bulk"
+    status_code = Column(Integer, nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), index=True)

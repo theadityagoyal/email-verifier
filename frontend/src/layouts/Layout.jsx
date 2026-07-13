@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Outlet, Link, useLocation } from 'react-router-dom';
+import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   Mail,
   Upload,
@@ -12,10 +12,12 @@ import {
   ChevronDown,
   HelpCircle,
   Bell,
+  KeyRound,
+  LogOut,
 } from 'lucide-react';
 import ThemeToggle from '@/components/layout/ThemeToggle';
 
-const navItems = [
+const baseNavItems = [
   { path: '/', label: 'Dashboard', icon: LayoutGrid },
   { path: '/verify', label: 'Verify Email', icon: Mail },
   { path: '/bulk', label: 'Bulk Upload', icon: Upload },
@@ -39,6 +41,22 @@ export default function Layout() {
   const [notifOpen, setNotifOpen] = useState(false);
 
   const location = useLocation();
+  const navigate = useNavigate();
+
+  // "API Keys" nav item is only visible to a logged-in admin. Presence
+  // check is enough here — if the token is stale/expired, ApiKeysPage
+  // itself redirects to /admin/login on the first 401 it gets.
+  const isAdmin = !!localStorage.getItem('adminToken');
+
+  const navItems = isAdmin
+    ? [...baseNavItems, { path: '/admin/api-keys', label: 'API Keys', icon: KeyRound }]
+    : baseNavItems;
+
+  const handleAdminLogout = () => {
+    localStorage.removeItem('adminToken');
+    setProfileMenuOpen(false);
+    navigate('/admin/login');
+  };
 
   return (
     <>
@@ -180,6 +198,14 @@ export default function Layout() {
                   >
                     <Settings size={15} /> Settings
                   </Link>
+                  {isAdmin && (
+                    <button
+                      onClick={handleAdminLogout}
+                      className="flex w-full items-center gap-2 px-3.5 py-2 text-sm text-error hover:bg-error/10"
+                    >
+                      <LogOut size={15} /> Admin Logout
+                    </button>
+                  )}
                 </div>
               </>
             )}
@@ -285,6 +311,14 @@ export default function Layout() {
                       >
                         <Settings size={15} /> Settings
                       </Link>
+                      {isAdmin && (
+                        <button
+                          onClick={handleAdminLogout}
+                          className="flex w-full items-center gap-2 px-3.5 py-2 text-sm text-error hover:bg-error/10"
+                        >
+                          <LogOut size={15} /> Admin Logout
+                        </button>
+                      )}
                     </div>
                   </>
                 )}

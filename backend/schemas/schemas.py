@@ -369,3 +369,69 @@ class VerificationTrend(BaseModel):
         if v < 0:
             raise ValueError('Count must be non-negative')
         return v
+
+
+# ── Admin — auth ──────────────────────────────────────────────────────────────
+
+class AdminLoginRequest(BaseModel):
+    password: str
+
+
+class AdminLoginResponse(BaseModel):
+    token: str
+
+
+# ── Admin — API key management ────────────────────────────────────────────────
+
+class ApiKeyListItem(BaseModel):
+    name: Optional[str] = None
+    prefix: str
+    is_active: bool
+    rate_limit_per_min: int
+    bulk_limit_per_hour: int
+    total_calls: int = 0
+    last_used_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ApiKeyCreateRequest(BaseModel):
+    name: str
+    rate_limit_per_min: int = 60
+    bulk_limit_per_hour: int = 5
+
+    @field_validator('name')
+    @classmethod
+    def name_must_not_be_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError('Name cannot be blank')
+        return v
+
+    @field_validator('rate_limit_per_min', 'bulk_limit_per_hour')
+    @classmethod
+    def limit_must_be_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError('Limit must be a positive integer')
+        return v
+
+
+class ApiKeyCreateResponse(BaseModel):
+    api_key: str  # full plaintext key — shown ONCE, never retrievable again
+    prefix: str
+    name: str
+    rate_limit_per_min: int
+    bulk_limit_per_hour: int
+
+
+class DailyUsageItem(BaseModel):
+    date: str
+    verify: int = 0
+    bulk: int = 0
+
+
+class ApiKeyUsageResponse(BaseModel):
+    prefix: str
+    days: int
+    daily: List[DailyUsageItem]

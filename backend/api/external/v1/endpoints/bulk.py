@@ -22,6 +22,7 @@ from models.models import Job, Email, JobStatus, ApiKey
 from api.external.v1.dependencies import rate_limit_bulk, get_api_key
 from utils.email_utils import detect_email_column
 from utils.file_utils import read_upload_file, FileReadError, SUPPORTED_EXTENSIONS, is_supported_filename
+from utils.usage_logger import log_api_usage
 from utils.logging import get_logger
 from tasks.bulk_processor import process_bulk_job_sync
 
@@ -51,69 +52,82 @@ async def external_bulk_upload(
     api_key: ApiKey = Depends(rate_limit_bulk),
 ):
     """Upload a CSV/Excel file for bulk email verification. Returns a job_id to poll."""
-    filename = (file.filename or "").lower()
-    if not is_supported_filename(filename):
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "unsupported_format", "message": f"Only {', '.join(SUPPORTED_EXTENSIONS)} files accepted"},
-        )
-
-    content = await file.read()
-    if len(content) > MAX_FILE_SIZE_MB * 1024 * 1024:
-        raise HTTPException(
-            status_code=413,
-            detail={"code": "file_too_large", "message": f"File too large. Max {MAX_FILE_SIZE_MB} MB"},
-        )
-
-    df = _read_file(content, filename)
-    if df.empty:
-        raise HTTPException(status_code=400, detail={"code": "empty_file", "message": "File is empty"})
-
+    # Tracks the actual HTTP status returned, for usage logging in `finally`
+    # below. Starts at 202 (the endpoint's declared success status_code);
+    # any HTTPException raised along the way overrides it with the real code.
+    resp_status = status.HTTP_202_ACCEPTED
     try:
-        email_col = detect_email_column(df)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail={"code": "no_email_column", "message": str(e)})
+        filename = (file.filename or "").lower()
+        if not is_supported_filename(filename):
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "unsupported_format", "message": f"Only {', '.join(SUPPORTED_EXTENSIONS)} files accepted"},
+            )
 
-    email_series = df[email_col].dropna().astype(str).str.strip().str.lower()
-    unique_emails = email_series[email_series.str.contains("@")].unique().tolist()
-    total = len(unique_emails)
+        content = await file.read()
+        if len(content) > MAX_FILE_SIZE_MB * 1024 * 1024:
+            raise HTTPException(
+                status_code=413,
+                detail={"code": "file_too_large", "message": f"File too large. Max {MAX_FILE_SIZE_MB} MB"},
+            )
 
-    if total == 0:
-        raise HTTPException(status_code=400, detail={"code": "no_valid_emails", "message": "No valid emails found in file"})
+        df = _read_file(content, filename)
+        if df.empty:
+            raise HTTPException(status_code=400, detail={"code": "empty_file", "message": "File is empty"})
 
-    job_id = str(uuid.uuid4())
-    try:
-        os.makedirs(f"{UPLOAD_BASE_DIR}/{job_id}", exist_ok=True)
-        with open(f"{UPLOAD_BASE_DIR}/{job_id}/{file.filename}", "wb") as f:
-            f.write(content)
-        s3_key = f"local:{job_id}/{file.filename}"
-    except OSError as e:
-        logger.error("external_bulk_save_failed", job_id=job_id, error=str(e), exc_info=True)
-        raise HTTPException(status_code=500, detail={"code": "storage_error", "message": "Failed to save uploaded file"})
+        try:
+            email_col = detect_email_column(df)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail={"code": "no_email_column", "message": str(e)})
 
-    job = Job(
-        job_id=job_id,
-        file_name=file.filename,
-        s3_key=s3_key,
-        status=JobStatus.processing,
-        current_stage="uploading",
-        progress_percent=0,
-        estimated_time_remaining=None,
-        started_at=None,
-        completed_at=None,
-        error_details=None,
-        total=total,
-    )
-    db.add(job)
-    await db.commit()
+        email_series = df[email_col].dropna().astype(str).str.strip().str.lower()
+        unique_emails = email_series[email_series.str.contains("@")].unique().tolist()
+        total = len(unique_emails)
 
-    background_tasks.add_task(process_bulk_job_sync, job_id, s3_key, email_col)
-    logger.info("external_bulk_job_dispatched", job_id=job_id, api_key_id=api_key.id, total=total)
+        if total == 0:
+            raise HTTPException(status_code=400, detail={"code": "no_valid_emails", "message": "No valid emails found in file"})
 
-    return {
-        "success": True,
-        "data": {"job_id": job_id, "status": "processing", "total_emails": total},
-    }
+        job_id = str(uuid.uuid4())
+        try:
+            os.makedirs(f"{UPLOAD_BASE_DIR}/{job_id}", exist_ok=True)
+            with open(f"{UPLOAD_BASE_DIR}/{job_id}/{file.filename}", "wb") as f:
+                f.write(content)
+            s3_key = f"local:{job_id}/{file.filename}"
+        except OSError as e:
+            logger.error("external_bulk_save_failed", job_id=job_id, error=str(e), exc_info=True)
+            raise HTTPException(status_code=500, detail={"code": "storage_error", "message": "Failed to save uploaded file"})
+
+        job = Job(
+            job_id=job_id,
+            file_name=file.filename,
+            s3_key=s3_key,
+            status=JobStatus.processing,
+            current_stage="uploading",
+            progress_percent=0,
+            estimated_time_remaining=None,
+            started_at=None,
+            completed_at=None,
+            error_details=None,
+            total=total,
+        )
+        db.add(job)
+        await db.commit()
+
+        background_tasks.add_task(process_bulk_job_sync, job_id, s3_key, email_col)
+        logger.info("external_bulk_job_dispatched", job_id=job_id, api_key_id=api_key.id, total=total)
+
+        return {
+            "success": True,
+            "data": {"job_id": job_id, "status": "processing", "total_emails": total},
+        }
+    except HTTPException as he:
+        resp_status = he.status_code
+        raise
+    except Exception:
+        resp_status = 500
+        raise
+    finally:
+        await log_api_usage(db, api_key.id, "bulk", resp_status)
 
 
 @router.get("/jobs/{job_id}")

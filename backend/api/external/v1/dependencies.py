@@ -5,7 +5,7 @@ Shared FastAPI dependencies for the external developer API:
 """
 from datetime import datetime, timezone
 
-from fastapi import Header, HTTPException, Depends, status
+from fastapi import Header, HTTPException, Depends, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -13,12 +13,20 @@ from models.database import get_db
 from models.models import ApiKey
 from utils.api_key import hash_api_key
 from utils.rate_limiter import verify_rate_limiter, bulk_rate_limiter
+from utils.usage_logger import log_api_usage
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
+def _endpoint_from_path(request: Request) -> str:
+    """Best-effort endpoint classification for usage logging, based on the
+    request path (/verify vs /bulk*)."""
+    return "bulk" if "/bulk" in request.url.path else "verify"
+
+
 async def get_api_key(
+    request: Request,
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     db: AsyncSession = Depends(get_db),
 ) -> ApiKey:
@@ -41,6 +49,10 @@ async def get_api_key(
         )
 
     if not api_key.is_active:
+        # We have a real api_key.id here, so this is loggable — unlike the
+        # missing/invalid-key cases above where there's no key to attach the
+        # log row to.
+        await log_api_usage(db, api_key.id, _endpoint_from_path(request), status.HTTP_401_UNAUTHORIZED)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "revoked_api_key", "message": "This API key has been revoked"},
@@ -57,12 +69,17 @@ async def get_api_key(
     return api_key
 
 
-async def rate_limit_verify(api_key: ApiKey = Depends(get_api_key)) -> ApiKey:
+async def rate_limit_verify(
+    request: Request,
+    api_key: ApiKey = Depends(get_api_key),
+    db: AsyncSession = Depends(get_db),
+) -> ApiKey:
     """Auth + per-minute rate limit for single-email verification."""
     allowed, retry_after = verify_rate_limiter.check(
         f"verify:{api_key.id}", api_key.rate_limit_per_min, 60
     )
     if not allowed:
+        await log_api_usage(db, api_key.id, "verify", status.HTTP_429_TOO_MANY_REQUESTS)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail={
@@ -75,12 +92,17 @@ async def rate_limit_verify(api_key: ApiKey = Depends(get_api_key)) -> ApiKey:
     return api_key
 
 
-async def rate_limit_bulk(api_key: ApiKey = Depends(get_api_key)) -> ApiKey:
+async def rate_limit_bulk(
+    request: Request,
+    api_key: ApiKey = Depends(get_api_key),
+    db: AsyncSession = Depends(get_db),
+) -> ApiKey:
     """Auth + per-hour rate limit for bulk uploads."""
     allowed, retry_after = bulk_rate_limiter.check(
         f"bulk:{api_key.id}", api_key.bulk_limit_per_hour, 3600
     )
     if not allowed:
+        await log_api_usage(db, api_key.id, "bulk", status.HTTP_429_TOO_MANY_REQUESTS)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail={

@@ -6,6 +6,9 @@ import VerifyEmailPage from './pages/VerifyEmailPage';
 import BulkUploadPage from './pages/BulkUploadPage';
 import EmailListPage from './pages/EmailListPage';
 import DomainsPage from './pages/DomainsPage';
+import AdminLoginPage from './pages/AdminLoginPage';
+import ApiKeysPage from './pages/ApiKeysPage';
+import AdminRoute from './components/AdminRoute';
 
 function App() {
   const location = useLocation();
@@ -18,6 +21,8 @@ function App() {
       '/bulk': 'Bulk Upload - EmailVerifier',
       '/emails': 'Email List - EmailVerifier',
       '/domains': 'Domains - EmailVerifier',
+      '/admin/login': 'Admin Login - EmailVerifier',
+      '/admin/api-keys': 'API Keys - EmailVerifier',
     };
 
     const path = location.pathname;
@@ -27,12 +32,23 @@ function App() {
 
   return (
     <Routes>
+      {/* Standalone — outside Layout/sidebar, like a typical auth screen */}
+      <Route path="/admin/login" element={<AdminLoginPage />} />
+
       <Route element={<Layout />}>
         <Route path="/" element={<DashboardPage />} />
         <Route path="/verify" element={<VerifyEmailPage />} />
         <Route path="/bulk" element={<BulkUploadPage />} />
         <Route path="/emails" element={<EmailListPage />} />
         <Route path="/domains" element={<DomainsPage />} />
+        <Route
+          path="/admin/api-keys"
+          element={
+            <AdminRoute>
+              <ApiKeysPage />
+            </AdminRoute>
+          }
+        />
       </Route>
     </Routes>
   );

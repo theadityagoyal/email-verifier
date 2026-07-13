@@ -261,3 +261,37 @@ export const listDomains = (params) =>
 
 export const getDomainOverview = () =>
   apiEnhanced.get('/domains/overview').then((r) => r.data)
+
+// ── Admin — auth ──────────────────────────────────────────────────────────
+// Admin endpoints use a separate X-Admin-Token header (stored in
+// localStorage as 'adminToken'), not the Bearer accessToken the rest of the
+// app uses — so headers are attached explicitly per-call here instead of
+// via the shared request interceptor.
+
+const getAdminHeaders = () => {
+  const token = localStorage.getItem('adminToken')
+  return token ? { 'X-Admin-Token': token } : {}
+}
+
+export const adminLogin = (password) =>
+  apiEnhanced.post('/admin/login', { password }).then((r) => r.data)
+
+// ── Admin — API key management ──────────────────────────────────────────
+
+export const listApiKeys = () =>
+  apiEnhanced.get('/admin/api-keys', { headers: getAdminHeaders() }).then((r) => r.data)
+
+export const createApiKey = (payload) =>
+  apiEnhanced.post('/admin/api-keys', payload, { headers: getAdminHeaders() }).then((r) => r.data)
+
+export const activateApiKey = (prefix) =>
+  apiEnhanced.post(`/admin/api-keys/${prefix}/activate`, {}, { headers: getAdminHeaders() }).then((r) => r.data)
+
+export const revokeApiKey = (prefix) =>
+  apiEnhanced.post(`/admin/api-keys/${prefix}/revoke`, {}, { headers: getAdminHeaders() }).then((r) => r.data)
+
+export const getApiKeyUsage = (prefix, days = 30) =>
+  apiEnhanced.get(`/admin/api-keys/${prefix}/usage`, {
+    params: { days },
+    headers: getAdminHeaders(),
+  }).then((r) => r.data)
