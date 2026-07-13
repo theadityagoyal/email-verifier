@@ -1,26 +1,22 @@
-version: "3.8"
-
 services:
-  # ── FastAPI backend ──────────────────────────────────────────────────────────
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: ev_backend
-    restart: unless-stopped
+    restart: always
     env_file: ./backend/.env
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./backend:/app
       - /tmp/uploads:/tmp/uploads
 
-  # ── React frontend ───────────────────────────────────────────────────────────
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: ev_frontend
-    restart: unless-stopped
+    restart: always
     ports:
-      - "80:80"
+      - "127.0.0.1:8080:80"
