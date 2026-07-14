@@ -1,7 +1,6 @@
 import { motion } from 'framer-motion';
 import {
   Globe,
-  Mail,
   ShieldCheck,
   ShieldAlert,
   Trash2,
@@ -9,6 +8,8 @@ import {
   Ban,
 } from 'lucide-react';
 
+// FIX (audit #37): removed the unused bare `Mail` import — only `MailIcon`
+// (aliased from the same lucide export) was ever actually used below.
 export default function DomainStats({ overview, safePct, riskyUnsafePct }) {
   return (
     <motion.div
@@ -37,7 +38,7 @@ export default function DomainStats({ overview, safePct, riskyUnsafePct }) {
       <div className="card">
         <div className="flex items-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center rounded-full bg-indigo-100 dark:bg-indigo-900/20">
-            <Mail className="h-5 w-5 text-indigo-600" />
+            <MailIcon className="h-5 w-5 text-indigo-600" />
           </div>
           <div>
             <p className="text-sm text-[var(--foreground)]/50">Total Emails</p>

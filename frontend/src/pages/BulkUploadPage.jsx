@@ -11,6 +11,7 @@ import { bulkUpload, getJobStatus, exportJobResults, listJobs, deleteJob } from 
 import StatusBadge from '@/components/ui/StatusBadge';
 import Button from '@/components/ui/Button';
 import { calculateJobStats, getStatusOrder, isJobActive } from '@/utils/jobUtils';
+import { reportError } from '@/utils/errorReporter';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const DATE_FILTERS = [
@@ -21,16 +22,17 @@ const DATE_FILTERS = [
   { key: 'month', label: 'This Month' },
 ];
 
+// FIX (audit #11): a single failed poll (transient wifi blip, one-off 502)
+// used to immediately flip the job to status: 'failed' on the client, even
+// though the job was still healthy server-side. Now we tolerate a few
+// consecutive poll failures before giving up.
+const MAX_CONSECUTIVE_POLL_FAILURES = 3;
+
 const isValidUploadFile = (file) =>
   file && (file.type === 'text/csv' || /\.(csv|xlsx|xls)$/i.test(file.name));
 
 const getExt = (filename) => (filename ? filename.split('.').pop().toUpperCase() : 'FILE');
 
-// Normalizes whatever listJobs()/mutation responses return into a plain array.
-// Some backends return a bare array, others wrap it as { jobs: [...] },
-// { results: [...] }, or { items: [...] }. Guarding here prevents jobs state
-// from ever becoming a non-array, which previously crashed the page with
-// "i.filter is not a function" inside the visibleJobs useMemo.
 const normalizeJobsList = (data) => {
   if (Array.isArray(data)) return data;
   if (data && Array.isArray(data.jobs)) return data.jobs;
@@ -40,8 +42,6 @@ const normalizeJobsList = (data) => {
   return [];
 };
 
-// IST-safe date helpers — all comparisons happen on the Asia/Kolkata calendar day,
-// not the browser's local timezone.
 const istDateKey = (date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(date);
 const istMonthKey = (date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit' }).format(date);
 
@@ -84,12 +84,9 @@ const matchesDateFilter = (job, filter) => {
   return true;
 };
 
-// Helper to validate job status
 const isValidStatus = (status) => {
   return ['pending', 'processing', 'completed', 'failed'].includes(status);
 };
-
-// Extract reusable components for better organization
 
 const FileUploadZone = ({ onDragEnter, onDragLeave, onDragOver, onDrop, dragActive, onFileSelect, fileInputRef }) => (
   <div
@@ -155,27 +152,6 @@ const FileInfoDisplay = ({ selectedFile, onRemoveFile, onUpload, uploadPending }
   );
 };
 
-// Reusable progress bar component
-const JobProgressBar = ({ progressPct, isActive }) => {
-  if (!isActive) return null;
-
-  return (
-    <div className="mt-2 max-w-md">
-      <div className="flex items-center justify-between text-xs text-[var(--foreground)]/50 mb-1">
-        <span>Processed: <span className="text-[var(--foreground)] font-medium">{progressPct}%</span></span>
-      </div>
-      <div className="h-2 bg-[var(--muted)] rounded-full overflow-hidden">
-        <motion.div
-          initial={{ width: 0 }}
-          animate={{ width: `${progressPct}%` }}
-          transition={{ duration: 0.4, ease: 'easeOut' }}
-          className="h-full rounded-full bg-[var(--primary)]"
-        />
-      </div>
-    </div>
-  );
-};
-
 const JobStats = ({ job }) => {
   const { safeCount, riskyCount, unsafeCount, totalCount, processedCount, progressPct } = calculateJobStats(job);
   const isActive = isJobActive(job);
@@ -198,9 +174,6 @@ const JobStats = ({ job }) => {
   );
 };
 
-// Note: no longer renders its own chevron — the caller already renders one
-// (previously this duplicated it AND referenced an undefined `expandedJob`
-// variable, since this component never received it as a prop).
 const JobActions = ({ job, onRetry, onDelete }) => {
   const { progressPct } = calculateJobStats(job);
   const isProcessing = job.status === 'processing';
@@ -275,7 +248,6 @@ const JobDetails = ({ job, expandedJob, onToggleExpand, formatDateIST }) => {
           </div>
         </div>
 
-        {/* Bordered white cards (not tinted backgrounds) to match the target design */}
         <div className="px-4 pb-4 grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="p-4 rounded-lg bg-[var(--card)] border border-success/30 text-center">
             <p className="text-2xl font-bold text-success">{safeCount.toLocaleString()}</p>
@@ -332,23 +304,25 @@ export default function BulkUploadPage() {
   const [dragActive, setDragActive] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [jobs, setJobs] = useState([]);
+  const [isLoadingJobs, setIsLoadingJobs] = useState(true);
   const [expandedJob, setExpandedJob] = useState(null);
   const [polling, setPolling] = useState({});
   const [dateFilter, setDateFilter] = useState('all');
   const fileInputRef = useRef(null);
   const queryClient = useQueryClient();
 
-  // Refs so the polling interval (mounted once) always reads fresh state
-  // without needing to be torn down and recreated every tick.
   const jobsRef = useRef(jobs);
   const pollingRef = useRef(polling);
+  // FIX (audit #11): tracks consecutive poll failures per job_id, reset on
+  // any successful poll.
+  const pollFailuresRef = useRef({});
   useEffect(() => { jobsRef.current = jobs; }, [jobs]);
   useEffect(() => { pollingRef.current = polling; }, [polling]);
 
-  // Load existing jobs on initial mount
   useEffect(() => {
     let cancelled = false;
     async function loadExistingJobs() {
+      setIsLoadingJobs(true);
       try {
         const data = await listJobs();
         if (cancelled) return;
@@ -362,20 +336,19 @@ export default function BulkUploadPage() {
         });
         setPolling(pollingMap);
       } catch (err) {
-        console.error('Failed to load jobs:', err);
+        reportError('BulkUploadPage.loadExistingJobs', err);
         toast.error('Failed to load upload history');
+      } finally {
+        if (!cancelled) setIsLoadingJobs(false);
       }
     }
     loadExistingJobs();
     return () => { cancelled = true; };
   }, []);
 
-  // Upload mutation
   const uploadMutation = useMutation({
     mutationFn: bulkUpload,
     onSuccess: (data) => {
-      // Upload response only carries job_id/status/total_emails initially —
-      // full stats + progress arrive via polling.
       const newJob = {
         job_id: data.job_id,
         status: data.status || 'pending',
@@ -395,42 +368,41 @@ export default function BulkUploadPage() {
       toast.success('File uploaded successfully!');
     },
     onError: (error) => {
-      console.error('Upload failed:', error);
+      reportError('BulkUploadPage.upload', error);
       toast.error(`Upload failed: ${error.message}`);
       setSelectedFile(null);
     },
   });
 
-  // Stable polling function across renders
+  // FIX (audit #11): retry-with-backoff. A single failed poll no longer
+  // immediately marks the job as failed — only after
+  // MAX_CONSECUTIVE_POLL_FAILURES consecutive failures do we give up, and
+  // even then we do one last direct getJobStatus() confirmation attempt
+  // first in case the job actually did finish/fail server-side.
   const pollJob = useCallback(async (jobId) => {
     try {
       const data = await getJobStatus(jobId);
+      pollFailuresRef.current[jobId] = 0;
+
       setJobs(prev =>
         prev.map(job => {
           if (job.job_id !== jobId) return job;
 
-          // Start with the existing job
           let updatedJob = { ...job };
 
-          // Update status only if backend returns a valid status
           if (data.status !== undefined && data.status !== null && isValidStatus(data.status)) {
             updatedJob.status = data.status;
           }
-          // If backend returns invalid status, preserve the existing status
 
-          // Update created_at only if backend returns a valid date string
           if (data.created_at !== undefined && data.created_at !== null) {
             const testDate = new Date(data.created_at);
             if (!isNaN(testDate.getTime())) {
               updatedJob.created_at = data.created_at;
             }
-            // If backend returns invalid date, preserve the existing created_at
           }
 
-          // Update other fields from backend response (excluding status and created_at which we handled specially)
           const { status, created_at, ...otherData } = data;
           Object.keys(otherData).forEach(key => {
-            // Only update if the value is not undefined or null
             if (otherData[key] !== undefined && otherData[key] !== null) {
               updatedJob[key] = otherData[key];
             }
@@ -445,20 +417,39 @@ export default function BulkUploadPage() {
         queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
       }
     } catch (err) {
-      console.error('Polling error for job:', jobId, err);
-      // Mark job as failed if polling fails consistently, preserving error info
-      setJobs(prev =>
-        prev.map(job =>
-          job.job_id === jobId && job.status !== 'failed'
-            ? { ...job, status: 'failed', error: err.message || 'Failed to update status' }
-            : job
-        )
-      );
-      setPolling(prev => ({ ...prev, [jobId]: false }));
+      const failures = (pollFailuresRef.current[jobId] || 0) + 1;
+      pollFailuresRef.current[jobId] = failures;
+      reportError('BulkUploadPage.pollJob', err, { jobId, consecutiveFailures: failures });
+
+      if (failures < MAX_CONSECUTIVE_POLL_FAILURES) {
+        // Transient — keep polling, don't touch job status yet.
+        return;
+      }
+
+      // Give it one last direct confirmation attempt before truly giving up.
+      try {
+        const confirmData = await getJobStatus(jobId);
+        pollFailuresRef.current[jobId] = 0;
+        setJobs(prev => prev.map(job => job.job_id === jobId ? { ...job, ...confirmData } : job));
+        if (confirmData.status === 'completed' || confirmData.status === 'failed') {
+          setPolling(prev => ({ ...prev, [jobId]: false }));
+        }
+        return;
+      } catch {
+        // Genuinely unreachable after retries — now it's fair to mark failed.
+        setJobs(prev =>
+          prev.map(job =>
+            job.job_id === jobId && job.status !== 'failed'
+              ? { ...job, status: 'failed', error: 'Lost connection to server while checking status' }
+              : job
+          )
+        );
+        setPolling(prev => ({ ...prev, [jobId]: false }));
+        pollFailuresRef.current[jobId] = 0;
+      }
     }
   }, [queryClient]);
 
-  // Set up polling interval
   useEffect(() => {
     const interval = setInterval(() => {
       jobsRef.current.forEach((job) => {
@@ -470,7 +461,6 @@ export default function BulkUploadPage() {
     return () => clearInterval(interval);
   }, [pollJob]);
 
-  // File handling functions
   const validateAndSetFile = useCallback((file) => {
     if (!file) return;
     if (file.size > MAX_FILE_SIZE) {
@@ -513,6 +503,7 @@ export default function BulkUploadPage() {
   }, []);
 
   const handleRetry = useCallback((jobId) => {
+    pollFailuresRef.current[jobId] = 0;
     setPolling(prev => ({ ...prev, [jobId]: true }));
   }, []);
 
@@ -529,7 +520,7 @@ export default function BulkUploadPage() {
       queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
       toast.success('Upload deleted successfully');
     } catch (err) {
-      console.error('Failed to delete job:', err);
+      reportError('BulkUploadPage.deleteJob', err, { jobId });
       toast.error('Failed to delete upload');
     }
   }, [queryClient]);
@@ -544,9 +535,8 @@ export default function BulkUploadPage() {
       queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
       toast.success('All uploads deleted successfully');
     } catch (err) {
-      console.error('Failed to clear all uploads:', err);
+      reportError('BulkUploadPage.clearAll', err);
       toast.error('Failed to clear uploads');
-      // Reset to current state on error to prevent infinite retry loops
     }
   }, [jobs, queryClient]);
 
@@ -606,8 +596,10 @@ export default function BulkUploadPage() {
 
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.2 }}>
         <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-          <h2 className="text-xl font-semibold text-[var(--foreground)]">Upload History ({visibleJobs.length})</h2>
-          {jobs.length > 0 && (
+          <h2 className="text-xl font-semibold text-[var(--foreground)]">
+            Upload History {!isLoadingJobs && `(${visibleJobs.length})`}
+          </h2>
+          {!isLoadingJobs && jobs.length > 0 && (
             <Button
               variant="ghost"
               size="sm"
@@ -620,7 +612,7 @@ export default function BulkUploadPage() {
           )}
         </div>
 
-        {jobs.length > 0 && (
+        {!isLoadingJobs && jobs.length > 0 && (
           <div className="flex items-center gap-2 mb-4 flex-wrap">
             {DATE_FILTERS.map(({ key, label }) => (
               <button
@@ -637,7 +629,20 @@ export default function BulkUploadPage() {
           </div>
         )}
 
-        {jobs.length === 0 ? (
+        {/* FIX (audit #16): explicit loading state instead of assuming
+            jobs.length === 0 means "no data" — previously this flashed
+            "No uploads yet" on every page load/refresh before the fetch
+            resolved, jarring for anyone with existing uploads. */}
+        {isLoadingJobs ? (
+          <div className="space-y-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="card h-20 animate-pulse">
+                <div className="h-4 w-1/3 bg-[var(--foreground)]/10 rounded mb-3" />
+                <div className="h-3 w-2/3 bg-[var(--foreground)]/10 rounded" />
+              </div>
+            ))}
+          </div>
+        ) : jobs.length === 0 ? (
           <div className="card text-center py-16">
             <Upload className="h-16 w-16 text-[var(--foreground)]/20 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-[var(--foreground)] mb-2">No uploads yet</h3>
@@ -674,13 +679,6 @@ export default function BulkUploadPage() {
                     </div>
 
                     <JobStats job={job} />
-
-                    {isJobActive(job) && (
-                      <JobProgressBar
-                        progressPct={calculateJobStats(job).progressPct}
-                        isActive={true}
-                      />
-                    )}
                   </div>
 
                   <div className="flex items-center gap-2 flex-shrink-0">

@@ -1,18 +1,18 @@
 import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useTheme } from '@/styles/theme';
 
+// FIX (audit #37): removed unused `isDark` variable (computed via
+// document.documentElement.classList.contains('dark') but never referenced
+// anywhere in this component).
 export default function TrendsChart({ data }) {
   const theme = useTheme();
-  const isDark = document.documentElement.classList.contains('dark');
 
-  // Data keys: verified, invalid, risky
   const series = [
     { key: 'verified', color: theme.success, name: 'Verified' },
     { key: 'invalid', color: theme.error, name: 'Invalid' },
     { key: 'risky', color: theme.warning, name: 'Risky' },
   ];
 
-  // Handle empty data case
   if (!data || data.length === 0) {
     return (
       <ResponsiveContainer width="100%" height={350} aria-label="Trends chart - no data">

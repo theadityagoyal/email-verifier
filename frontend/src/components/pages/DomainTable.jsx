@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
   Globe,
@@ -18,11 +19,8 @@ import {
 } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import SortHeader from './SortHeader';
+import { RISK_THRESHOLDS, riskBarColorClass } from '@/utils/scoreThresholds';
 
-// FIX: the previous local "mock" configs rendered <span className="..." />
-// with no children — that's an empty, invisible element, so verdict badges
-// and trend arrows never actually showed an icon. Using the real lucide
-// components (same set DomainsPage.jsx defines) fixes that.
 const VERDICT_CONFIG = {
   Healthy: {
     icon: ShieldCheck,
@@ -67,12 +65,30 @@ export default function DomainTable({
   toggleSelectOne,
   openMenu,
   setOpenMenu,
-  // ── Sorting (new) ────────────────────────────────────────────────────────
   sortBy,
   sortOrder,
   onSort,
-  isSorting = false, // true while a sort-triggered refetch is in flight
+  isSorting = false,
+  // FIX (audit #9): navigate is now passed down from DomainsPage (which owns
+  // useNavigate()) instead of this component reaching for
+  // window.location.href, which caused a full page reload / lost SPA state
+  // every time a row or "View Emails" was clicked.
+  navigate,
 }) {
+  // FIX (audit #29): Escape closes the open row-actions menu.
+  useEffect(() => {
+    if (!openMenu) return;
+    const handler = (e) => {
+      if (e.key === 'Escape') setOpenMenu(null);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [openMenu, setOpenMenu]);
+
+  const goToDomainEmails = (domain) => {
+    navigate(`/emails?domain=${encodeURIComponent(domain)}`);
+  };
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -91,9 +107,6 @@ export default function DomainTable({
       ) : (
         <>
           <div className="overflow-x-auto relative">
-            {/* Loading veil while a sort-triggered fetch is in flight — keeps
-                previous rows visible (no layout jump) per react-query's
-                placeholderData, just dims + disables interaction briefly. */}
             {isSorting && (
               <div className="absolute inset-0 z-10 bg-[var(--background)]/40 backdrop-blur-[1px] pointer-events-none flex items-start justify-center pt-10">
                 <div className="flex items-center gap-2 rounded-full bg-[var(--background)] border border-[var(--muted)] px-3 py-1.5 text-xs text-[var(--foreground)]/60 shadow-sm">
@@ -115,86 +128,21 @@ export default function DomainTable({
                     />
                   </th>
 
-                  <SortHeader
-                    label="Domain"
-                    field="domain"
-                    sortBy={sortBy}
-                    sortOrder={sortOrder}
-                    onSort={onSort}
-                    className="min-w-[180px]"
-                  />
-                  <SortHeader
-                    label="Total Emails"
-                    field="total_emails"
-                    sortBy={sortBy}
-                    sortOrder={sortOrder}
-                    onSort={onSort}
-                    className="w-24"
-                  />
-                  <SortHeader
-                    label="Safe"
-                    field="safe"
-                    sortBy={sortBy}
-                    sortOrder={sortOrder}
-                    onSort={onSort}
-                    className="w-20"
-                  />
-                  <SortHeader
-                    label="Risky"
-                    field="risky"
-                    sortBy={sortBy}
-                    sortOrder={sortOrder}
-                    onSort={onSort}
-                    className="w-20"
-                  />
-                  <SortHeader
-                    label="Unsafe"
-                    field="unsafe"
-                    sortBy={sortBy}
-                    sortOrder={sortOrder}
-                    onSort={onSort}
-                    className="w-20"
-                  />
-                  <SortHeader
-                    label="Risk %"
-                    field="risk_percent"
-                    sortBy={sortBy}
-                    sortOrder={sortOrder}
-                    onSort={onSort}
-                    className="w-32"
-                  />
-                  <SortHeader
-                    label="7D Trend"
-                    field="trend"
-                    sortBy={sortBy}
-                    sortOrder={sortOrder}
-                    onSort={onSort}
-                    className="w-24"
-                  />
-                  <SortHeader
-                    label="MX Status"
-                    field="mx_status"
-                    sortBy={sortBy}
-                    sortOrder={sortOrder}
-                    onSort={onSort}
-                    className="w-24"
-                  />
+                  <SortHeader label="Domain" field="domain" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} className="min-w-[180px]" />
+                  <SortHeader label="Total Emails" field="total_emails" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} className="w-24" />
+                  <SortHeader label="Safe" field="safe" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} className="w-20" />
+                  <SortHeader label="Risky" field="risky" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} className="w-20" />
+                  <SortHeader label="Unsafe" field="unsafe" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} className="w-20" />
+                  <SortHeader label="Risk %" field="risk_percent" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} className="w-32" />
+                  <SortHeader label="7D Trend" field="trend" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} className="w-24" />
+                  <SortHeader label="MX Status" field="mx_status" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} className="w-24" />
 
-                  {/* Flags: intentionally NOT sortable (multi-value/badge column, no single scalar to order by) */}
                   <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-24">
                     Flags
                   </th>
 
-                  <SortHeader
-                    label="First Seen"
-                    field="first_seen"
-                    sortBy={sortBy}
-                    sortOrder={sortOrder}
-                    onSort={onSort}
-                    className="w-28"
-                  />
+                  <SortHeader label="First Seen" field="first_seen" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} className="w-28" />
 
-                  {/* Actions: intentionally NOT sortable */}
                   <th className="px-4 py-3 text-right text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider w-40">
                     Actions
                   </th>
@@ -216,9 +164,7 @@ export default function DomainTable({
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ duration: 0.3, delay: rowIndex * 0.02 }}
                       className="hover:bg-[var(--muted)]/30 transition-colors cursor-pointer"
-                      onClick={() => {
-                        window.location.href = `/emails?domain=${encodeURIComponent(domain.domain)}`;
-                      }}
+                      onClick={() => goToDomainEmails(domain.domain)}
                     >
                       <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                         <input
@@ -236,7 +182,11 @@ export default function DomainTable({
                             className="h-3 w-3 text-[var(--foreground)]/30 hover:text-[var(--accent)]"
                             onClick={(e) => {
                               e.stopPropagation();
-                              window.open(`https://${domain.domain}`, '_blank');
+                              // FIX (audit #15): explicit noopener,noreferrer
+                              // — without it, the opened page can access
+                              // window.opener and redirect this tab
+                              // (reverse tabnabbing).
+                              window.open(`https://${domain.domain}`, '_blank', 'noopener,noreferrer');
                             }}
                           />
                         </div>
@@ -282,10 +232,13 @@ export default function DomainTable({
                             <span className="text-sm font-semibold tabular-nums text-[var(--foreground)]">
                               {(domain.risk_percent ?? 0).toFixed(1)}%
                             </span>
+                            {/* FIX (audit #26): thresholds now come from the
+                                shared scoreThresholds.js constants instead of
+                                magic numbers 30/10 hardcoded here (and
+                                independently in 4 other places). */}
                             <div className="h-1.5 rounded-full bg-[var(--muted)] overflow-hidden mt-1">
                               <div
-                                className={`h-full rounded-full ${domain.risk_percent >= 30 ? 'bg-red-500' : domain.risk_percent >= 10 ? 'bg-amber-500' : 'bg-emerald-500'
-                                }`}
+                                className={`h-full rounded-full ${riskBarColorClass(domain.risk_percent ?? 0)}`}
                                 style={{ width: `${Math.min(domain.risk_percent ?? 0, 100)}%` }}
                               />
                             </div>
@@ -336,10 +289,17 @@ export default function DomainTable({
                       <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1 relative">
                           {isRisky ? (
+                            // FIX (audit #10): "Block Domain" had no
+                            // onClick at all — clicking silently did
+                            // nothing. Disabled with an explicit "Coming
+                            // soon" tooltip instead of a dead, misleading
+                            // affordance.
                             <Button
                               variant="outline"
                               size="sm"
-                              className="text-error border-error/40 hover:bg-error/10"
+                              disabled
+                              title="Coming soon"
+                              className="text-error border-error/40 opacity-60 cursor-not-allowed"
                             >
                               <Ban className="h-3.5 w-3.5" />
                               Block Domain
@@ -348,9 +308,7 @@ export default function DomainTable({
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => {
-                                window.location.href = `/emails?domain=${encodeURIComponent(domain.domain)}`;
-                              }}
+                              onClick={() => goToDomainEmails(domain.domain)}
                             >
                               <Mail className="h-3.5 w-3.5" />
                               View Emails
@@ -367,29 +325,39 @@ export default function DomainTable({
                             <MoreVertical className="h-4 w-4" />
                           </button>
                           {openMenu === domain.domain && (
-                            <div className="absolute right-0 top-8 z-10 w-40 rounded-lg border border-[var(--muted)] bg-[var(--background)] shadow-lg py-1">
+                            <div className="absolute right-0 top-8 z-10 w-44 rounded-lg border border-[var(--muted)] bg-[var(--background)] shadow-lg py-1">
                               <button
-                                onClick={() => {
-                                  window.location.href = `/emails?domain=${encodeURIComponent(domain.domain)}`;
-                                }}
+                                onClick={() => goToDomainEmails(domain.domain)}
                                 className="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)]/80 hover:bg-[var(--muted)]/40"
                               >
                                 <Mail className="h-3.5 w-3.5" />
                                 View Emails
                               </button>
-                              <button className="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)]/80 hover:bg-[var(--muted)]/40">
+                              {/* FIX (audit #10): "Reverify" had no
+                                  onClick — disabled + labeled instead of a
+                                  silent no-op. */}
+                              <button
+                                disabled
+                                title="Coming soon"
+                                className="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)]/40 cursor-not-allowed"
+                              >
                                 <RefreshCw className="h-3.5 w-3.5" />
-                                Reverify
+                                Reverify (coming soon)
                               </button>
-                              <button onClick={() => window.open(`https://${domain.domain}`, '_blank')}
+                              <button
+                                onClick={() => window.open(`https://${domain.domain}`, '_blank', 'noopener,noreferrer')}
                                 className="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)]/80 hover:bg-[var(--muted)]/40"
                               >
                                 <ExternalLink className="h-3.5 w-3.5" />
                                 Website
                               </button>
-                              <button className="flex w-full items-center gap-2 px-3 py-2 text-sm text-error hover:bg-error/10">
+                              <button
+                                disabled
+                                title="Coming soon"
+                                className="flex w-full items-center gap-2 px-3 py-2 text-sm text-error/40 cursor-not-allowed"
+                              >
                                 <Ban className="h-3.5 w-3.5" />
-                                Block Domain
+                                Block Domain (coming soon)
                               </button>
                             </div>
                           )}

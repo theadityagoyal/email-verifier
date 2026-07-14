@@ -1,20 +1,22 @@
 import axios from 'axios'
 
-// Simple development check
 const isDevelopment = () => {
   return import.meta.env.MODE === 'development'
 }
 
-// Create base API instance
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api/v1',
   timeout: 30000,
 })
 
-// Request interceptor for logging and headers
+// FIX (audit #32): removed dead `accessToken` Authorization-header logic.
+// This is a confirmed single-tenant, no-login app — there was no login flow
+// anywhere that ever set 'accessToken' in localStorage, so this branch was
+// always a no-op and just confused anyone reading the code into thinking
+// auth was implemented. Admin-only calls use X-Admin-Token explicitly
+// (see getAdminHeaders() below) — unrelated to this.
 api.interceptors.request.use(
   (config) => {
-    // Log requests in development
     if (isDevelopment()) {
       console.debug(`[API Request] ${config.method.toUpperCase()} ${config.url}`, {
         params: config.params,
@@ -22,13 +24,6 @@ api.interceptors.request.use(
         headers: config.headers,
       })
     }
-
-    // Add auth token if available
-    const token = localStorage.getItem('accessToken')
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
-    }
-
     return config
   },
   (error) => {
@@ -36,10 +31,8 @@ api.interceptors.request.use(
   }
 )
 
-// Response interceptor for enhanced error handling
 api.interceptors.response.use(
   (response) => {
-    // Log successful responses in development
     if (isDevelopment()) {
       console.debug(`[API Response] ${response.config.method.toUpperCase()} ${response.config.url}`, {
         status: response.status,
@@ -49,7 +42,6 @@ api.interceptors.response.use(
     return response
   },
   (error) => {
-    // Log error responses in development
     if (isDevelopment()) {
       console.error(`[API Error] ${error.config?.method?.toUpperCase() || 'UNKNOWN'} ${error.config?.url || 'unknown'}`, {
         status: error.response?.status,
@@ -58,29 +50,24 @@ api.interceptors.response.use(
       })
     }
 
-    // Enhance error with more context
     if (error.response) {
-      // Server responded with error status
       const message =
         error.response.data?.detail ||
         error.response.data?.message ||
         error.response.data?.error ||
         `HTTP ${error.response.status}: ${error.response.statusText}`
 
-      // Create enhanced error with original info
       const enhancedError = new Error(message)
       enhancedError.status = error.response.status
       enhancedError.data = error.response.data
       enhancedError.originalError = error
       return Promise.reject(enhancedError)
     } else if (error.request) {
-      // Request was made but no response received
       const enhancedError = new Error('Network error: No response received')
       enhancedError.code = 'NETWORK_ERROR'
       enhancedError.originalError = error
       return Promise.reject(enhancedError)
     } else {
-      // Something happened in setting up the request
       const enhancedError = new Error(error.message || 'Request failed')
       enhancedError.code = 'REQUEST_ERROR'
       enhancedError.originalError = error
@@ -89,7 +76,6 @@ api.interceptors.response.use(
   }
 )
 
-// Simple retry queue for deduplication of GET requests
 const retryQueue = new Map()
 
 const getRetryKey = (config) => {
@@ -114,14 +100,6 @@ const getRetryKey = (config) => {
   return `${config.method}:${url.toString()}`
 }
 
-// Create enhanced API instance with deduplication capabilities.
-// IMPORTANT: this instance carries baseURL ('/api/v1') + the same
-// interceptors as `api`. All requests MUST go through this instance
-// (or a config that explicitly sets baseURL) — using the bare, unconfigured
-// `axios` import here was the bug that sent every apiEnhanced.* call to a
-// relative URL resolved against the current page instead of the backend,
-// e.g. POST /bulk-upload instead of POST /api/v1/bulk-upload, which nginx's
-// static SPA location then rejected with 405 for non-GET methods.
 const apiEnhanced = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api/v1',
   timeout: 30000,
@@ -139,46 +117,33 @@ apiEnhanced.interceptors.response.use(
 const axiosRequest = async (config) => {
   const retryKey = getRetryKey({ ...config, baseURL: apiEnhanced.defaults.baseURL })
 
-  // If we have a retry key and there's already a request in flight, return the existing promise
   if (retryKey && retryQueue.has(retryKey)) {
     return retryQueue.get(retryKey)
   }
 
-  // Route through the configured apiEnhanced instance (baseURL + interceptors),
-  // not the bare global `axios`.
   const promise = apiEnhanced.request(config)
     .then(response => {
-      // Remove from queue when done
       if (retryKey) retryQueue.delete(retryKey)
       return response
     })
     .catch(error => {
-      // Remove from queue when done
       if (retryKey) retryQueue.delete(retryKey)
       throw error
     })
 
-  // Store promise for deduplication
   if (retryKey) {
     retryQueue.set(retryKey, promise)
-
-    // Clean up after completion
     promise.finally(() => retryQueue.delete(retryKey))
   }
 
   return promise
 }
 
-// Override the public methods to go through the deduplicating wrapper,
-// which itself now correctly delegates to the `apiEnhanced` axios instance.
 apiEnhanced.get = (url, config) => axiosRequest({ ...config, method: 'get', url })
 apiEnhanced.post = (url, data, config) => axiosRequest({ ...config, method: 'post', url, data })
 apiEnhanced.put = (url, data, config) => axiosRequest({ ...config, method: 'put', url, data })
 apiEnhanced.delete = (url, config) => axiosRequest({ ...config, method: 'delete', url })
 
-// Map backend EmailStatus to frontend safe/risky/invalid bucket
-// (kept in sync with the dashboard's safe/risky/unsafe logic —
-// probably_valid counts as safe, not risky)
 const normalizeStatus = (status) => {
   const positive = ['verified', 'trusted', 'deliverable', 'probably_valid']
   const negative = ['invalid', 'undeliverable']
@@ -187,10 +152,9 @@ const normalizeStatus = (status) => {
   if (positive.includes(status)) return 'verified'
   if (negative.includes(status)) return 'invalid'
   if (caution.includes(status)) return 'risky'
-  return status // processing, etc.
+  return status
 }
 
-// Normalize response data
 const normalizeEmail = (email) => ({
   ...email,
   normalized_status: normalizeStatus(email.status),
@@ -231,12 +195,15 @@ export const deleteJob = (jobId) =>
 // ── Dashboard ─────────────────────────────────────────────────────────────
 
 export const getDashboardStats = (days = 7) =>
-  apiEnhanced.get('/dashboard/stats', { params: { days }, }).then((r) => r.data)
+  apiEnhanced.get('/dashboard/stats', { params: { days } }).then((r) => r.data)
 
 export const getTrends = (days = 30) =>
   apiEnhanced.get('/dashboard/trends', { params: { days } }).then((r) => r.data)
 
 // ── Emails ────────────────────────────────────────────────────────────────
+// FIX (audit #7): `params` is forwarded as-is to axios, so sort_by/sort_order
+// just need to be included by the caller (EmailListPage) — no change needed
+// here, listEmails already passes through whatever params object it's given.
 
 export const listEmails = (params) =>
   apiEnhanced.get('/emails', { params }).then((r) => normalizeEmailList(r.data))
@@ -249,12 +216,30 @@ export const exportEmails = (params) => {
   return `${apiEnhanced.defaults.baseURL}/emails/export?${qs}`
 }
 
+// FIX (audit #31): fetch+blob download with real error handling instead of
+// a bare window.open() on a GET URL, which silently fails with a blank tab
+// on server errors.
+export const downloadEmailsExport = async (params) => {
+  const url = exportEmails(params)
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`Export failed (HTTP ${response.status})`)
+  }
+  const blob = await response.blob()
+  const objectUrl = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = objectUrl
+  a.download = 'emails-export.csv'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(objectUrl)
+}
+
 // ── Domains ───────────────────────────────────────────────────────────────
-// Backend aggregates live from Email via bucket_case() — numbers here always
-// match the dashboard's safe/risky/unsafe counts. listDomains supports
-// { page, size, search, sort } where sort is one of:
-// 'risk' (default, highest risk first), 'total', 'trust', 'domain', 'newest'.
-// Response shape: { items, total, page, size, pages }.
+// listDomains forwards whatever params object it's given (page, size,
+// search, sort_by, sort_order, and now risk_filter/mx_status/flags/
+// min_emails for server-side filtering — fixes audit #2).
 
 export const listDomains = (params) =>
   apiEnhanced.get('/domains', { params }).then((r) => r.data)
@@ -262,11 +247,36 @@ export const listDomains = (params) =>
 export const getDomainOverview = () =>
   apiEnhanced.get('/domains/overview').then((r) => r.data)
 
+// FIX (audit #3): real bulk-delete wiring — previously this button called an
+// empty function. Deletes the domain(s) and every email under them.
+export const bulkDeleteDomains = (domains) =>
+  apiEnhanced.post('/domains/delete', { domains }).then((r) => r.data)
+
+// FIX (audit #8): full server-side export (not just the current page),
+// respecting the same search/filter params as the table.
+export const exportDomainsUrl = (params) => {
+  const qs = new URLSearchParams(params).toString()
+  return `${apiEnhanced.defaults.baseURL}/domains/export?${qs}`
+}
+
+export const downloadDomainsExport = async (params) => {
+  const url = exportDomainsUrl(params)
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`Export failed (HTTP ${response.status})`)
+  }
+  const blob = await response.blob()
+  const objectUrl = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = objectUrl
+  a.download = 'domains-export.csv'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(objectUrl)
+}
+
 // ── Admin — auth ──────────────────────────────────────────────────────────
-// Admin endpoints use a separate X-Admin-Token header (stored in
-// localStorage as 'adminToken'), not the Bearer accessToken the rest of the
-// app uses — so headers are attached explicitly per-call here instead of
-// via the shared request interceptor.
 
 const getAdminHeaders = () => {
   const token = localStorage.getItem('adminToken')

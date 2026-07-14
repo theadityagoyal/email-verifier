@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
@@ -6,6 +6,7 @@ import { AreaChart, Area, ResponsiveContainer } from 'recharts';
 import CircularProgress from '@/components/ui/CircularProgress';
 import StackedBarChart from '@/components/charts/StackedBarChart';
 import { getDashboardStats } from '@/services/api';
+import { APP_USER } from '@/utils/appConfig';
 
 import Button from '@/components/ui/Button';
 import {
@@ -36,7 +37,6 @@ import {
   Star,
 } from 'lucide-react';
 
-// Motion variants
 const containerVariants = {
   hidden: { opacity: 0 },
   visible: { opacity: 1, transition: { staggerChildren: 0.1 } },
@@ -47,12 +47,23 @@ const itemVariants = {
   visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: 'easeOut' } },
 };
 
-// Status classifications
 const SAFE_STATUSES = ['verified', 'deliverable', 'trusted', 'probably_valid'];
 const RISKY_STATUSES = ['risky', 'unconfirmed', 'uncertain'];
 const UNSAFE_STATUSES = ['invalid', 'undeliverable'];
 
-// Utility functions
+// FIX (audit #36): tab-visibility hook — pauses expensive polling
+// (dashboard/stats runs ~10 aggregate queries per call) while the tab isn't
+// actually being looked at.
+function useIsTabVisible() {
+  const [visible, setVisible] = useState(document.visibilityState === 'visible');
+  useEffect(() => {
+    const handler = () => setVisible(document.visibilityState === 'visible');
+    document.addEventListener('visibilitychange', handler);
+    return () => document.removeEventListener('visibilitychange', handler);
+  }, []);
+  return visible;
+}
+
 function relativeTime(isoString) {
   if (!isoString) return '—';
   const then = new Date(isoString);
@@ -82,9 +93,6 @@ function formatAvgTime(timeMs) {
   return '<1ms';
 }
 
-// Sums all numeric fields on a daily_volume entry except the date key,
-// so it works regardless of whether the backend sends {date, total} or
-// {date, safe, risky, unsafe, processing}.
 function dayTotal(entry) {
   return Object.keys(entry).reduce((sum, key) => {
     if (key === 'date') return sum;
@@ -93,9 +101,11 @@ function dayTotal(entry) {
   }, 0);
 }
 
-// Small stat tile used by both the Flagged Emails "Overview" row and the
-// Worst Domains "Summary" row — same shape, different data sources.
-function MiniStat({ label, value, trend, Icon, iconBg, iconColor }) {
+// FIX (audit #17): MiniStat now takes an explicit `windowLabel` prop instead
+// of a hardcoded "vs last 7 days" caption. Some of these stats are actually
+// 24h-vs-previous-24h deltas on the backend — the old fixed caption
+// mislabeled every one of them the same way regardless of the real window.
+function MiniStat({ label, value, trend, windowLabel, Icon, iconBg, iconColor }) {
   const isPositive = trend >= 0;
   return (
     <div className="rounded-xl border border-[var(--muted)] p-3">
@@ -106,16 +116,12 @@ function MiniStat({ label, value, trend, Icon, iconBg, iconColor }) {
       <p className="text-xs text-[var(--foreground)]/50">{label}</p>
       <p className={`text-xs font-medium mt-1 ${isPositive ? 'text-success' : 'text-error'}`}>
         {isPositive ? '↑' : '↓'} {Math.abs(trend)}%{' '}
-        <span className="text-[var(--foreground)]/40 font-normal">vs last 7 days</span>
+        <span className="text-[var(--foreground)]/40 font-normal">{windowLabel}</span>
       </p>
     </div>
   );
 }
 
-// Tiny inline sparkline used inside the four top stat cards (Total / Safe /
-// Risky / Unsafe). Built straight from the same daily_volume the big
-// Verification Volume chart uses — no separate data source, so it can never
-// disagree with the stacked bar chart below it.
 function MiniSparkline({ data, color }) {
   if (!data || data.length < 2) return null;
   const gradId = `spark-${color.replace('#', '')}`;
@@ -141,9 +147,6 @@ function MiniSparkline({ data, color }) {
   );
 }
 
-// Top stat cards row: Total Emails / Safe / Risky / Unsafe, each with an
-// icon, a 24h trend arrow (from bucket_trend_pct / total_emails_trend_pct —
-// real backend numbers, not estimated), and a sparkline over daily_volume.
 function TopStatCard({ label, value, trendPct, sparkData, color, Icon, iconBg, iconColor }) {
   const isPositive = trendPct >= 0;
   return (
@@ -167,18 +170,11 @@ function TopStatCard({ label, value, trendPct, sparkData, color, Icon, iconBg, i
   );
 }
 
-// Status Group component
 function StatusGroup({ title, statuses, perStatusCounts, bucketTotal, totalEmails, perStatusTrend, bucketTrendPct }) {
   const rows = statuses
     .filter((s) => title === 'Processing' || (perStatusCounts[s] || 0) > 0)
     .sort((a, b) => (perStatusCounts[b] || 0) - (perStatusCounts[a] || 0));
 
-  // FIX: total now comes from bucket_counts (the same source used by the
-  // top-level stat cards), not a sum of raw per_status_counts. Those two
-  // used to disagree whenever an email was safe-status-but-flagged
-  // (disposable/role_based/catch_all downgrades it into risky/unsafe in the
-  // bucket count but not in the raw status count) — e.g. "Safe 2,017" up top
-  // vs "Safe 2,028" here. Now both numbers always match.
   const total = bucketTotal ?? 0;
   const percent = totalEmails > 0 ? ((total / totalEmails) * 100).toFixed(1) : '0.0';
 
@@ -322,9 +318,6 @@ function StatusGroup({ title, statuses, perStatusCounts, bucketTotal, totalEmail
   );
 }
 
-// Trust Score hero card — big score ring + a lightweight decorative graphic
-// on the right (icon composition, since we don't have a custom illustration
-// asset) to echo the reference design's shield/badge artwork.
 function TrustScoreCard({ trustScore, trustScoreColor, trustScoreLabel, textClassMap, badgeClassMap }) {
   return (
     <motion.div variants={itemVariants} className="card overflow-hidden relative">
@@ -344,7 +337,6 @@ function TrustScoreCard({ trustScore, trustScoreColor, trustScoreLabel, textClas
           </div>
         </div>
 
-        {/* Decorative right-side graphic */}
         <div className="hidden md:flex relative h-28 w-40 items-center justify-center flex-shrink-0">
           <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-[var(--primary)]/15 to-[var(--accent)]/15" />
           <ShieldCheck className="h-16 w-16 text-[var(--primary)]" strokeWidth={1.5} />
@@ -356,7 +348,6 @@ function TrustScoreCard({ trustScore, trustScoreColor, trustScoreLabel, textClas
   );
 }
 
-// Active Job Section component
 function ActiveJobSection({ activeJob, navigate }) {
   return (
     <motion.div variants={itemVariants} className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-stretch">
@@ -394,7 +385,6 @@ function ActiveJobSection({ activeJob, navigate }) {
   );
 }
 
-// Status Breakdown section component
 function StatusBreakdownSection({
   trustScore,
   verifiedCount,
@@ -428,7 +418,7 @@ function StatusBreakdownSection({
         <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6 mb-6">
           <div className="flex-1">
             <h2 className="text-3xl font-bold text-[var(--foreground)]">Status breakdown</h2>
-            <p className="mt-2 text-sm text-[var(--foreground)]/60">Detailed breakdown of verification statuses</p>
+            <p className="mt-2 text-sm text-[var(--foreground)]/60">Detailed breakdown of verification statuses (all-time)</p>
 
             <div className="mt-6 max-w-md">
               <p className="text-sm text-[var(--foreground)]/60">Overall Verification Progress</p>
@@ -547,7 +537,7 @@ function StatusBreakdownSection({
             <p className="mt-2 text-3xl font-bold">{relativeTime(generatedAt)}</p>
             <div className="flex items-center gap-1 text-xs text-[var(--foreground)]/50">
               <CalendarClock className="h-3 w-3" />
-              Auto-refreshes every 3s
+              Auto-refreshes periodically
             </div>
           </div>
         </div>
@@ -560,8 +550,13 @@ function StatusBreakdownSection({
             <p className="mt-1 text-sm text-[var(--foreground)]/60">Daily email verification activity</p>
           </div>
 
+          {/* FIX (audit #18): this selector only ever controlled the volume
+              chart below, but nothing on the page said so — every other card
+              (Trust Score, Safe/Risky/Unsafe totals, Status Breakdown) is
+              always all-time. Label now makes the scope explicit instead of
+              pretending to be a page-wide filter. */}
           <span className="rounded-xl border border-[var(--muted)] bg-[var(--background)] px-4 py-2 text-sm shadow-sm text-[var(--foreground)]/70">
-            {daysLabelMap[days] || `Last ${days} Days`}
+            Chart period: {daysLabelMap[days] || `Last ${days} Days`}
           </span>
         </div>
 
@@ -577,9 +572,7 @@ function StatusBreakdownSection({
               </div>
               <div>
                 <p className="text-xs font-medium text-[var(--foreground)]/60">Daily Average</p>
-                <p className="mt-1 text-3xl font-bold">
-                  {dailyAverage.toLocaleString()}
-                </p>
+                <p className="mt-1 text-3xl font-bold">{dailyAverage.toLocaleString()}</p>
                 <p className="text-xs text-[var(--foreground)]/50">emails/day</p>
               </div>
             </div>
@@ -592,9 +585,7 @@ function StatusBreakdownSection({
               </div>
               <div>
                 <p className="text-xs font-medium text-[var(--foreground)]/60">Peak Day</p>
-                <p className="mt-1 text-3xl font-bold">
-                  {peakDay.toLocaleString()}
-                </p>
+                <p className="mt-1 text-3xl font-bold">{peakDay.toLocaleString()}</p>
                 <p className="text-xs text-[var(--foreground)]/50">highest volume</p>
               </div>
             </div>
@@ -608,7 +599,7 @@ function StatusBreakdownSection({
               <div>
                 <p className="text-xs font-medium text-[var(--foreground)]/60">Total Volume</p>
                 <p className="mt-1 text-3xl font-bold">{totalEmails.toLocaleString()}</p>
-                <p className="text-xs text-[var(--foreground)]/50">emails</p>
+                <p className="text-xs text-[var(--foreground)]/50">emails (all-time)</p>
               </div>
             </div>
           </div>
@@ -679,7 +670,6 @@ function StatusBreakdownSection({
             </div>
           </div>
 
-          {/* Overview row */}
           <div className="mt-6 pt-6 border-t border-[var(--muted)]">
             <p className="text-sm font-semibold text-[var(--foreground)] mb-4">Overview</p>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -687,6 +677,7 @@ function StatusBreakdownSection({
                 label="Total Flagged"
                 value={flaggedOverview.total_flagged.toLocaleString()}
                 trend={flaggedOverview.total_flagged_trend_pct}
+                windowLabel="vs yesterday"
                 Icon={MailWarning}
                 iconBg="bg-violet-100 dark:bg-violet-900/20"
                 iconColor="text-violet-600"
@@ -695,6 +686,7 @@ function StatusBreakdownSection({
                 label="High Priority"
                 value={flaggedOverview.high_priority.toLocaleString()}
                 trend={flaggedOverview.high_priority_trend_pct}
+                windowLabel="vs yesterday"
                 Icon={AlertTriangle}
                 iconBg="bg-red-100 dark:bg-red-900/20"
                 iconColor="text-red-600"
@@ -703,6 +695,7 @@ function StatusBreakdownSection({
                 label="Flag Rate"
                 value={`${flaggedOverview.flag_rate}%`}
                 trend={flaggedOverview.flag_rate_trend_pct}
+                windowLabel="vs yesterday"
                 Icon={PieChart}
                 iconBg="bg-amber-100 dark:bg-amber-900/20"
                 iconColor="text-amber-600"
@@ -711,6 +704,7 @@ function StatusBreakdownSection({
                 label="Last 7 Days"
                 value={flaggedOverview.last_7_days.toLocaleString()}
                 trend={flaggedOverview.last_7_days_trend_pct}
+                windowLabel="vs prior 7 days"
                 Icon={CalendarClock}
                 iconBg="bg-blue-100 dark:bg-blue-900/20"
                 iconColor="text-[var(--foreground)]/60"
@@ -780,7 +774,6 @@ function StatusBreakdownSection({
             </div>
           )}
 
-          {/* Summary row */}
           <div className="mt-6 pt-6 border-t border-[var(--muted)]">
             <p className="text-sm font-semibold text-[var(--foreground)] mb-4">Summary</p>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -788,6 +781,7 @@ function StatusBreakdownSection({
                 label="Avg Reputation"
                 value={`${domainSummary.avg_reputation}%`}
                 trend={domainSummary.avg_reputation_trend_pct}
+                windowLabel="vs prior period"
                 Icon={ShieldCheck}
                 iconBg="bg-violet-100 dark:bg-violet-900/20"
                 iconColor="text-violet-600"
@@ -796,6 +790,7 @@ function StatusBreakdownSection({
                 label="High Risk"
                 value={domainSummary.high_risk_count}
                 trend={domainSummary.high_risk_trend_pct}
+                windowLabel="vs prior period"
                 Icon={AlertTriangle}
                 iconBg="bg-amber-100 dark:bg-amber-900/20"
                 iconColor="text-amber-600"
@@ -804,6 +799,7 @@ function StatusBreakdownSection({
                 label="Total Domains"
                 value={domainSummary.total_domains}
                 trend={domainSummary.total_domains_trend_pct}
+                windowLabel="vs prior period"
                 Icon={Globe}
                 iconBg="bg-blue-100 dark:bg-blue-900/20"
                 iconColor="text-[var(--foreground)]/60"
@@ -812,6 +808,7 @@ function StatusBreakdownSection({
                 label="Improving"
                 value={domainSummary.improving_count}
                 trend={domainSummary.improving_trend_pct}
+                windowLabel="vs prior 7 days"
                 Icon={TrendingUp}
                 iconBg="bg-success/10 dark:bg-success/20"
                 iconColor="text-success"
@@ -837,11 +834,12 @@ function StatusBreakdownSection({
 export default function DashboardPage() {
   const navigate = useNavigate();
   const [days, setDays] = useState(7);
+  const isTabVisible = useIsTabVisible();
 
   const { data: stats, isLoading, error } = useQuery({
     queryKey: ['dashboard-stats', days],
     queryFn: () => getDashboardStats(days),
-    refetchInterval: 3000,
+    refetchInterval: isTabVisible ? 10000 : false,
     refetchOnWindowFocus: true,
     staleTime: 0,
   });
@@ -908,14 +906,11 @@ export default function DashboardPage() {
 
   const verifiedCount = (bucketCounts.safe || 0) + (bucketCounts.risky || 0) + (bucketCounts.unsafe || 0);
 
-  // Find worst domains (highest risk)
   const worstDomains = [...(topDomains || [])]
     .filter((d) => d.total >= 5)
     .sort((a, b) => b.risk_pct - a.risk_pct)
     .slice(0, 5);
 
-  // Sparkline series for the top 4 stat cards — derived from the same
-  // daily_volume the Verification Volume chart uses.
   const sparkTotal = dailyVolume.map((d) => ({ v: dayTotal(d) }));
   const sparkSafe = dailyVolume.map((d) => ({ v: d.safe || 0 }));
   const sparkRisky = dailyVolume.map((d) => ({ v: d.risky || 0 }));
@@ -923,27 +918,29 @@ export default function DashboardPage() {
 
   return (
     <motion.div id="main-content" initial="hidden" animate="visible" variants={containerVariants} className="space-y-6">
-      {/* Skip navigation link for accessibility */}
       <a href="#main-content" className="absolute left-0 top-0 bg-[var(--accent)] text-white px-4 py-2 z-50 transform -translate-y-full focus:translate-y-0 transition-transform duration-300">
         Skip to main content
       </a>
 
-      {/* Welcome header + period selector */}
       <motion.div variants={itemVariants} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-[var(--foreground)]">Welcome back, Aditya! 👋</h1>
-          <p className="text-sm text-[var(--foreground)]/60">Here's your email verification overview for the selected period.</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-[var(--foreground)]">Welcome back, {APP_USER.name.split(' ')[0]}! 👋</h1>
+          <p className="text-sm text-[var(--foreground)]/60">Here's your email verification overview.</p>
         </div>
-        <select
-          value={days}
-          onChange={(e) => setDays(Number(e.target.value))}
-          className="rounded-xl border border-[var(--muted)] bg-[var(--background)] px-4 py-2 text-sm shadow-sm text-[var(--foreground)]"
-        >
-          <option value={7}>Last 7 Days</option>
-          <option value={30}>Last 30 Days</option>
-          <option value={90}>Last 90 Days</option>
-          <option value={365}>All Time</option>
-        </select>
+        <div>
+          <label htmlFor="chart-period-select" className="sr-only">Chart period</label>
+          <select
+            id="chart-period-select"
+            value={days}
+            onChange={(e) => setDays(Number(e.target.value))}
+            className="rounded-xl border border-[var(--muted)] bg-[var(--background)] px-4 py-2 text-sm shadow-sm text-[var(--foreground)]"
+          >
+            <option value={7}>Chart: Last 7 Days</option>
+            <option value={30}>Chart: Last 30 Days</option>
+            <option value={90}>Chart: Last 90 Days</option>
+            <option value={365}>Chart: All Time</option>
+          </select>
+        </div>
       </motion.div>
 
       <TrustScoreCard
@@ -954,7 +951,6 @@ export default function DashboardPage() {
         badgeClassMap={badgeClassMap}
       />
 
-      {/* Top stat cards with sparklines */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <TopStatCard
           label="Total Emails"

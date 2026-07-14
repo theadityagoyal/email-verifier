@@ -4,6 +4,30 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Email Verifier</title>
+    <!--
+      FIX (audit #33): apply the saved theme class BEFORE React mounts /
+      before first paint. Previously ThemeToggle.jsx wrote to localStorage
+      but nothing read it back on boot, so refreshing always flashed back
+      to light mode even if the user had picked dark. This tiny inline
+      script runs synchronously before the page renders, so there's no
+      flash and no lost preference.
+    -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('theme');
+          if (saved === 'dark') {
+            document.documentElement.classList.add('dark');
+          } else if (saved === 'light') {
+            document.documentElement.classList.remove('dark');
+          } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (e) {
+          // localStorage unavailable (privacy mode etc.) — fall back to light
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

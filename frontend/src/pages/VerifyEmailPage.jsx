@@ -6,12 +6,13 @@ import {
   Mail, CheckCircle, XCircle, AlertTriangle, Clock,
   Search, Loader2, ChevronDown, Copy, X as XIcon,
   ExternalLink, AlertCircle, Info, Shield, Globe, Zap, Layers, Timer, ShieldCheck,
-  Server, Target as TargetIcon, Star, Sparkles, ArrowRight,
+  Server, Target as TargetIcon, UserCheck, Sparkles, ArrowRight,
 } from 'lucide-react';
 import { verifyEmail, listEmails, getDashboardStats } from '@/services/api';
 import StatusBadge from '@/components/ui/StatusBadge';
 import Button from '@/components/ui/Button';
 import CircularProgress from '@/components/ui/CircularProgress';
+import { reportError } from '@/utils/errorReporter';
 
 const defaultResult = {
   email: '', domain: '', status: 'processing',
@@ -30,41 +31,34 @@ const detailItems = [
   { key: 'catch_all', label: 'Catch-all', icon: AlertCircle, description: 'Domain accepts all emails', inverted: true },
 ];
 
-// Each check gets its own accent color (matches the target design's colored
-// pills — Syntax=blue, MX=green, SMTP=teal, Disposable=purple, Catch-All=indigo,
-// Reputation=orange, Score=emerald). Used by both checkPills (static hint strip
-// under the input) and quickCheckItems (idle-state placeholder grid).
 const CHECK_COLORS = {
   Syntax: { text: 'text-blue-600', bg: 'bg-blue-100 dark:bg-blue-900/20', border: 'border-blue-200 dark:border-blue-800/30' },
+  Domain: { text: 'text-purple-600', bg: 'bg-purple-100 dark:bg-purple-900/20', border: 'border-purple-200 dark:border-purple-800/30' },
   'MX Records': { text: 'text-emerald-600', bg: 'bg-emerald-100 dark:bg-emerald-900/20', border: 'border-emerald-200 dark:border-emerald-800/30' },
   SMTP: { text: 'text-teal-600', bg: 'bg-teal-100 dark:bg-teal-900/20', border: 'border-teal-200 dark:border-teal-800/30' },
-  Disposable: { text: 'text-purple-600', bg: 'bg-purple-100 dark:bg-purple-900/20', border: 'border-purple-200 dark:border-purple-800/30' },
-  'Catch-All': { text: 'text-indigo-600', bg: 'bg-indigo-100 dark:bg-indigo-900/20', border: 'border-indigo-200 dark:border-indigo-800/30' },
-  Reputation: { text: 'text-orange-600', bg: 'bg-orange-100 dark:bg-orange-900/20', border: 'border-orange-200 dark:border-orange-800/30' },
-  Score: { text: 'text-green-600', bg: 'bg-green-100 dark:bg-green-900/20', border: 'border-green-200 dark:border-green-800/30' },
-  Risk: { text: 'text-green-600', bg: 'bg-green-100 dark:bg-green-900/20', border: 'border-green-200 dark:border-green-800/30' },
+  Disposable: { text: 'text-red-600', bg: 'bg-red-100 dark:bg-red-900/20', border: 'border-red-200 dark:border-red-800/30' },
+  'Role-based': { text: 'text-indigo-600', bg: 'bg-indigo-100 dark:bg-indigo-900/20', border: 'border-indigo-200 dark:border-indigo-800/30' },
+  'Catch-All': { text: 'text-orange-600', bg: 'bg-orange-100 dark:bg-orange-900/20', border: 'border-orange-200 dark:border-orange-800/30' },
 };
 
-// Static strip of all 7 signals we check — shown under the input at all times
 const checkPills = [
   { icon: CheckCircle, label: 'Syntax' },
+  { icon: Globe, label: 'Domain' },
   { icon: Mail, label: 'MX Records' },
   { icon: Server, label: 'SMTP' },
   { icon: AlertTriangle, label: 'Disposable' },
+  { icon: UserCheck, label: 'Role-based' },
   { icon: TargetIcon, label: 'Catch-All' },
-  { icon: Star, label: 'Reputation' },
-  { icon: Shield, label: 'Score' },
 ];
 
-// Idle placeholder grid shown inside the empty-state card before any check runs
 const quickCheckItems = [
   { label: 'Syntax', icon: CheckCircle },
+  { label: 'Domain', icon: Globe },
   { label: 'MX Records', icon: Mail },
   { label: 'SMTP', icon: Server },
   { label: 'Disposable', icon: AlertTriangle },
+  { label: 'Role-based', icon: UserCheck },
   { label: 'Catch-All', icon: TargetIcon },
-  { label: 'Reputation', icon: Star },
-  { label: 'Risk', icon: Shield },
 ];
 
 const howItWorksItems = [
@@ -73,7 +67,7 @@ const howItWorksItems = [
   { icon: Server, title: 'SMTP Connection', text: 'We test SMTP servers to confirm real deliverability.' },
   { icon: AlertTriangle, title: 'Disposable Check', text: 'We detect disposable and temporary email addresses.' },
   { icon: TargetIcon, title: 'Catch-All Detection', text: 'We identify domains that accept all emails blindly.' },
-  { icon: Star, title: 'Reputation & Risk', text: 'We evaluate sender reputation and overall risk factors.' },
+  { icon: UserCheck, title: 'Role-based Detection', text: 'We flag generic shared inboxes like admin@ or info@.' },
 ];
 
 function timeAgo(dateStr) {
@@ -104,23 +98,18 @@ export default function VerifyEmailPage() {
     mutationFn: verifyEmail,
     onSuccess: (data) => { setResult(data); setExpanded(true); },
     onError: (error) => {
+      reportError('VerifyEmailPage.verify', error);
       setResult({ ...defaultResult, email, status: 'invalid', error: error.message });
       setExpanded(true);
     },
   });
 
-  // Recent Verifications — last 4, most recent first.
-  // NOTE: needs the backend /emails endpoint to support ?order=desc
-  // (see dashboard.py patch) — without it this will show the oldest
-  // records instead of the newest.
   const { data: recentData } = useQuery({
     queryKey: ['recent-verifications'],
     queryFn: () => listEmails({ page: 1, size: 4, order: 'desc' }),
     refetchInterval: 15000,
   });
 
-  // Reuses the same dashboard aggregate for the stats row (avg processing
-  // time + trust score), so numbers never drift from the Dashboard page.
   const { data: statsData } = useQuery({
     queryKey: ['verify-page-stats'],
     queryFn: () => getDashboardStats(1),
@@ -165,9 +154,6 @@ export default function VerifyEmailPage() {
     }
   };
 
-  // normalized_status is the bucket-mapped value (verified/invalid/risky) —
-  // always use this for color/icon logic, never the raw granular
-  // result.status (deliverable/trusted/etc.), or colors will mismatch.
   const displayStatus = result?.normalized_status || result?.status;
 
   const avgSeconds = statsData?.avg_processing_time_ms
@@ -192,14 +178,15 @@ export default function VerifyEmailPage() {
             <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3">
               <div className="relative flex-1">
                 <Mail className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-[var(--foreground)]/40" aria-hidden="true" />
+                <label htmlFor="verify-email-input" className="sr-only">Email address to verify</label>
                 <input
+                  id="verify-email-input"
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="Enter email address (e.g., user@example.com)"
                   className="input pl-12 pr-10 py-3 text-lg w-full !bg-[var(--card)] !border !border-[var(--muted)] !text-[var(--foreground)]"
                   disabled={verifyMutation.isPending}
-                  aria-label="Email address to verify"
                   autoComplete="email"
                   autoFocus
                 />
@@ -230,7 +217,6 @@ export default function VerifyEmailPage() {
               </Button>
             </form>
 
-            {/* Colored pills — each check gets its own accent color instead of flat gray */}
             <div className="flex flex-wrap gap-2 mt-4">
               {checkPills.map(({ icon: Icon, label }) => {
                 const c = CHECK_COLORS[label] || CHECK_COLORS.Syntax;
@@ -263,7 +249,6 @@ export default function VerifyEmailPage() {
                     displayStatus === 'risky' ? 'border-warning' : 'border-info'
                   }`}
               >
-                {/* Hero row: email + status left, score ring right */}
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6 mb-6">
                   <div className="flex items-center gap-4 min-w-0">
                     <div className={`p-3 rounded-xl bg-[var(--muted)]/50 flex-shrink-0 ${getStatusColor(displayStatus)}`}>
@@ -285,10 +270,7 @@ export default function VerifyEmailPage() {
                   </div>
 
                   <div className="flex flex-col items-center flex-shrink-0">
-                    <CircularProgress value={result.score} size={110} strokeWidth={9} color={getRingColor(displayStatus)}>
-                      <span className={`text-2xl font-bold ${getStatusColor(displayStatus)}`}>{result.score}</span>
-                      <span className="text-xs text-[var(--foreground)]/50">/100</span>
-                    </CircularProgress>
+                    <CircularProgress value={result.score} size={110} strokeWidth={9} color={getRingColor(displayStatus)} />
                     <p className="text-xs text-[var(--foreground)]/50 mt-2 text-center max-w-[120px]">
                       {result.score >= 80 ? 'Excellent deliverability' :
                         result.score >= 50 ? 'Some risks detected' : 'Significant issues found'}
@@ -318,13 +300,6 @@ export default function VerifyEmailPage() {
                         className="overflow-hidden"
                       >
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4">
-                          {/* STAGGERED TICK ANIMATION:
-                              each check card now reveals ~350ms after the
-                              previous one (delay: index * 0.35), so they
-                              visibly tick in one-by-one instead of all
-                              appearing at once. Purely cosmetic — the actual
-                              verification already finished server-side, this
-                              just paces how the result is *revealed*. */}
                           {detailItems.map(({ key, label, icon: Icon, description, inverted }, index) => {
                             const value = result[key];
                             const isPass = inverted ? !value : value;
@@ -381,7 +356,12 @@ export default function VerifyEmailPage() {
                                 <p className="text-sm text-[var(--foreground)]/50">Domain</p>
                                 <p className="font-mono text-[var(--foreground)]">{result.domain}</p>
                               </div>
-                              <a href={`https://${result.domain}`} target="_blank" rel="noopener noreferrer" className="ml-auto text-sm text-[var(--primary)] hover:underline flex items-center gap-1">
+                              <a
+                                href={`https://${result.domain}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="ml-auto text-sm text-[var(--primary)] hover:underline flex items-center gap-1"
+                              >
                                 <ExternalLink className="h-3 w-3" /> Visit
                               </a>
                             </div>
@@ -427,15 +407,11 @@ export default function VerifyEmailPage() {
                       Email Quality Score
                       <Info className="h-3.5 w-3.5 text-[var(--foreground)]/30" />
                     </p>
-                    <CircularProgress value={0} size={130} strokeWidth={10} color="var(--muted)">
-                      <span className="text-2xl font-bold text-[var(--foreground)]/30">--</span>
-                      <span className="text-xs text-[var(--foreground)]/40">/100</span>
-                    </CircularProgress>
+                    <CircularProgress value={0} size={130} strokeWidth={10} color="muted" />
                     <p className="text-xs text-[var(--foreground)]/40 mt-3 text-center">No verification started yet</p>
                   </div>
                 </div>
 
-                {/* Colored idle-state grid — same accent colors as the pills above */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 mt-8 pt-6 border-t border-[var(--muted)]">
                   {quickCheckItems.map(({ label, icon: Icon }) => {
                     const c = CHECK_COLORS[label] || CHECK_COLORS.Syntax;
@@ -452,7 +428,6 @@ export default function VerifyEmailPage() {
             )}
           </AnimatePresence>
 
-          {/* Recent Verifications + quick stats row */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -484,8 +459,6 @@ export default function VerifyEmailPage() {
               </div>
             </div>
 
-            {/* Bottom 4 stat cards — colored icon circles matching the target design
-                (purple=checks, green=time, blue=accuracy, green=safe-to-send) */}
             <div className="grid grid-cols-2 gap-3">
               <div className="card flex flex-col items-center justify-center py-5">
                 <div className="p-2 rounded-full bg-primary/10 mb-2">
@@ -506,7 +479,7 @@ export default function VerifyEmailPage() {
                   <ShieldCheck className="h-5 w-5 text-info" />
                 </div>
                 <p className="text-xl font-bold text-[var(--foreground)]">{statsData?.trust_score != null ? `${statsData.trust_score}%` : '--'}</p>
-                <p className="text-xs text-[var(--foreground)]/50 text-center">Accuracy Rate</p>
+                <p className="text-xs text-[var(--foreground)]/50 text-center">Platform Safe Rate</p>
               </div>
               <div className="card flex flex-col items-center justify-center py-5 !bg-success/5 !border-success/20">
                 <CheckCircle className="h-5 w-5 text-success mb-2" />
@@ -517,7 +490,6 @@ export default function VerifyEmailPage() {
           </motion.div>
         </div>
 
-        {/* Right sidebar — explains what verification checks mean */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
