@@ -1,13 +1,14 @@
 # Email Verifier System - Project Structure Documentation
 
-## 📋 Overview
+## Overview
+
 This document provides a comprehensive overview of the complete folder structure and purpose of each directory and file in the Email Verifier system.
 
 ---
 
-## 🗂️ Root Directory Structure
+## Root Directory Structure
 
-```
+```text
 email-verifier/
 ├── backend/                    # Backend FastAPI application
 ├── frontend/                   # Frontend React application
@@ -17,10 +18,11 @@ email-verifier/
 
 ---
 
-## 🔧 Backend Structure
+## Backend Structure
 
 ### Directory Tree
-```
+
+```text
 backend/
 ├── api/                        # API route definitions
 │   ├── external/               # External developer API
@@ -40,9 +42,9 @@ backend/
 │   │   └── router.py           # API router configuration
 │   ├── __init__.py             # Package initializer
 │   └── __init__.py             # Package initializer
-│
+
 ├── core/                       # Core application configuration
-│
+
 ├── database/                   # Database configuration and migrations
 │   ├── alembic.ini             # Alembic configuration
 │   └── versions/               # Database migration scripts
@@ -50,32 +52,32 @@ backend/
 │       ├── 755992d1fcc0_add_columns_for_bulk_upload_redesign.py
 │       ├── a1e5f9c3b7d2_add_api_keys.py
 │       └── d0739350dd1a_add_columns_for_job_stages_and_email_status.py
-│
+
 ├── models/                     # SQLAlchemy database models
 │   ├── database.py             # Database connection and session management
 │   ├── models.py               # Database models (Email, Domain, Job, ApiKey)
 │   └── __init__.py             # Package initializer
-│
+
 ├── schemas/                    # Pydantic schemas for request/validation
 │   ├── schemas.py              # Request and response schemas
 │   └── __init__.py             # Package initializer
-│
+
 ├── services/                   # Business logic services
 │   ├── email_service.py        # Main email verification pipeline
 │   ├── s3_service.py           # S3 file storage abstraction
 │   └── __init__.py             # Package initializer
-│
+
 ├── tasks/                      # Background processing tasks
 │   ├── bulk_processor.py       # ThreadPoolExecutor-based bulk processing
 │   └── __init__.py             # Package initializer
-│
+
 ├── utils/                      # Utility functions and helpers
 │   ├── config.py               # Application configuration management
 │   ├── email_utils.py          # Email column detection and file utilities
 │   ├── executor.py             # Thread pool executor management
 │   ├── logging.py              # Structured logging configuration
 │   └── __init__.py             # Package initializer
-│
+
 ├── validators/                 # Email validation components
 │   ├── disposable_checker.py   # Disposable email domain detection
 │   ├── dns_validator.py        # DNS/MX record validation
@@ -83,11 +85,11 @@ backend/
 │   ├── score_calculator.py     # Email scoring algorithm
 │   ├── syntax_validator.py     # Email syntax validation
 │   └── __init__.py             # Package initializer
-│
+
 ├── tests/                      # Test suite
 │   ├── __init__.py             # Package initializer
 │   └── [various test files]    # Unit and integration tests
-│
+
 ├── .dockerignore               # Docker ignore file
 ├── .env                        # Environment variables (not in version control)
 ├── .env.example                # Example environment variables
@@ -101,17 +103,18 @@ backend/
 
 ---
 
-## 🎨 Frontend Structure
+## Frontend Structure
 
 ### Directory Tree
-```
+
+```text
 frontend/
 ├── public/                     # Static assets
 │   └── [various assets]        # Favicon, robots.txt, etc.
-│
+
 ├── src/                        # Source code
 │   ├── assets/                 # Static assets (images, icons, etc.)
-│   │
+│
 │   ├── components/             # Reusable UI components
 │   │   ├── charts/             # Chart components (Recharts)
 │   │   │   ├── [chart components]
@@ -123,30 +126,30 @@ frontend/
 │   │   │   ├── [component files]
 │   │   │   └── index.js
 │   │   └── [component files]
-│   │
+│
 │   ├── pages/                  # Page-level components
 │   │   ├── BulkUploadPage.jsx  # File upload and job management page
 │   │   ├── DashboardPage.jsx   # Main dashboard with analytics
 │   │   ├── DomainsPage.jsx     # Domain analytics and management
 │   │   ├── EmailListPage.jsx   # Email verification history and search
 │   │   └── VerifyEmailPage.jsx # Single email verification interface
-│   │
+│
 │   ├── services/               # API service modules
 │   │   ├── api.js              # Axios instance and base configuration
 │   │   ├── authService.js      # Authentication API calls
 │   │   ├── dashboardService.js # Dashboard data API calls
 │   │   ├── emailService.js     # Email verification API calls
 │   │   └── jobService.js       # Job management API calls
-│   │
+│
 │   ├── utils/                  # Utility functions and helpers
 │   │   ├── constants.js        # Application constants
 │   │   ├── helpers.js          # Helper functions
 │   │   └── utils.js            # Utility functions
-│   │
+│
 │   ├── styles/                 # CSS and styling
 │   │   ├── index.css           # Global styles
 │   │   └── [other CSS files]   # Component-specific styles
-│   │
+│
 │   ├── App.jsx                 # Main application component
 │   ├── index.css               # Global CSS imports
 │   ├── index.jsx               # Application entry point
@@ -154,7 +157,7 @@ frontend/
 │   ├── postcss.config.js       # PostCSS configuration
 │   ├── tailwind.config.js      # Tailwind CSS configuration
 │   └── vite.config.js          # Vite build configuration
-│
+
 ├── .git                        # Git repository metadata
 ├── Dockerfile                  # Docker container definition
 ├── index.html                  # HTML template
@@ -167,9 +170,10 @@ frontend/
 
 ---
 
-## 🗄️ Database Schema
+## Database Schema
 
 ### emails Table
+
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | Integer | Primary key |
@@ -190,6 +194,7 @@ frontend/
 | `updated_at` | Timestamp | Last update timestamp |
 
 ### domains Table
+
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | Integer | Primary key |
@@ -204,6 +209,7 @@ frontend/
 | `updated_at` | Timestamp | Last update timestamp |
 
 ### jobs Table
+
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | Integer | Primary key |
@@ -227,6 +233,7 @@ frontend/
 | `updated_at` | Timestamp | Last update timestamp |
 
 ### api_keys Table
+
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | Integer | Primary key |
@@ -241,24 +248,28 @@ frontend/
 
 ---
 
-## 🔒 Security Considerations
+## Security Considerations
 
 ### Authentication & Authorization
+
 - **API Keys**: External API uses API key authentication with `X-API-Key` header
 - **Passwords**: Not applicable (no user authentication in current implementation)
 - **Secrets**: Database credentials, API keys stored in environment variables
 
 ### Data Protection
+
 - **Email Storage**: Email addresses stored as-is (consider hashing for GDPR compliance if needed)
 - **API Keys**: Stored as salted hashes (never plaintext)
 - **File Uploads**: Scanned for malicious content (basic extension validation)
 
 ### Rate Limiting
+
 - **Per-IP**: Implemented via middleware (can be enhanced)
 - **Per-API Key**: Configurable limits for email verification and bulk uploads
 - **Endpoints**: Different limits for different endpoint types
 
 ### Input Validation
+
 - **File Uploads**: Extension and size validation
 - **Email Input**: Length and format validation via Pydantic
 - **SQL Injection**: Protected by SQLAlchemy ORM
@@ -266,9 +277,10 @@ frontend/
 
 ---
 
-## 🚀 Extending the System
+## Extending the System
 
 ### Adding New Validation Rules
+
 1. Create new validator in `/validators/` module
 2. Import and call it in `email_service.verify_email()`
 3. Update `EmailVerifyResponse` schema if needed
@@ -276,11 +288,13 @@ frontend/
 5. Update frontend to display new validation results
 
 ### Changing Storage Backend
+
 1. Modify `services/s3_service.py` to implement desired storage
 2. Update configuration in `utils/config.py`
 3. Ensure proper permissions for new storage service
 
 ### Adding New API Endpoints
+
 1. Add route to appropriate `/api/*/endpoints/` file
 2. Create Pydantic schemas in `/schemas/schemas.py` if needed
 3. Implement business logic in services or directly in endpoint
@@ -289,6 +303,7 @@ frontend/
 6. Update frontend service methods if needed
 
 ### Database Migrations
+
 1. Modify `/models/models.py` with new fields or tables
 2. Generate migration: `alembic revision --autogenerate -m "description"`
 3. Review generated migration in `/database/versions/`
@@ -296,59 +311,69 @@ frontend/
 
 ---
 
-## ⚡ Performance Considerations
+## Performance Considerations
 
 ### Database Indexes
-- Strategic indexes on frequently queried columns:
-  - `emails.email` (unique)
-  - `emails.domain` (for domain lookups)
-  - `emails.status` (for filtering)
-  - `emails.job_id` (for job-based queries)
-  - `emails.verified_at` (for time-based queries)
-  - `jobs.job_id` (unique)
-  - `jobs.status` (for queue processing)
-  - `domains.domain` (unique)
+
+Strategic indexes on frequently queried columns:
+
+- `emails.email` (unique)
+- `emails.domain` (for domain lookups)
+- `emails.status` (for filtering)
+- `emails.job_id` (for job-based queries)
+- `emails.verified_at` (for time-based queries)
+- `jobs.job_id` (unique)
+- `jobs.status` (for queue processing)
+- `domains.domain` (unique)
 
 ### Connection Pooling
-- SQLAlchemy connection pooling configured via:
-  - `DB_POOL_SIZE`: Base number of connections
-  - `DB_MAX_OVERFLOW`: Additional connections allowed
-  - `DB_POOL_TIMEOUT`: Seconds to wait for connection
-  - `DB_POOL_RECYCLE`: Seconds before connection refresh
+
+SQLAlchemy connection pooling configured via:
+
+- `DB_POOL_SIZE`: Base number of connections
+- `DB_MAX_OVERFLOW`: Additional connections allowed
+- `DB_POOL_TIMEOUT`: Seconds to wait for connection
+- `DB_POOL_RECYCLE`: Seconds before connection refresh
 
 ### Concurrent Processing
+
 - ThreadPoolExecutor size configurable via `WORKERS` environment variable
 - Optimal value typically equals number of CPU cores
 - I/O-bound nature of email verification benefits from threading
 
 ### Caching Opportunities
+
 - Domain DNS lookups could be cached (Redis recommended)
 - Frequently accessed domains could be cached
 - Consider implementing LRU cache for expensive operations
 
 ---
 
-## 📊 Monitoring & Observability
+## Monitoring & Observability
 
 ### Logging
-- Structured logging via structlog with JSON output
-- Key loggers:
-  - Application startup/shutdown
-  - HTTP requests/responses with timing
-  - Email verification steps
-  - Database operations
-  - Background task progress
-  - Error conditions with stack traces
+
+Structured logging via structlog with JSON output. Key loggers:
+
+- Application startup/shutdown
+- HTTP requests/responses with timing
+- Email verification steps
+- Database operations
+- Background task progress
+- Error conditions with stack traces
 
 ### Metrics Collection
-- Consider integrating with Prometheus/Grafana for:
-  - Request latency and throughput
-  - Database query performance
-  - Background job processing rates
-  - Error rates and failure categories
-  - System resource utilization (CPU, memory, disk)
+
+Consider integrating with Prometheus/Grafana for:
+
+- Request latency and throughput
+- Database query performance
+- Background job processing rates
+- Error rates and failure categories
+- System resource utilization (CPU, memory, disk)
 
 ### Health Checks
+
 - `/health` endpoint returns basic service status
 - Database connectivity verified on startup
 - Can be extended to check:
@@ -358,15 +383,17 @@ frontend/
 
 ---
 
-## 💻 Development Setup
+## Development Setup
 
 ### Prerequisites
+
 - Python 3.12+
 - Node.js 18+
 - Docker and Docker Compose (recommended)
 - MySQL 5.7+ or compatible
 
 ### Backend Setup
+
 ```bash
 # Clone repository
 git clone <repository-url>
@@ -393,6 +420,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### Frontend Setup
+
 ```bash
 cd ../frontend
 
@@ -404,6 +432,7 @@ npm run dev
 ```
 
 ### Docker Setup
+
 ```bash
 # From project root
 docker-compose up --build
@@ -416,9 +445,10 @@ docker-compose up --build
 
 ---
 
-## 🧪 Testing
+## Testing
 
 ### Backend Tests
+
 ```bash
 # Run all tests
 pytest
@@ -431,6 +461,7 @@ pytest tests/test_specific_feature.py
 ```
 
 ### Frontend Tests
+
 ```bash
 # Run tests
 npm test
@@ -441,9 +472,10 @@ npm run test:watch
 
 ---
 
-## 🔧 Environment Variables
+## Environment Variables
 
 ### Backend (.env)
+
 ```env
 # Server
 HOST=0.0.0.0
@@ -487,6 +519,7 @@ LOG_LEVEL=INFO
 ```
 
 ### Frontend (.env)
+
 ```env
 VITE_API_BASE_URL=http://localhost:8000/api/v1
 VITE_EXTERNAL_API_BASE_URL=http://localhost:8000/api/external/v1
@@ -494,13 +527,13 @@ VITE_EXTERNAL_API_BASE_URL=http://localhost:8000/api/external/v1
 
 ---
 
-## 📝 License
+## License
 
 [Specify your license - e.g., MIT License, Apache License 2.0, etc.]
 
 ---
 
-## 📧 Contact
+## Contact
 
 [Your name or team name]  
 [Your email or contact information]  

@@ -1,10 +1,13 @@
 # AWS Deployment Handbook — EmailVerifier Pro
 
+## Overview
+
 **Approach chosen:** Single EC2 instance + Docker Compose (backend + frontend containers) + AWS RDS MySQL (managed database) + existing domain via Route 53.
 
 This guide is written specifically for **this** codebase (FastAPI + async SQLAlchemy + MySQL backend, React/Vite frontend, `docker-compose.yml`, `backend/Dockerfile`, `frontend/Dockerfile` already in your repo). Follow it top to bottom — nothing skipped.
 
 **Legend for "Run on" column:**
+
 - 🖥️ **Local PowerShell** — your Windows machine, PowerShell (not bash, not WSL)
 - 📝 **VS Code Terminal** — same as PowerShell, just inside VS Code (same commands)
 - ☁️ **EC2 SSH** — terminal after `ssh`-ing into the EC2 server
@@ -16,7 +19,7 @@ This guide is written specifically for **this** codebase (FastAPI + async SQLAlc
 ## 0. Project Analysis (what we're deploying)
 
 | Component | Detail |
-|---|---|
+| --- | --- |
 | Backend | FastAPI, `uvicorn`, async SQLAlchemy + `aiomysql`, Alembic migrations, port `8000` |
 | Frontend | React (Vite build) served by Nginx, port `80` inside container |
 | Database | MySQL 8.0.x — will move from local container to **AWS RDS MySQL** |
@@ -27,7 +30,7 @@ This guide is written specifically for **this** codebase (FastAPI + async SQLAlc
 
 **Target production architecture (this guide):**
 
-```
+```text
 Your Domain (Route 53)
         │
         ▼
@@ -58,7 +61,7 @@ Note: we put **host-level Nginx** in front of the Docker containers (not the con
 ## 1. Which AWS Services & Why
 
 | Service | Why |
-|---|---|
+| --- | --- |
 | **EC2** | Runs your Docker Compose stack exactly like your local machine. Simplest mental model — "a Linux server you SSH into." Matches your existing `docker-compose.yml` 1:1. |
 | **RDS (MySQL)** | Managed database: automated backups, patching, Multi-AZ failover option, no manual `mysqldump` cron jobs. Your app already speaks MySQL via `pymysql`/`aiomysql` — zero code change needed, only `DATABASE_URL`. |
 | **Elastic IP** | Static public IP for EC2 so DNS doesn't break on reboot. |
@@ -74,21 +77,21 @@ Note: we put **host-level Nginx** in front of the Docker containers (not the con
 ## 2. Deployment Approach: Why EC2 (and not ECS/App Runner/EKS)
 
 | Approach | Pros | Cons | Verdict |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **EC2 + Docker Compose** ✅ | Matches your existing `docker-compose.yml` exactly, cheapest to learn, full control, easy to debug (`docker logs`, SSH in), single monthly bill (~$15-25 for a t3.small) | You manage OS patches, no auto-scaling, single point of failure unless you add a load balancer later | **Best for learning + a SaaS in early stage.** Recommended. |
 | ECS Fargate | No server management, auto-scaling, AWS-native | Steeper learning curve (task definitions, ECR, ALB, VPC networking all mandatory), costs more (~2-3x for same load), harder to debug for a beginner | Good "next step" once traffic grows |
 | App Runner | Simplest AWS-native option, auto SSL, auto-scaling from git/ECR | Doesn't support docker-compose multi-container out of the box, less control over Nginx reverse-proxy setup, pricier at idle | Good for backend-only microservice, not this multi-container app |
 | EKS (Kubernetes) | Industry standard at scale | Massive overkill for a 2-container app, real learning curve, expensive control plane ($73/mo just for the cluster) | Skip until you have a real scaling problem |
 
-**Decision: EC2 + Docker Compose + RDS.** This is what the rest of the guide implements.
+**Decision:** EC2 + Docker Compose + RDS. This is what the rest of the guide implements.
 
 ---
 
 ## 3. AWS Account Prerequisites
 
-**Run on: 🌐 AWS Console**
+**Run on:** 🌐 AWS Console
 
-1. Go to https://aws.amazon.com/ → **Create an AWS Account** (skip if you already have one).
+1. Go to <https://aws.amazon.com/> → **Create an AWS Account** (skip if you already have one).
 2. You'll need a credit/debit card (AWS charges $0 to verify, then bills monthly).
 3. Choose the **Basic support plan** (free) — enough for this project.
 4. Set a **billing alert** immediately (before doing anything else):
@@ -96,13 +99,13 @@ Note: we put **host-level Nginx** in front of the Docker containers (not the con
    - Console → search "CloudWatch" → **Alarms** → **Billing** → create alarm for e.g. $20 threshold, email notification.
    - **Why now:** so you get emailed *before* a mistake (e.g. forgetting to stop an instance) becomes a surprise bill.
 
-✅ **Verify:** You can log into https://console.aws.amazon.com with your new account, and you see an email confirming the billing alarm was created.
+✅ **Verify:** You can log into <https://console.aws.amazon.com> with your new account, and you see an email confirming the billing alarm was created.
 
 ---
 
 ## 4. IAM User and Permissions (never use root for daily work)
 
-**Run on: 🌐 AWS Console**
+**Run on:** 🌐 AWS Console
 
 **Why:** Your AWS root account has unlimited power — if its credentials leak, someone can destroy your entire account. You create a limited IAM user instead for CLI/day-to-day use.
 
@@ -127,14 +130,14 @@ Note: we put **host-level Nginx** in front of the Docker containers (not the con
 
 ## 5. Install & Configure AWS CLI (Windows)
 
-**Run on: 🖥️ Local PowerShell**
+**Run on:** 🖥️ Local PowerShell
 
 ```powershell
 # Download and run the AWS CLI v2 MSI installer
 Start-Process msiexec.exe -ArgumentList '/i https://awscli.amazonaws.com/AWSCLIV2.msi /qn' -Wait
 ```
 
-Or simpler — just download manually from https://awscli.amazonaws.com/AWSCLIV2.msi and double-click it (GUI installer, click Next-Next-Finish).
+Or simpler — just download manually from <https://awscli.amazonaws.com/AWSCLIV2.msi> and double-click it (GUI installer, click Next-Next-Finish).
 
 **Close and reopen PowerShell**, then verify:
 
@@ -143,7 +146,8 @@ aws --version
 ```
 
 **Expected output:**
-```
+
+```text
 aws-cli/2.x.x Python/3.x.x Windows/10 exe/AMD64
 ```
 
@@ -154,7 +158,8 @@ aws configure
 ```
 
 It will prompt:
-```
+
+```text
 AWS Access Key ID [None]: <paste from CSV>
 AWS Secret Access Key [None]: <paste from CSV>
 Default region name [None]: ap-south-1
@@ -164,10 +169,13 @@ Default output format [None]: json
 *(`ap-south-1` = Mumbai — pick whichever region is closest to your users; your `s3_service.py` default is already `ap-south-1`, so staying consistent avoids cross-region S3 latency/cost.)*
 
 ✅ **Verify:**
+
 ```powershell
 aws sts get-caller-identity
 ```
+
 **Expected output:**
+
 ```json
 {
     "UserId": "AIDAxxxxxxxxxxxx",
@@ -175,6 +183,7 @@ aws sts get-caller-identity
     "Arn": "arn:aws:iam::123456789012:user/emailverifier-deploy"
 }
 ```
+
 If you see this, CLI is correctly authenticated as your IAM user (not root).
 
 **Common error:** `Unable to locate credentials` → you ran `aws configure` in a different shell/profile. Re-run `aws configure`.
@@ -186,9 +195,11 @@ If you see this, CLI is correctly authenticated as your IAM user (not root).
 **Two places need Docker:**
 
 ### 6a. Local Windows (for testing builds before pushing) — optional but recommended
-**Run on: 🖥️ Local PowerShell**
 
-Install **Docker Desktop for Windows**: https://www.docker.com/products/docker-desktop/
+**Run on:** 🖥️ Local PowerShell
+
+Install **Docker Desktop for Windows**: <https://www.docker.com/products/docker-desktop/>
+
 - Requires WSL2 backend (installer will prompt to enable it — accept).
 - After install, restart, then verify:
 
@@ -198,38 +209,44 @@ docker compose version
 ```
 
 **Expected:**
-```
+
+```text
 Docker version 27.x.x
 Docker Compose version v2.x.x
 ```
 
 ### 6b. On EC2 (mandatory — this is where containers actually run)
+
 Covered in §7-9 below (Docker gets installed on the server itself, not on Windows).
 
 ---
 
 ## 7. Creating the EC2 Server
 
-**Run on: 🌐 AWS Console** (CLI alternative shown too)
+**Run on:** 🌐 AWS Console (CLI alternative shown too)
 
 ### Step 7.1 — Create a Key Pair (for SSH)
+
 Console → **EC2** → **Key Pairs** (left sidebar, under "Network & Security") → **Create key pair**
+
 - Name: `emailverifier-key`
 - Type: `RSA`
 - Format: **`.pem`** (works with OpenSSH on modern Windows 10/11)
 - Click Create → a file `emailverifier-key.pem` downloads automatically.
 
 Move it somewhere safe:
+
 ```powershell
 mkdir C:\aws-keys
 Move-Item "$env:USERPROFILE\Downloads\emailverifier-key.pem" C:\aws-keys\
 ```
 
 ### Step 7.2 — Launch the Instance
+
 Console → **EC2** → **Instances** → **Launch instances**
 
 | Setting | Value | Why |
-|---|---|---|
+| --- | --- | --- |
 | Name | `emailverifier-prod` | |
 | AMI | **Ubuntu Server 24.04 LTS** (free tier eligible) | Matches your `python:3.12-slim` / `node:20-alpine` base images' ecosystem, most tutorials assume Ubuntu |
 | Instance type | `t3.small` (2 vCPU, 2GB RAM) | `t2.micro`/`t3.micro` (1GB RAM) will OOM when building both Docker images simultaneously. Start at `t3.small` (~$15/mo), scale later. |
@@ -238,10 +255,11 @@ Console → **EC2** → **Instances** → **Launch instances**
 | Storage | 30 GB gp3 (default 8GB is too small for Docker images) | |
 
 ### Step 7.3 — Security Group Rules (firewall)
+
 While launching (or afterward via EC2 → Security Groups):
 
 | Type | Port | Source | Why |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | SSH | 22 | **My IP** (not 0.0.0.0/0!) | Only you can SSH in |
 | HTTP | 80 | 0.0.0.0/0 | Public web traffic (Certbot also needs this for cert issuance) |
 | HTTPS | 443 | 0.0.0.0/0 | Public HTTPS traffic |
@@ -253,6 +271,7 @@ Click **Launch Instance**.
 ✅ **Verify:** EC2 → Instances → status shows `Running` and `2/2 checks passed` (wait ~2-3 min).
 
 ### Step 7.4 — Allocate an Elastic IP (static public IP)
+
 Console → **EC2** → **Elastic IPs** → **Allocate Elastic IP address** → Allocate.
 Then **Actions** → **Associate Elastic IP address** → select your `emailverifier-prod` instance → Associate.
 
@@ -264,7 +283,7 @@ Then **Actions** → **Associate Elastic IP address** → select your `emailveri
 
 ## 8. Connecting to the Server
 
-**Run on: 🖥️ Local PowerShell**
+**Run on:** 🖥️ Local PowerShell
 
 ```powershell
 # Restrict key permissions (Windows equivalent of chmod 400)
@@ -275,14 +294,17 @@ ssh -i C:\aws-keys\emailverifier-key.pem ubuntu@<EC2_IP>
 ```
 
 First connection will ask:
-```
+
+```text
 The authenticity of host '43.205.x.x' can't be established... Are you sure you want to continue connecting (yes/no)?
 ```
+
 Type `yes`.
 
 ✅ **Verify:** Your prompt changes to `ubuntu@ip-xxx-xx-xx-xx:~$` — you are now inside the EC2 server.
 
 **Common errors:**
+
 - `Permission denied (publickey)` → wrong username (`ubuntu` is correct for Ubuntu AMI) or wrong `.pem` path.
 - `Connection timed out` → Security Group SSH rule doesn't include your current IP (your home/office IP may have changed — edit the SG rule to "My IP" again).
 
@@ -290,7 +312,7 @@ Type `yes`.
 
 ## 9. Installing Docker on EC2
 
-**Run on: ☁️ EC2 SSH**
+**Run on:** ☁️ EC2 SSH
 
 ```bash
 sudo apt update && sudo apt upgrade -y
@@ -311,32 +333,38 @@ sudo apt install -y git
 ```
 
 ✅ **Verify:**
+
 ```bash
 docker --version
 docker compose version
 git --version
 ```
+
 **Expected:**
-```
+
+```text
 Docker version 27.x.x, build xxxxx
 Docker Compose version v2.x.x
 git version 2.x.x
 ```
 
 Also test Docker works without sudo:
+
 ```bash
 docker ps
 ```
+
 Should show an empty table (no error). If you get `permission denied`, log out (`exit`) and SSH back in — group membership needs a fresh session.
 
 ---
 
 ## 10. Git Workflow — Getting Your Code from VS Code to AWS
 
-You have two options. **Recommended: push to GitHub, pull on EC2** (clean, repeatable, supports future updates via `git pull`).
+You have two options. **Recommended:** push to GitHub, pull on EC2 (clean, repeatable, supports future updates via `git pull`).
 
 ### 10.1 — Push your local repo to GitHub (if not already)
-**Run on: 🖥️ Local PowerShell / VS Code Terminal** (in your project root)
+
+**Run on:** 🖥️ Local PowerShell / VS Code Terminal (in your project root)
 
 ```powershell
 git status
@@ -350,7 +378,8 @@ git push origin master
 ⚠️ Double check `.env` is NOT tracked (your `.gitignore` already excludes it — good) — never push real secrets.
 
 ### 10.2 — Clone it on EC2
-**Run on: ☁️ EC2 SSH**
+
+**Run on:** ☁️ EC2 SSH
 
 ```bash
 cd ~
@@ -359,37 +388,46 @@ cd email-verifier
 ```
 
 If your repo is **private**, you'll need a GitHub Personal Access Token:
+
 - GitHub → Settings → Developer settings → Personal access tokens → generate one with `repo` scope.
 - When `git clone` prompts for password, paste the token instead.
 
 ✅ **Verify:**
+
 ```bash
 ls
 ```
+
 Should show `backend/`, `frontend/`, `docker-compose.yml`, `README.md`, etc. — same structure as your VS Code explorer.
 
 ### 10.3 — Alternative: SCP without Git (quick one-off copy)
-**Run on: 🖥️ Local PowerShell**
+
+**Run on:** 🖥️ Local PowerShell
+
 ```powershell
 scp -i C:\aws-keys\emailverifier-key.pem -r "C:\path\to\email-verifier" ubuntu@<EC2_IP>:~/email-verifier
 ```
+
 Not recommended long-term — every future update means re-copying everything. Use Git for real deployments (§26 depends on it).
 
 ---
 
 ## 11. AWS RDS MySQL Setup (Database)
 
-**Run on: 🌐 AWS Console**
+**Run on:** 🌐 AWS Console
 
 ### 11.1 — Create a DB Subnet Group & Security Group first
+
 Console → **RDS** → **Security groups** (or reuse EC2 console) → create `emailverifier-rds-sg`:
+
 - Inbound rule: Type `MySQL/Aurora`, Port `3306`, Source = **your EC2's security group** (`emailverifier-sg`) — NOT 0.0.0.0/0, NOT your IP. Only your backend server should ever reach the DB directly.
 
 ### 11.2 — Create the RDS Instance
+
 Console → **RDS** → **Create database**
 
 | Setting | Value | Why |
-|---|---|---|
+| --- | --- | --- |
 | Engine | MySQL | matches `pymysql`/`aiomysql` in `requirements.txt` |
 | Version | 8.0.x | matches your project's stated `MySQL 8.0.x` requirement (upsert `VALUES()` syntax dependency — see your memory note!) |
 | Template | Free tier (to start) or "Production" | Free tier = `db.t3.micro`, 20GB — fine for learning/early SaaS |
@@ -414,7 +452,7 @@ Click **Create database**. Takes ~5-10 minutes.
 
 ## 12. Environment Variable Setup (Production `.env`)
 
-**Run on: ☁️ EC2 SSH**
+**Run on:** ☁️ EC2 SSH
 
 ```bash
 cd ~/email-verifier/backend
@@ -460,17 +498,21 @@ CORS_ORIGINS=["https://yourdomain.com","https://www.yourdomain.com"]
 ```
 
 Generate `SECRET_KEY` right there on the server:
+
 ```bash
 openssl rand -hex 32
 ```
+
 Copy the output into `SECRET_KEY=`.
 
 Save & exit nano: `Ctrl+O`, `Enter`, `Ctrl+X`.
 
 ✅ **Verify:**
+
 ```bash
 cat .env | grep -v PASSWORD | grep -v SECRET_KEY
 ```
+
 (prints the file without leaking secrets to your terminal scrollback/screenshots)
 
 ⚠️ **Important — `docker-compose.yml` note:** Your compose file already has `env_file: ./backend/.env` for the backend service, so this file is automatically picked up — no extra wiring needed.
@@ -482,6 +524,7 @@ cat .env | grep -v PASSWORD | grep -v SECRET_KEY
 ## 13. Database Migration on First Deploy (RDS-specific note)
 
 Your `backend/entrypoint.sh` already does this automatically on every container start:
+
 ```bash
 # creates DB if missing, then:
 alembic upgrade head
@@ -491,9 +534,11 @@ exec uvicorn main:app --host 0.0.0.0 --port 8000
 **This is convenient but has one RDS gotcha:** the "CREATE DATABASE IF NOT EXISTS" step needs the RDS master user to have `CREATE` privilege — it does by default (`evadmin` is the master user), so no change needed. Just confirm your `DATABASE_URL` in `.env` points to RDS, not `localhost`.
 
 ✅ **Verify later (after containers are up, §16):**
+
 ```bash
 docker compose logs backend | grep -i alembic
 ```
+
 Expected: lines showing migrations running (`Running upgrade -> 0001_initial`, etc.) ending without errors.
 
 ---
@@ -502,13 +547,16 @@ Expected: lines showing migrations running (`Running upgrade -> 0001_initial`, e
 
 For this project's scale, **`.env` on the server with restricted file permissions** is an acceptable production pattern (this is what your `entrypoint.sh`/`docker-compose.yml` already expect). Harden it:
 
-**Run on: ☁️ EC2 SSH**
+**Run on:** ☁️ EC2 SSH
+
 ```bash
 chmod 600 ~/email-verifier/backend/.env
 ```
+
 This makes the file readable only by the `ubuntu` user — not other users/processes on the box.
 
 **Never do:**
+
 - Commit `.env` to git (already prevented by `.gitignore`)
 - Put secrets in `docker-compose.yml` directly (use `env_file`, which you already do)
 - Echo secrets in scripts that get logged
@@ -521,7 +569,7 @@ This makes the file readable only by the `ubuntu` user — not other users/proce
 
 Your existing `docker-compose.yml` works almost as-is. One production concern: it currently maps `frontend` to host port `80` and `backend` to host port `8000`. Since we're adding a **host-level Nginx** (§18) that will own port 80/443, we need the frontend container to NOT bind directly to host port 80 (avoid conflict).
 
-**Run on: ☁️ EC2 SSH** — create a production override file (does not touch your original `docker-compose.yml`, so local dev is unaffected):
+**Run on:** ☁️ EC2 SSH — create a production override file (does not touch your original `docker-compose.yml`, so local dev is unaffected):
 
 ```bash
 cd ~/email-verifier
@@ -546,17 +594,16 @@ services:
 Save & exit.
 
 You'll always run compose with **both files layered**:
+
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
-**Why `127.0.0.1:` prefix:** binds the port only to localhost inside the EC2 box — so even though Security Group technically only opens 80/443 anyway, this is defense-in-depth: containers are literally unreachable from outside even if the SG were misconfigured later.
-
 ---
 
-## 16. Building Docker Images & Running Containers
+## 16. First Deploy (Build & Start Containers)
 
-**Run on: ☁️ EC2 SSH**
+**Run on:** ☁️ EC2 SSH
 
 ```bash
 cd ~/email-verifier
@@ -564,78 +611,61 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
 This will:
-1. Build `backend` image from `backend/Dockerfile` (installs Python deps, copies code)
-2. Build `frontend` image from `frontend/Dockerfile` (multi-stage: `npm run build` then serves via Nginx)
-3. Start both containers in detached mode (`-d`)
 
-**Expected output (tail of it):**
-```
-[+] Running 2/2
- ✔ Container ev_backend   Started
- ✔ Container ev_frontend  Started
-```
-
-First build takes 3-6 minutes (downloading base images, installing `requirements.txt`/`npm install`). Subsequent builds are faster (Docker layer caching).
+1. Build both images (first time takes ~3-5 min — downloads base images, installs deps, compiles frontend).
+2. Start containers with production port mappings (backend on 127.0.0.1:8000, frontend on 127.0.0.1:8080).
+3. Backend entrypoint runs migrations against RDS automatically.
 
 ✅ **Verify:**
+
 ```bash
-docker compose ps
-```
-**Expected:**
-```
-NAME          IMAGE                    STATUS
-ev_backend    email-verifier-backend   Up 30 seconds
-ev_frontend   email-verifier-frontend  Up 30 seconds (healthy)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
 ```
 
-Check backend actually responds:
+Expected: both `backend` and `frontend` show `Up` and `healthy`.
+
 ```bash
 curl http://127.0.0.1:8000/health
 ```
-**Expected:**
-```json
-{"status":"ok","version":"1.0.0"}
-```
 
-Check frontend:
-```bash
-curl -I http://127.0.0.1:8080
-```
-**Expected:** `HTTP/1.1 200 OK`
-
-**Common errors:**
-- `Cannot connect to the Docker daemon` → you weren't re-logged-in after `usermod -aG docker` (§9). Run `newgrp docker` or re-SSH.
-- Backend container restarting in a loop → `docker compose logs backend` — almost always a `.env`/`DATABASE_URL` typo, or RDS security group not allowing EC2's SG (§11.1).
-- `exec /entrypoint.sh: no such file or directory` → line-ending issue if `.sh` was edited on Windows with CRLF. Fix: `sed -i 's/\r$//' backend/entrypoint.sh` then rebuild.
+Expected: `{"status":"ok"}` (or your actual health endpoint response).
 
 ---
 
-## 17. Domain Configuration (Route 53 — you already own the domain)
+## 17. Host-Level Nginx (Reverse Proxy + SSL Termination)
 
-**Run on: 🌐 AWS Console**
+We put Nginx on the host (outside Docker) because it handles HTTPS (port 443) with Certbot cleanly — container-level nginx would need a separate cert mechanism (Docker + Certbot + Nginx in container is messier than host Nginx + Certbot).
 
-1. Console → **Route 53** → **Hosted zones** → click your domain (if it's not already in Route 53 because you bought it elsewhere, first create a Hosted Zone here, then update your registrar's nameservers to the 4 NS records Route 53 gives you — this can take a few hours to propagate).
-2. **Create record**:
-   - Record name: leave blank (root domain) → Type `A` → Value: `<EC2_IP>` (your Elastic IP from §7.4) → TTL 300 → Create.
-   - Create another: Record name `www` → Type `A` → Value: `<EC2_IP>` → Create. *(or use a `CNAME` to root, but `A` to same IP is simpler)*
-
-✅ **Verify (after a few minutes):**
-```powershell
-nslookup yourdomain.com
-```
-Should return your `<EC2_IP>`.
-
----
-
-## 18. Reverse Proxy — Nginx on EC2 host (SSL termination)
-
-**Run on: ☁️ EC2 SSH**
+**Run on:** ☁️ EC2 SSH
 
 ```bash
-sudo apt install -y nginx
+sudo apt install -y nginx certbot python3-certbot-nginx
 ```
 
-Create the site config:
+Stop nginx temporarily (Certbot will configure it):
+
+```bash
+sudo systemctl stop nginx
+```
+
+### Get SSL Certificate
+
+```bash
+sudo certbot certonly --standalone -d yourdomain.com -d www.yourdomain.com --non-interactive --agree-tos -m your@email.com
+```
+
+*(Replace `yourdomain.com` and `your@email.com` with your real domain & email. Certbot will spin up a temporary server on port 80 — this works because you kept port 80 open in the EC2 SG.)*
+
+✅ **Verify cert exists:**
+
+```bash
+sudo ls /etc/letsencrypt/live/yourdomain.com/
+```
+
+Should show `fullchain.pem` and `privkey.pem`.
+
+### Configure Nginx
+
 ```bash
 sudo nano /etc/nginx/sites-available/emailverifier
 ```
@@ -645,209 +675,192 @@ server {
     listen 80;
     server_name yourdomain.com www.yourdomain.com;
 
-    client_max_body_size 60M;   # matches your 50MB upload limit + headroom
+    # Redirect all HTTP to HTTPS
+    return 301 https://$server_name$request_uri;
+}
 
-    # API routes -> backend container
-    location /api/ {
-        proxy_pass http://127.0.0.1:8000/api/;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 60s;
-    }
+server {
+    listen 443 ssl http2;
+    server_name yourdomain.com www.yourdomain.com;
 
-    location /docs {
-        proxy_pass http://127.0.0.1:8000/docs;
-    }
+    ssl_certificate /etc/letsencrypt/live/yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem;
 
-    location /health {
-        proxy_pass http://127.0.0.1:8000/health;
-    }
+    # Modern SSL config
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
 
-    # Everything else -> frontend container (React SPA)
+    # Frontend
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Backend API
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 ```
 
-Enable it:
+Save & exit. Replace `yourdomain.com` with your actual domain.
+
+Enable the site and start Nginx:
+
 ```bash
-sudo ln -s /etc/nginx/sites-available/emailverifier /etc/nginx/sites-enabled/
-sudo rm /etc/nginx/sites-enabled/default
+sudo ln -sf /etc/nginx/sites-available/emailverifier /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
-```
-
-**Expected:**
-```
-nginx: configuration file /etc/nginx/nginx.conf test is successful
-```
-
-```bash
-sudo systemctl restart nginx
+sudo systemctl start nginx
 sudo systemctl enable nginx
 ```
 
-✅ **Verify:** In your browser, visit `http://yourdomain.com` — you should see your React dashboard (over plain HTTP for now, SSL next).
+✅ **Verify HTTPS:**
+
+```bash
+curl -k https://localhost
+```
+
+Should return the frontend HTML (curl `-k` ignores self-signed cert check — you'll see the real cert in browser).
 
 ---
 
-## 19. SSL Certificate (Let's Encrypt via Certbot)
+## 18. Why Host-Level Nginx? (Architecture Note)
 
-**Run on: ☁️ EC2 SSH**
+| Aspect | Host Nginx + Certbot | Container Nginx (what `frontend/Dockerfile` does) |
+| --- | --- | --- |
+| SSL cert management | Certbot auto-renews via systemd timer — set and forget | Need cron inside container, cert sync across containers, more moving parts |
+| Port 80/443 ownership | Host binds privileged ports directly | Container needs `network_mode: host` or port binding — conflict risk |
+| Reverse proxy to both frontend & backend | Single config file, easy to read | Would need another proxy layer or complex upstream config |
+| Debugging | `systemctl status nginx`, `/var/log/nginx/` — standard Linux admin | `docker exec`, container logs — adds indirection |
 
-```bash
-sudo apt install -y certbot python3-certbot-nginx
-
-sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
-```
-
-It will ask for an email (for renewal notices) and to agree to ToS. Certbot **automatically edits your Nginx config** to add the 443 server block + redirect 80→443.
-
-**Expected output (end):**
-```
-Successfully received certificate.
-Congratulations! You have successfully enabled HTTPS on https://yourdomain.com
-```
-
-Auto-renewal is installed as a systemd timer by default — verify it:
-```bash
-sudo systemctl status certbot.timer
-sudo certbot renew --dry-run
-```
-**Expected:** `Congratulations, all simulated renewals succeeded`
-
-✅ **Verify:** Visit `https://yourdomain.com` in browser — padlock icon should show, no warnings.
-
-Also update your backend's `CORS_ORIGINS` in `.env` (§12) to use `https://` if you hadn't already, then:
-```bash
-cd ~/email-verifier
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend
-```
-
-**Common error:** `Timeout during connect (likely firewall problem)` → Security Group doesn't allow port 80 from 0.0.0.0/0 — Certbot needs public HTTP access for the domain-ownership challenge. Check §7.3.
+This is the standard pattern for EC2 + Docker Compose. The container-level nginx (in `frontend/Dockerfile`) still runs inside its container on port 80, but now it's only reachable at `127.0.0.1:8080` (see §15) — host Nginx proxies external traffic to it.
 
 ---
 
-## 20. Health Checks
+## 19. DNS — Point Your Domain to the Elastic IP
 
-You already have `GET /health` on the backend (`main.py`) and a `HEALTHCHECK` in `frontend/Dockerfile`. Wire these into monitoring:
+**Run on:** 🌐 AWS Console (Route 53)
 
-**Run on: ☁️ EC2 SSH**
-```bash
-docker inspect --format='{{json .State.Health}}' ev_frontend
-```
+If your domain is **already in Route 53** (hosted zone exists):
 
-For the backend, add a simple external check — you can use a free service like **UptimeRobot** (not AWS, but zero-config):
-- https://uptimerobot.com → add monitor → URL `https://yourdomain.com/health` → check every 5 min → get email/SMS alert if it goes down.
+1. Console → **Route 53** → **Hosted zones** → click your domain.
+2. **Create record** → **A** → `yourdomain.com` → Value: `<EC2_ELASTIC_IP>` → Create.
+3. **Create record** → **A** → `www.yourdomain.com` → Value: `<EC2_ELASTIC_IP>` → Create.
 
-Or, AWS-native: **Route 53 Health Checks** (Console → Route 53 → Health checks → create, pointing at `/health`) — costs ~$0.50/mo per check, integrates with CloudWatch alarms.
+If your domain is **registered elsewhere** (GoDaddy, Namecheap, etc.):
+
+1. Create a hosted zone in Route 53 for your domain → note the 4 NS records.
+2. Go to your registrar's DNS settings → replace their nameservers with Route 53's 4 NS records.
+3. Wait for propagation (up to 48 hours, usually minutes), then add the A records as above.
 
 ✅ **Verify:**
+
 ```powershell
-curl https://yourdomain.com/health
+nslookup yourdomain.com
 ```
-**Expected:** `{"status":"ok","version":"1.0.0"}`
+
+Should return your Elastic IP.
 
 ---
 
-## 21. Production Configuration Changes (checklist vs local dev)
+## 20. Test the Full Stack
 
-| Setting | Local (dev) | Production (must change) |
-|---|---|---|
-| `backend/.env` `DEBUG` | `true` | `false` |
-| `backend/.env` `CORS_ORIGINS` | `["http://localhost:3000"]` | `["https://yourdomain.com"]` |
-| `backend/.env` `SECRET_KEY` | any string | `openssl rand -hex 32` output |
-| `backend/.env` `ADMIN_PASSWORD` | anything | strong unique password |
-| `DATABASE_URL` | local MySQL container | RDS endpoint (§11) |
-| `frontend` build | `npm run dev` | `npm run build` (already what `frontend/Dockerfile` does — no action needed) |
-| Ports exposed | 3000, 8000 directly | only 80/443 via Nginx (§15, §18) |
-| `docker-compose.yml` restart policy | none needed | `restart: always` (already in `docker-compose.prod.yml`, §15) |
+**Open browser:** `https://yourdomain.com`
 
----
+Expected: Frontend loads, no mixed-content warnings, padlock icon shows.
 
-## 22. Firewall and Security Groups — Final Review
+**Test API:**
 
-**Run on: 🌐 AWS Console** — double check before going live:
+- Open DevTools → Network tab → interact with the app (e.g. verify a single email).
+- Requests should go to `https://yourdomain.com/api/...` and return 200.
 
-**EC2 Security Group (`emailverifier-sg`):**
-| Port | Source | Purpose |
-|---|---|---|
-| 22 | Your IP only | SSH |
-| 80 | 0.0.0.0/0 | HTTP (redirects to 443) |
-| 443 | 0.0.0.0/0 | HTTPS |
+**Test Admin:**
 
-**RDS Security Group (`emailverifier-rds-sg`):**
-| Port | Source | Purpose |
-|---|---|---|
-| 3306 | `emailverifier-sg` (the EC2 SG, by reference, not IP) | Only your app server can reach the DB |
-
-Also, at the OS level, `ufw` (Ubuntu firewall) is optional since Security Groups already do this job — but you can add a redundant layer:
-```bash
-sudo ufw allow OpenSSH
-sudo ufw allow 'Nginx Full'
-sudo ufw enable
-sudo ufw status
-```
+- Go to `https://yourdomain.com/admin/login` → log in with the `ADMIN_PASSWORD` from your `.env`.
 
 ---
 
-## 23. Backups
+## 21. Auto-Renewal of SSL Certificates
 
-**RDS (database) — mostly automatic:**
-- RDS → your DB → **Maintenance & backups** tab → automated backups already run daily (7-day retention, set in §11). No action needed.
-- For extra safety before risky changes, take a **manual snapshot**: RDS → Databases → select `emailverifier-db` → **Actions** → **Take snapshot**.
+Certbot installs a systemd timer by default. Verify it works:
 
-**EC2 (app server / uploaded files) — needs setup:**
-- Your uploads live in `/tmp/uploads` on EC2 (ephemeral — lost if the instance is replaced). Two options:
-  1. **Quick/manual:** EC2 → Instances → select instance → **Actions → Image and templates → Create image** — snapshots the whole disk periodically.
-  2. **Better (matches your codebase's existing S3 code):** switch `bulk.py`/`bulk_processor.py` file storage to S3 using your existing `services/s3_service.py` — this is a code change, not something to do blindly; flag it to me separately if you want this implemented (per your "don't guess, ask first" preference).
-
-**Database dumps (extra manual safety net):**
 ```bash
-# Run on EC2 SSH — requires mysql-client
-sudo apt install -y mysql-client
-mysqldump -h <rds-endpoint> -u evadmin -p email_verifier > ~/backup_$(date +%F).sql
+sudo certbot renew --dry-run
 ```
+
+Should say "Congratulations, all renewals succeeded." The timer runs twice daily — no cron needed.
 
 ---
 
-## 24. Monitoring
+## 22. Security Group Tuning (VPC-level check)
 
-**Run on: 🌐 AWS Console**
+Double-check your VPC setup allows EC2 ↔ RDS communication:
 
-1. **CloudWatch** (free tier covers basics): EC2 → your instance → **Monitoring** tab shows CPU/Network graphs automatically, no setup needed.
-2. Set an alarm for high CPU: CloudWatch → Alarms → Create → metric `CPUUtilization` on your instance → threshold e.g. > 80% for 5 min → notify via SNS email.
-3. **Disk space** (EC2 doesn't report this by default — needs the CloudWatch agent):
-```bash
-# Run on EC2 SSH
-sudo apt install -y amazon-cloudwatch-agent
-```
-   *(Full agent config is a bigger topic — for now, just SSH in periodically and run `df -h` to check disk usage manually until your app has real users.)*
+Console → **VPC** → **Your VPCs** → note the VPC ID of your EC2 instance.
 
-✅ **Verify:** CloudWatch → Dashboards → you can see live CPU/network graphs for your instance.
+Console → **RDS** → Databases → `emailverifier-db` → **Connectivity & security** tab → verify:
+
+- VPC = same as EC2
+- Subnet group includes at least 2 subnets in different AZs (default is fine)
+- Security group = `emailverifier-rds-sg` with inbound rule: MySQL/3306 from `emailverifier-sg` (EC2's SG)
+
+If any of these mismatch, fix now — this is the #1 cause of "RDS timeout" on first deploy.
 
 ---
 
-## 25. Logs
+## 23. Backups — RDS Automated + Manual Snapshot
 
-**Application logs (structlog — already configured in `utils/logging.py`):**
+**Automated:** Already configured in §11 (7-day retention). RDS takes daily snapshots + transaction logs → point-in-time recovery to any second in the retention window.
+
+**Manual (recommended right after go-live):**
+
+RDS → your DB → **Actions** → **Take snapshot** → name it `emailverifier-go-live-2024-01-15` → Take snapshot.
+
+This gives you a named baseline you can restore to instantly if something goes wrong on day 1.
+
+---
+
+## 24. Basic Monitoring (CloudWatch Alarms)
+
+**Run on:** 🌐 AWS Console (or CLI)
+
+1. **CPU Alarm (EC2):**
+   - Console → CloudWatch → Alarms → Create alarm
+   - Metric: `EC2` → `Per-Instance Metrics` → `CPUUtilization` for your instance
+   - Condition: `> 80%` for 5 minutes → Notify your email
+
+2. **Disk Space Alarm (EC2):**
+   - Requires CloudWatch Agent on the instance (install via SSM or user-data). Skip for now if unfamiliar — CPU alarm is the 80/20.
+
+3. **RDS Free Storage:**
+   - CloudWatch → Metrics → RDS → `FreeStorageSpace` → alarm if `< 2GB`
+
+---
+
+## 25. S3 for Persistent File Uploads (Optional — code is ready)
+
+Your `s3_service.py` already has boto3 upload logic. To enable:
+
+1. Console → **S3** → Create bucket `email-verifier-uploads` (same region `ap-south-1`, block all public access).
+2. Add to backend `.env` on EC2:
+
 ```bash
-# Run on EC2 SSH
-docker compose logs -f backend        # live tail, Ctrl+C to stop
-docker compose logs --tail=200 backend > backend_logs.txt   # dump last 200 lines
+AWS_ACCESS_KEY_ID=<IAM user with S3 write>
+AWS_SECRET_ACCESS_KEY=<secret>
+AWS_REGION=ap-south-1
+S3_BUCKET_NAME=email-verifier-uploads
 ```
+3. Restart backend: `docker compose -f docker-compose.yml -f docker-compose.prod.yml restart backend`
 
-**Nginx access/error logs:**
-```bash
-sudo tail -f /var/log/nginx/access.log
-sudo tail -f /var/log/nginx/error.log
-```
-
-**Persisting logs beyond container lifetime (optional but recommended):** since `LOG_LEVEL=INFO` and `DEBUG=false` in prod means JSON logs (per your `configure_logging()`), you can ship them to **CloudWatch Logs** via the same `amazon-cloudwatch-agent` from §24 — worth doing once you have real traffic to debug.
+Now uploads go to S3 (survive container restarts, server replacement) instead of `/tmp/uploads`.
 
 ---
 
@@ -855,14 +868,16 @@ sudo tail -f /var/log/nginx/error.log
 
 This is your **normal deploy loop** going forward:
 
-**Run on: 🖥️ Local PowerShell / VS Code Terminal**
+**Run on:** 🖥️ Local PowerShell / VS Code Terminal
+
 ```powershell
 git add .
 git commit -m "describe your change"
 git push origin master
 ```
 
-**Run on: ☁️ EC2 SSH**
+**Run on:** ☁️ EC2 SSH
+
 ```bash
 cd ~/email-verifier
 git pull origin master
@@ -872,10 +887,12 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 `--build` rebuilds only images whose source changed (Docker layer caching keeps this fast). `up -d` recreates containers with new images, old ones are removed.
 
 ✅ **Verify:**
+
 ```bash
 docker compose ps
 curl http://127.0.0.1:8000/health
 ```
+
 Then check `https://yourdomain.com` in browser to confirm the new feature/fix is live.
 
 **Zero-downtime note:** with a single EC2 + Compose setup, there's a few seconds of downtime during container swap (acceptable for early-stage SaaS). True zero-downtime needs a second instance + load balancer — a later upgrade, not needed now.
@@ -884,9 +901,10 @@ Then check `https://yourdomain.com` in browser to confirm the new feature/fix is
 
 ## 27. Rolling Back If Deployment Fails
 
-**Run on: ☁️ EC2 SSH**
+**Run on:** ☁️ EC2 SSH
 
 **Fastest rollback — go back to previous git commit and rebuild:**
+
 ```bash
 cd ~/email-verifier
 git log --oneline -5        # find the last known-good commit hash
@@ -895,12 +913,15 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
 **Database rollback (if a migration broke something):**
+
 ```bash
 docker compose exec backend alembic downgrade -1   # undo last migration
 ```
+
 *(Use cautiously — check `backend/migrations/versions/` to know exactly which migration you're undoing.)*
 
 **Nuclear option — restore RDS from an automated backup:**
+
 RDS Console → your DB → **Actions** → **Restore to point in time** → creates a **new** DB instance at that timestamp (RDS doesn't overwrite in-place) → then update `DATABASE_URL` in `.env` to point to the new instance and redeploy.
 
 ✅ **Verify after any rollback:** `curl http://127.0.0.1:8000/health` + manually click through the app in browser.
@@ -931,7 +952,7 @@ RDS Console → your DB → **Actions** → **Restore to point in time** → cre
 ## 29. Common Mistakes & Troubleshooting Reference
 
 | Symptom | Likely Cause | Fix |
-|---|---|---|
+| --- | --- | --- |
 | `502 Bad Gateway` from Nginx | Backend container not running / crashed | `docker compose logs backend`, check `.env` DB connection |
 | Site loads but API calls fail (CORS error in browser console) | `CORS_ORIGINS` in `.env` doesn't match actual domain | Fix `.env`, rebuild backend |
 | `docker compose up` says "port already in use" | Old container still running, or host Nginx already on 80 | `docker compose down` first; confirm §15's `127.0.0.1:` port mapping is in place |
@@ -947,7 +968,7 @@ RDS Console → your DB → **Actions** → **Restore to point in time** → cre
 ## 30. Cost Estimation (Monthly, ap-south-1 / Mumbai)
 
 | Item | Spec | Est. Cost (USD/mo) |
-|---|---|---|
+| --- | --- | --- |
 | EC2 | `t3.small`, on-demand, 24/7 | ~$15 |
 | EBS storage | 30 GB gp3 | ~$2.5 |
 | Elastic IP | attached to running instance (free while attached) | $0 |
@@ -976,4 +997,3 @@ Your current root `aws-deployment.md` describes a **different, larger architectu
 ---
 
 *End of handbook. Follow §3 → §30 in order for a first deployment; use §26/§27 for every deploy after that.*
-
