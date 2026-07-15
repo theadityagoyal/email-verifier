@@ -5,34 +5,27 @@ Replaces Celery-based processing for simpler SaaS integration.
 import asyncio
 import threading
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
 from models.database import SyncSessionLocal
 from models.models import Job, JobStatus, NotificationType, NotificationPriority
 from services.email_service import verify_email
-from services.domain_service import sync_upsert_email, sync_upsert_domain
+from services.domain_service import sync_upsert_email, sync_upsert_email_processing, sync_upsert_domain
 from services.notification_service import sync_create_notification
 from utils.email_utils import detect_email_column
 from utils.file_utils import read_upload_file, FileReadError
 from utils.logging import get_logger
 from utils.executor import get_executor, init_executor
+from utils.timezone import utc_now_naive
 
 logger = get_logger(__name__)
-
-
-IST = ZoneInfo("Asia/Kolkata")
 
 # How many completed emails between each check of Job.cancel_requested.
 # Small enough that a cancel request is honored quickly, large enough that
 # it isn't hammering the DB with an extra query per email on top of the
 # per-email upsert that already happens in verify_single_email_sync.
 CANCEL_CHECK_INTERVAL = 10
-
-
-def _ist_now():
-    return datetime.now(IST).replace(tzinfo=None)
 
 
 # ── Thread-local event loop reuse ────────────────────────────────────────────
@@ -80,11 +73,25 @@ def _is_cancel_requested(job_id: str) -> bool:
 def verify_single_email_sync(email: str, job_id: str | None = None):
     """Verify a single email synchronously (for thread pool execution)."""
     db = SyncSessionLocal()
+    domain = email.split('@')[-1].lower() if '@' in email else ''
+    now = utc_now_naive()
     try:
+        # First, insert with "processing" status for immediate UI feedback
+        try:
+            sync_upsert_email_processing(db, email, domain, job_id, now)
+            db.commit()
+        except Exception as processing_error:
+            db.rollback()
+            logger.warning(
+                f"Failed to mark email as processing for {email}: {str(processing_error)}",
+                exc_info=False,
+            )
+            # Continue anyway - verification will still run
+
         loop = _get_thread_event_loop()
         result = loop.run_until_complete(verify_email(email))
 
-        now = _ist_now()
+        now = utc_now_naive()
 
         # Atomic upsert — eliminates the check-then-insert race that could
         # previously raise an unhandled IntegrityError when the same email
@@ -120,7 +127,7 @@ def _update_job_counter(db, job_id: str, status) -> None:
     if not job:
         return
 
-    now = _ist_now()
+    now = utc_now_naive()
 
     if job.started_at is None:
         job.started_at = now
@@ -305,7 +312,7 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email") ->
                               # counts written by the (separately-sessioned)
                               # per-email commits above before we report them
             job.status = JobStatus.cancelled
-            job.completed_at = _ist_now()
+            job.completed_at = utc_now_naive()
             job.current_stage = 'cancelled'
             db.commit()
 
@@ -335,7 +342,7 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email") ->
 
         # Mark job as completed
         job.status = JobStatus.completed
-        job.completed_at = _ist_now()
+        job.completed_at = utc_now_naive()
         job.current_stage = 'completed'
         job.progress_percent = 100
         db.commit()

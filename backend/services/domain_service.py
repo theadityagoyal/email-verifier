@@ -91,6 +91,27 @@ def _email_params(result: EmailVerifyResponse, job_id: Optional[str], now: datet
     }
 
 
+def _email_params_processing(email: str, domain: str, job_id: Optional[str], now: datetime) -> dict:
+    """Parameters for inserting/updating an email with 'processing' status."""
+    from models.models import EmailStatus
+    return {
+        "email": email,
+        "domain": domain,
+        "status": EmailStatus.processing.value,
+        "syntax_valid": False,
+        "domain_exists": False,
+        "mx_found": False,
+        "smtp_valid": False,
+        "disposable": False,
+        "role_based": False,
+        "catch_all": False,
+        "score": 0,
+        "job_id": job_id,
+        "verified_at": None,
+        "now": now,
+    }
+
+
 def _domain_params(domain: str, mx_records: Optional[list[str]], now: datetime) -> dict:
     return {
         "domain": domain,
@@ -107,6 +128,15 @@ async def async_upsert_email(
     """Atomically insert-or-update an Email row. Race-safe under concurrent
     requests for the same address (no check-then-insert window)."""
     await db.execute(_EMAIL_UPSERT_SQL, _email_params(result, job_id, now))
+
+
+async def async_upsert_email_processing(
+    db: AsyncSession, email: str, domain: str, job_id: Optional[str], now: datetime
+) -> None:
+    """Atomically insert-or-update an Email row with 'processing' status.
+    Called before verification starts so the UI can show 'Processing' immediately.
+    """
+    await db.execute(_EMAIL_UPSERT_SQL, _email_params_processing(email, domain, job_id, now))
 
 
 async def async_upsert_domain(
@@ -128,6 +158,13 @@ def sync_upsert_email(
 ) -> None:
     """Atomically insert-or-update an Email row (sync session variant)."""
     db.execute(_EMAIL_UPSERT_SQL, _email_params(result, job_id, now))
+
+
+def sync_upsert_email_processing(
+    db: Session, email: str, domain: str, job_id: Optional[str], now: datetime
+) -> None:
+    """Atomically insert-or-update an Email row with 'processing' status (sync variant)."""
+    db.execute(_EMAIL_UPSERT_SQL, _email_params_processing(email, domain, job_id, now))
 
 
 def sync_upsert_domain(

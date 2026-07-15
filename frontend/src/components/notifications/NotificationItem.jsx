@@ -1,4 +1,5 @@
 import { CheckCircle, XCircle, AlertTriangle, Info, Trash2, Check } from 'lucide-react';
+import { relativeTime } from '@/utils/dateUtils';
 
 const TYPE_CONFIG = {
   success: { icon: CheckCircle, color: 'text-success', bg: 'bg-success/10' },
@@ -18,18 +19,6 @@ const PRIORITY_LABEL = {
   medium: 'Medium priority',
   low: 'Low priority',
 };
-
-function timeAgo(dateStr) {
-  if (!dateStr) return '';
-  const diffMs = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diffMs / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
 
 export default function NotificationItem({ notification, onMarkRead, onDelete }) {
   const config = TYPE_CONFIG[notification.type] || TYPE_CONFIG.info;
@@ -63,7 +52,7 @@ export default function NotificationItem({ notification, onMarkRead, onDelete })
           {notification.title}
         </p>
         <p className="text-xs text-[var(--foreground)]/60 mt-0.5 line-clamp-2">{notification.message}</p>
-        <p className="text-[11px] text-[var(--foreground)]/40 mt-1">{timeAgo(notification.created_at)}</p>
+        <p className="text-[11px] text-[var(--foreground)]/40 mt-1">{relativeTime(notification.created_at)}</p>
       </div>
 
       <div className="flex flex-col gap-1 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity">

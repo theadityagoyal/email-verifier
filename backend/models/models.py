@@ -3,8 +3,9 @@ from sqlalchemy import (
     DateTime, Float, Text, Enum as SAEnum, JSON, CheckConstraint, Index
 )
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.sql import func
 import enum
+
+from utils.timezone import utc_now_naive
 
 
 class Base(DeclarativeBase):
@@ -79,8 +80,8 @@ class Email(Base):
         Index('ix_emails_job_id_status', 'job_id', 'status'),
         Index('ix_emails_verified_at', 'verified_at'),
     )
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
 
 class Domain(Base):
@@ -97,8 +98,8 @@ class Domain(Base):
     __table_args__ = (
         CheckConstraint('bounce_rate >= 0.0 AND bounce_rate <= 100.0', name='check_bounce_rate_range'),
     )
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
 
 class Job(Base):
@@ -142,8 +143,8 @@ class Job(Base):
         Index('ix_jobs_status', 'status'),
         Index('ix_jobs_created_at', 'created_at'),
     )
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
 
 class ApiKey(Base):
@@ -163,7 +164,7 @@ class ApiKey(Base):
     rate_limit_per_min = Column(Integer, default=60, nullable=False)
     bulk_limit_per_hour = Column(Integer, default=5, nullable=False)
     last_used_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, default=utc_now_naive)
 
 
 class ApiKeyUsageLog(Base):
@@ -182,7 +183,7 @@ class ApiKeyUsageLog(Base):
     api_key_id = Column(BigInteger, nullable=False, index=True)
     endpoint = Column(String(20), nullable=False)  # "verify" | "bulk"
     status_code = Column(Integer, nullable=False)
-    created_at = Column(DateTime, server_default=func.now(), index=True)
+    created_at = Column(DateTime, default=utc_now_naive, index=True)
 
 
 class Notification(Base):
@@ -208,8 +209,8 @@ class Notification(Base):
     # name because `metadata` is reserved on every SQLAlchemy Declarative
     # model (Base.metadata is the schema/table registry) and would collide.
     extra_data = Column("metadata", JSON, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
     __table_args__ = (
         Index('ix_notifications_created_at', 'created_at'),

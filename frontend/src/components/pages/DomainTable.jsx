@@ -20,6 +20,7 @@ import {
 import Button from '@/components/ui/Button';
 import SortHeader from './SortHeader';
 import { RISK_THRESHOLDS, riskBarColorClass } from '@/utils/scoreThresholds';
+import { formatDateIST } from '@/utils/dateUtils';
 
 const VERDICT_CONFIG = {
   Healthy: {
@@ -51,11 +52,6 @@ const MX_STATUS_COLOR = {
   'No MX': 'text-red-600',
   Unknown: 'text-[var(--foreground)]/40',
 };
-
-function formatDate(value) {
-  if (!value) return '—';
-  return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-}
 
 export default function DomainTable({
   filteredDomains,
@@ -284,7 +280,7 @@ export default function DomainTable({
                         </div>
                       </td>
                       <td className="px-4 py-3 text-sm text-[var(--foreground)]/60">
-                        {formatDate(domain.first_seen)}
+                        {formatDateIST(domain.first_seen)}
                       </td>
                       <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1 relative">

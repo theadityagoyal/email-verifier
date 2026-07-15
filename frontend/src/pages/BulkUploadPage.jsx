@@ -13,6 +13,7 @@ import StatusBadge from '@/components/ui/StatusBadge';
 import Button from '@/components/ui/Button';
 import { calculateJobStats, getStatusOrder, isJobActive } from '@/utils/jobUtils';
 import { reportError } from '@/utils/errorReporter';
+import { formatDateTimeIST, istDateKey, istMonthKey } from '@/utils/dateUtils';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const DATE_FILTERS = [
@@ -41,23 +42,6 @@ const normalizeJobsList = (data) => {
   if (data && Array.isArray(data.items)) return data.items;
   console.warn('listJobs() returned an unexpected shape, defaulting to empty list:', data);
   return [];
-};
-
-const istDateKey = (date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(date);
-const istMonthKey = (date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit' }).format(date);
-
-const formatDateIST = (dateString) => {
-  if (!dateString) return '—';
-  return new Date(dateString).toLocaleString('en-IN', {
-    timeZone: 'Asia/Kolkata',
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: true,
-  });
 };
 
 const matchesDateFilter = (job, filter) => {
@@ -230,7 +214,7 @@ const JobActions = ({ job, onRetry, onDelete, onCancel, isCancelling }) => {
   );
 };
 
-const JobDetails = ({ job, expandedJob, onToggleExpand, formatDateIST }) => {
+const JobDetails = ({ job, expandedJob, onToggleExpand }) => {
   const { safeCount, riskyCount, unsafeCount, totalCount, processedCount, progressPct } = calculateJobStats(job);
   const isActive = isJobActive(job);
 
@@ -256,7 +240,7 @@ const JobDetails = ({ job, expandedJob, onToggleExpand, formatDateIST }) => {
           </div>
           <div className="p-3 rounded-lg bg-[var(--muted)]/30">
             <p className="text-sm text-[var(--foreground)]/50">Created (IST)</p>
-            <p className="font-medium text-[var(--foreground)]">{formatDateIST(job.created_at)}</p>
+            <p className="font-medium text-[var(--foreground)]">{formatDateTimeIST(job.created_at)}</p>
           </div>
           <div className="p-3 rounded-lg bg-[var(--muted)]/30">
             <p className="text-sm text-[var(--foreground)]/50">Status</p>
@@ -739,7 +723,7 @@ export default function BulkUploadPage() {
                       </p>
                       <StatusBadge status={job.status} />
                       <span className="text-sm text-[var(--foreground)]/50 font-mono">{job.job_id.slice(0, 8)}...</span>
-                      <span className="text-sm text-[var(--foreground)]/50">{formatDateIST(job.created_at)}</span>
+                      <span className="text-sm text-[var(--foreground)]/50">{formatDateTimeIST(job.created_at)}</span>
                     </div>
 
                     <JobStats job={job} />
@@ -763,7 +747,6 @@ export default function BulkUploadPage() {
                   job={job}
                   expandedJob={expandedJob}
                   onToggleExpand={handleToggleExpand}
-                  formatDateIST={formatDateIST}
                 />
               </motion.div>
             ))}

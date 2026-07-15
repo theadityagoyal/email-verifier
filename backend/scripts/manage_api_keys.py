@@ -22,6 +22,7 @@ from sqlalchemy import select
 from models.database import SyncSessionLocal
 from models.models import ApiKey
 from utils.api_key import generate_api_key
+from utils.timezone import utc_now_naive
 
 
 def create_key(name: str, rate_limit: int, bulk_limit: int):
@@ -35,6 +36,7 @@ def create_key(name: str, rate_limit: int, bulk_limit: int):
             is_active=True,
             rate_limit_per_min=rate_limit,
             bulk_limit_per_hour=bulk_limit,
+            created_at=utc_now_naive(),
         )
         db.add(api_key)
         db.commit()

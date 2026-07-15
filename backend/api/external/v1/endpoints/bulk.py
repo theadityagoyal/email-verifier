@@ -24,6 +24,7 @@ from utils.email_utils import detect_email_column
 from utils.file_utils import read_upload_file, FileReadError, SUPPORTED_EXTENSIONS, is_supported_filename
 from utils.usage_logger import log_api_usage
 from utils.logging import get_logger
+from utils.timezone import utc_now_naive
 from tasks.bulk_processor import process_bulk_job_sync
 
 router = APIRouter(tags=["External API - Bulk"])
@@ -109,6 +110,7 @@ async def external_bulk_upload(
             completed_at=None,
             error_details=None,
             total=total,
+            created_at=utc_now_naive(),
         )
         db.add(job)
         await db.commit()
@@ -127,7 +129,7 @@ async def external_bulk_upload(
         resp_status = 500
         raise
     finally:
-        await log_api_usage(db, api_key.id, "bulk", resp_status)
+        await log_api_usage(api_key.id, "bulk", resp_status)
 
 
 @router.get("/jobs/{job_id}")

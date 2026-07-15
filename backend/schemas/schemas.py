@@ -347,6 +347,7 @@ class DashboardStats(BaseModel):
 
     generated_at: datetime                     # server timestamp this response was built at;
                                                 # frontend derives "2 min ago" / "Just now" from this
+    last_sync_at: Optional[datetime] = None    # actual last verification time from DB (MAX(verified_at))
 
     model_config = {"from_attributes": True}
 

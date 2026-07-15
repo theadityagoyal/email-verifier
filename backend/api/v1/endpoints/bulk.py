@@ -12,6 +12,7 @@ from models.models import Job, Email, JobStatus, NotificationType, NotificationP
 from schemas.schemas import JobStatusResponse, BulkUploadResponse, JobCancelResponse
 from services.notification_service import async_create_notification
 from utils.logging import get_logger
+from utils.timezone import utc_now_naive
 from utils.email_utils import detect_email_column
 from utils.file_utils import read_upload_file, FileReadError, SUPPORTED_EXTENSIONS, is_supported_filename
 
@@ -115,6 +116,7 @@ async def bulk_upload(
             completed_at=None,
             error_details=None,
             total=total,
+            created_at=utc_now_naive(),
         )
         db.add(job)
         await db.commit()

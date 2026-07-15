@@ -15,11 +15,7 @@ import {
 } from '@/services/api';
 import Button from '@/components/ui/Button';
 import { useTheme } from '@/styles/theme';
-
-function formatDate(dateString) {
-  if (!dateString) return 'Never';
-  return new Date(dateString).toLocaleString();
-}
+import { formatDateTimeIST } from '@/utils/dateUtils';
 
 // ── Create Key modal ─────────────────────────────────────────────────────────
 
@@ -427,7 +423,7 @@ export default function ApiKeysPage() {
                       {k.total_calls.toLocaleString()}
                     </td>
                     <td className="px-4 py-3.5 text-sm text-[var(--foreground)]/50">
-                      {formatDate(k.last_used_at)}
+                      {formatDateTimeIST(k.last_used_at)}
                     </td>
                     <td className="px-4 py-3.5" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1">

@@ -21,12 +21,14 @@ bookkeeping in services/domain_service.py and usage logging in
 utils/usage_logger.py.
 """
 from typing import Optional
+from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from models.models import Notification, NotificationType, NotificationPriority
 from utils.logging import get_logger
+from utils.timezone import utc_now_naive
 
 logger = get_logger(__name__)
 
@@ -38,6 +40,7 @@ def _build_notification(
     priority: NotificationPriority,
     metadata: Optional[dict],
 ) -> Notification:
+    now = utc_now_naive()
     return Notification(
         title=title,
         message=message,
@@ -45,6 +48,8 @@ def _build_notification(
         priority=priority,
         is_read=False,
         extra_data=metadata,
+        created_at=now,
+        updated_at=now,
     )
 
 

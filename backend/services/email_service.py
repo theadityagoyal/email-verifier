@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional, List
 
 from validators.syntax_validator import validate_syntax, is_role_based
@@ -8,6 +8,7 @@ from validators.disposable_checker import is_disposable
 from validators.score_calculator import calculate_score, determine_status, TRUSTED_DOMAINS
 from schemas.schemas import EmailVerifyResponse
 from utils.logging import get_logger
+from utils.timezone import utc_now_naive
 
 logger = get_logger(__name__)
 
@@ -153,7 +154,7 @@ def _build_response(
         status = EmailStatus.invalid
 
     # Only set verified_at for non-processing statuses
-    verified_at = datetime.now(timezone.utc) if status != EmailStatus.processing else None
+    verified_at = utc_now_naive() if status != EmailStatus.processing else None
 
     return EmailVerifyResponse(
         email=email,

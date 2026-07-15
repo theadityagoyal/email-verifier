@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 
 import { listDomains, getDomainOverview, getDashboardStats, bulkDeleteDomains, downloadDomainsExport } from '@/services/api';
 import { reportError } from '@/utils/errorReporter';
+import { formatChartLabelIST } from '@/utils/dateUtils';
 
 import DomainHeader from '@/components/pages/DomainHeader';
 import DomainStats from '@/components/pages/DomainStats';
@@ -205,7 +206,7 @@ export default function DomainsPage() {
         const riskPct = denom > 0 ? Math.round(((risky + unsafe) / denom) * 100 * 10) / 10 : 0;
         return {
           date: d.date,
-          label: new Date(d.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+          label: formatChartLabelIST(d.date),
           riskPct,
         };
       });

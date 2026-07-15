@@ -2,26 +2,59 @@
 External developer API — single email verification.
 Auth: X-API-Key header. Rate limit: api_key.rate_limit_per_min (default 60/min).
 """
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.database import get_db
+from models.database import get_db, AsyncSessionLocal
 from models.models import ApiKey
 from schemas.schemas import EmailVerifyRequest
 from services.email_service import verify_email
-from services.domain_service import async_upsert_email, async_upsert_domain
+from services.domain_service import async_upsert_email, async_upsert_email_processing, async_upsert_domain
 from api.external.v1.dependencies import rate_limit_verify
 from utils.usage_logger import log_api_usage
 from utils.logging import get_logger
+from utils.timezone import utc_now_naive
 
 router = APIRouter(prefix="/verify", tags=["External API - Verification"])
 logger = get_logger(__name__)
 
 
-def _utc_now_naive() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+def _extract_domain(email: str) -> str:
+    """Extract domain from email address."""
+    return email.split('@')[-1].lower() if '@' in email else ''
+
+
+async def _mark_processing(email: str, domain: str, now) -> None:
+    """Mark email as processing in a short-lived session."""
+    async with AsyncSessionLocal() as session:
+        try:
+            await async_upsert_email_processing(session, email, domain, job_id=None, now=now)
+            await session.commit()
+        except Exception as e:
+            logger.warning(
+                f"Failed to mark email as processing for {email}: {str(e)}",
+                exc_info=False,
+            )
+            await session.rollback()
+
+
+async def _save_result(result, now) -> None:
+    """Save verification result in a short-lived session."""
+    async with AsyncSessionLocal() as session:
+        try:
+            await async_upsert_email(session, result, job_id=None, now=now)
+            if result.domain:
+                await async_upsert_domain(session, result.domain, result.mx_records, now)
+            await session.commit()
+        except Exception as e:
+            logger.error(
+                f"Failed to persist verification result for {result.email}: {str(e)}",
+                exc_info=True,
+            )
+            await session.rollback()
+            raise
 
 
 @router.post("")
@@ -50,6 +83,13 @@ async def external_verify_email(
                 "error": {"code": "invalid_request", "message": "Email address cannot be empty"},
             }
 
+        domain = _extract_domain(email)
+        now = utc_now_naive()
+
+        # Step 1: Mark as processing (short-lived session)
+        await _mark_processing(email, domain, now)
+
+        # Step 2: Run verification (no DB session held)
         try:
             result = await verify_email(email)
         except Exception as e:
@@ -60,16 +100,9 @@ async def external_verify_email(
                 "error": {"code": "verification_failed", "message": "Email verification service failed"},
             }
 
-        now = _utc_now_naive()
-
+        # Step 3: Save result (short-lived session)
         try:
-            # Atomic upsert — persists into the same `emails` table the
-            # dashboard reads from, so external verifications show up in the
-            # dashboard/email-list too, and can never race on duplicate emails.
-            await async_upsert_email(db, result, job_id=None, now=now)
-
-            if result.domain:
-                await async_upsert_domain(db, result.domain, result.mx_records, now)
+            await _save_result(result, now)
         except Exception as e:
             logger.error(
                 "external_verify_persist_failed", email=email, api_key_id=api_key.id, error=str(e), exc_info=True
@@ -100,4 +133,4 @@ async def external_verify_email(
             },
         }
     finally:
-        await log_api_usage(db, api_key.id, "verify", resp_status)
+        await log_api_usage(api_key.id, "verify", resp_status)

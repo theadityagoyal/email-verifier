@@ -13,6 +13,7 @@ import { listEmails, downloadEmailsExport, deleteEmail, getDashboardStats } from
 import StatusBadge from '@/components/ui/StatusBadge';
 import Button from '@/components/ui/Button';
 import { scoreColorClass } from '@/utils/scoreThresholds';
+import { formatDateTimeIST } from '@/utils/dateUtils';
 import { reportError } from '@/utils/errorReporter';
 
 const statusOptions = [
@@ -311,27 +312,6 @@ export default function EmailListPage() {
       direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc',
     }));
     setPage(1);
-  };
-
-  useEffect(() => {
-    setSelectedEmails(new Set());
-  }, [
-    page,
-    size,
-    search,
-    statusFilter,
-    domainFilter,
-    scoreRange,
-    dateFrom,
-    dateTo,
-    flaggedFilter,
-    sortConfig.key,
-    sortConfig.direction,
-  ]);
-
-  const formatDate = (dateString) => {
-    if (!dateString) return '\u2014';
-    return new Date(dateString).toLocaleString();
   };
 
   const columns = [
@@ -686,7 +666,7 @@ export default function EmailListPage() {
                         <ChecksCell email={email} />
                       </td>
                       <td className="px-4 py-3.5 text-[var(--foreground)]/50 font-mono text-sm">
-                        {formatDate(email.verified_at)}
+                        {formatDateTimeIST(email.verified_at)}
                       </td>
                       <td className="px-4 py-3.5">
                         <div className="flex items-center justify-end gap-1">

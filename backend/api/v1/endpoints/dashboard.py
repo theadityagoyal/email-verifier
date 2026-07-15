@@ -16,6 +16,7 @@ from schemas.schemas import (
 )
 from utils.config import settings
 from utils.logging import get_logger
+from utils.timezone import utc_now_naive
 
 router = APIRouter(tags=["Dashboard"])
 logger = get_logger(__name__)
@@ -87,7 +88,7 @@ def bucket_case():
 
 
 async def _compute_dashboard_trends(db: AsyncSession):
-    now = datetime.utcnow()
+    now = utc_now_naive()
     day_start = now - timedelta(hours=DAY_TREND_HOURS)
     prev_start = now - timedelta(hours=DAY_TREND_HOURS * 2)
 
@@ -148,7 +149,7 @@ async def _compute_dashboard_trends(db: AsyncSession):
 
 
 async def _compute_speed_and_processing_time(db: AsyncSession):
-    now = datetime.utcnow()
+    now = utc_now_naive()
 
     speed_start = now - timedelta(minutes=SPEED_WINDOW_MINUTES)
     speed_count_row = await db.execute(
@@ -195,7 +196,7 @@ async def _compute_speed_and_processing_time(db: AsyncSession):
 
 
 async def _compute_flagged_overview(db: AsyncSession):
-    now = datetime.utcnow()
+    now = utc_now_naive()
     day_start = now - timedelta(hours=24)
     prev_start = now - timedelta(hours=48)
     week_start = now - timedelta(days=7)
@@ -273,7 +274,7 @@ async def _compute_flagged_overview(db: AsyncSession):
 
 
 async def _compute_domain_summary(db: AsyncSession, domain_map: dict, bucket_expr):
-    now = datetime.utcnow()
+    now = utc_now_naive()
     week_start = now - timedelta(days=TREND_WINDOW_DAYS)
     prev_week_start = now - timedelta(days=TREND_WINDOW_DAYS * 2)
 
@@ -424,7 +425,7 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365), db: AsyncSessi
         denom_d = d["safe"] + d["risky"] + d["unsafe"]
         d["risk_pct"] = round(((d["risky"] + d["unsafe"]) / denom_d) * 100) if denom_d > 0 else 0
 
-    start_date = datetime.utcnow() - timedelta(days=days)
+    start_date = utc_now_naive() - timedelta(days=days)
     daily_rows = (
         await db.execute(
             select(func.date(Email.created_at).label("day"), bucket_expr.label("bucket"), func.count(Email.id))
@@ -464,6 +465,12 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365), db: AsyncSessi
     flagged_overview = await _compute_flagged_overview(db)
     domain_summary = await _compute_domain_summary(db, domain_map, bucket_expr)
 
+    # Query actual last successful verification time from database
+    last_sync_result = await db.execute(
+        select(func.max(Email.verified_at)).where(Email.verified_at.isnot(None))
+    )
+    last_sync_at = last_sync_result.scalar()
+
     return DashboardStats(
         total_emails=total_emails,
         per_status_counts=per_status_counts,
@@ -480,7 +487,8 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365), db: AsyncSessi
         avg_processing_time_ms=avg_processing_time_ms,
         flagged_overview=flagged_overview,
         domain_summary=domain_summary,
-        generated_at=datetime.now(timezone.utc),
+        generated_at=utc_now_naive(),
+        last_sync_at=last_sync_at,
     )
 
 
@@ -798,7 +806,7 @@ async def get_domains_overview(db: AsyncSession = Depends(get_db)):
         ).all()
         mx_map = {d: mx for d, mx in mx_rows}
 
-    now = datetime.utcnow()
+    now = utc_now_naive()
     total_domains = len(rows)
     total_emails = sum(r.total_emails for r in rows)
     safe = sum(r.safe_count for r in rows)
@@ -907,7 +915,7 @@ async def list_domains(
     domain_subq = _domain_aggregate_subquery(search)
     risk_percent_expr, trust_score_expr = _risk_and_trust_exprs(domain_subq)
 
-    now = datetime.utcnow()
+    now = utc_now_naive()
     window_start = now - timedelta(days=TREND_WINDOW_DAYS)
     prev_start = now - timedelta(days=TREND_WINDOW_DAYS * 2)
     trend_subq = _trend_subquery(prev_start, window_start)

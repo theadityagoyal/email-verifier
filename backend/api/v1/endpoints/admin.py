@@ -23,6 +23,7 @@ from utils.config import settings
 from utils.admin_auth import create_admin_token, require_admin
 from utils.api_key import generate_api_key
 from utils.logging import get_logger
+from utils.timezone import utc_now_naive
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 logger = get_logger(__name__)
@@ -88,6 +89,7 @@ async def create_api_key(payload: ApiKeyCreateRequest, db: AsyncSession = Depend
         is_active=True,
         rate_limit_per_min=payload.rate_limit_per_min,
         bulk_limit_per_hour=payload.bulk_limit_per_hour,
+        created_at=utc_now_naive(),
     )
     db.add(api_key)
     await db.commit()
@@ -162,7 +164,7 @@ async def get_api_key_usage(
     """Daily call counts for the last `days` days, split by endpoint (verify/bulk)."""
     key = await _get_key_or_404(db, prefix)
 
-    start_date = datetime.utcnow() - timedelta(days=days)
+    start_date = utc_now_naive() - timedelta(days=days)
     rows = (
         await db.execute(
             select(

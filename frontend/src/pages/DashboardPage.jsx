@@ -36,6 +36,7 @@ import {
   Sparkles,
   Star,
 } from 'lucide-react';
+import { formatDateTimeIST, formatAvgTime, relativeTime } from '@/utils/dateUtils';
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -62,35 +63,6 @@ function useIsTabVisible() {
     return () => document.removeEventListener('visibilitychange', handler);
   }, []);
   return visible;
-}
-
-function relativeTime(isoString) {
-  if (!isoString) return '—';
-  const then = new Date(isoString);
-  const diffMs = Date.now() - then.getTime();
-  const diffSec = Math.floor(diffMs / 1000);
-
-  if (diffSec < 30) return 'Just now';
-  if (diffSec < 60) return `${diffSec} sec ago`;
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin} min ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr} hr ago`;
-  const diffDay = Math.floor(diffHr / 24);
-  return `${diffDay}d ago`;
-}
-
-function formatAvgTime(timeMs) {
-  if (timeMs === null || timeMs === undefined) return '—';
-  if (timeMs === 0) return '<1ms';
-
-  if (timeMs >= 1000) {
-    const seconds = timeMs / 1000;
-    return `${seconds.toFixed(1)}s`;
-  } else if (timeMs >= 1) {
-    return `${Math.round(timeMs)}ms`;
-  }
-  return '<1ms';
 }
 
 function dayTotal(entry) {
