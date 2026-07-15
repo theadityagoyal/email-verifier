@@ -11,11 +11,11 @@ import {
   Settings,
   ChevronDown,
   HelpCircle,
-  Bell,
   KeyRound,
   LogOut,
 } from 'lucide-react';
 import ThemeToggle from '@/components/layout/ThemeToggle';
+import NotificationBell from '@/components/notifications/NotificationBell';
 import { APP_USER, APP_INFO } from '@/utils/appConfig';
 
 const baseNavItems = [
@@ -50,11 +50,9 @@ export default function Layout() {
   // independent states.
   const [sidebarProfileOpen, setSidebarProfileOpen] = useState(false);
   const [headerProfileOpen, setHeaderProfileOpen] = useState(false);
-  const [notifOpen, setNotifOpen] = useState(false);
 
   useEscapeToClose(sidebarProfileOpen, () => setSidebarProfileOpen(false));
   useEscapeToClose(headerProfileOpen, () => setHeaderProfileOpen(false));
-  useEscapeToClose(notifOpen, () => setNotifOpen(false));
 
   const location = useLocation();
   const navigate = useNavigate();
@@ -238,41 +236,9 @@ export default function Layout() {
                   <HelpCircle size={20} />
                 </button>
 
-                <div className="relative">
-                  <button
-                    onClick={() => setNotifOpen((v) => !v)}
-                    className="relative rounded-lg p-2 hover:bg-[var(--muted)] transition text-[var(--foreground)]/60"
-                    aria-label="Notifications"
-                    aria-haspopup="true"
-                    aria-expanded={notifOpen}
-                  >
-                    <Bell size={20} />
-                  </button>
-
-                  {notifOpen && (
-                    <>
-                      <div className="fixed inset-0 z-40" onClick={() => setNotifOpen(false)} />
-                      <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-xl border border-[var(--muted)] bg-[var(--card)] shadow-xl py-1.5">
-                        <div className="px-3.5 py-2 border-b border-[var(--muted)]">
-                          <p className="text-sm font-medium text-[var(--foreground)]">Notifications</p>
-                        </div>
-                        {/* FIX (audit #27): this used to render a hardcoded
-                            fake list with fabricated "2 hours ago" timestamps
-                            as if it were live data — misleading in production.
-                            Real notifications backend is a separate, larger
-                            piece of work (Notification model + migration +
-                            router). Until that lands, show an honest empty
-                            state instead of fake data. */}
-                        <div className="px-3.5 py-6 text-center">
-                          <p className="text-sm text-[var(--foreground)]/50">No notifications yet</p>
-                          <p className="text-xs text-[var(--foreground)]/30 mt-1">
-                            Live notifications are coming soon
-                          </p>
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
+                {/* Live notification bell — see components/notifications/.
+                    Replaces the old inline "coming soon" placeholder. */}
+                <NotificationBell />
 
                 <ThemeToggle />
 

@@ -8,8 +8,9 @@ import io
 import pandas as pd
 
 from models.database import get_db
-from models.models import Job, Email, JobStatus
-from schemas.schemas import JobStatusResponse, BulkUploadResponse
+from models.models import Job, Email, JobStatus, NotificationType, NotificationPriority
+from schemas.schemas import JobStatusResponse, BulkUploadResponse, JobCancelResponse
+from services.notification_service import async_create_notification
 from utils.logging import get_logger
 from utils.email_utils import detect_email_column
 from utils.file_utils import read_upload_file, FileReadError, SUPPORTED_EXTENSIONS, is_supported_filename
@@ -118,6 +119,18 @@ async def bulk_upload(
         db.add(job)
         await db.commit()
 
+        # Bulk Upload Started notification — fired here (not inside the
+        # background worker) so it fires exactly once per upload, right when
+        # the job is actually queued/accepted.
+        await async_create_notification(
+            db,
+            title="Bulk Upload Started",
+            message=f'"{file.filename}" queued for verification — {total} email(s).',
+            type=NotificationType.info,
+            priority=NotificationPriority.low,
+            metadata={"job_id": job_id, "file_name": file.filename, "total": total},
+        )
+
         # Start processing the job in background using FastAPI BackgroundTasks
         logger.info("about_to_dispatch_bulk_job", job_id=job_id, email_col=email_col)
         background_tasks.add_task(process_bulk_job_sync, job_id, s3_key, email_col)
@@ -160,6 +173,44 @@ async def get_job_status(job_id: str, db: AsyncSession = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error retrieving job {job_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to retrieve job: {str(e)}")
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=JobCancelResponse)
+async def cancel_job(job_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    Request graceful cancellation of a bulk job.
+
+    This ONLY flips Job.cancel_requested — it does not itself stop anything.
+    The background worker (tasks/bulk_processor.py) polls that flag between
+    batches of in-flight verifications, stops submitting new work once it
+    sees it, lets already-started verifications finish naturally (so their
+    results are never lost or half-written), and then flips the job's
+    `status` to 'cancelled' itself. Poll GET /jobs/{job_id} to observe that
+    transition; this endpoint only confirms the request was accepted.
+
+    Only jobs currently 'pending' or 'processing' can be cancelled — a
+    completed/failed/already-cancelled job has nothing left to stop.
+    """
+    job = (await db.execute(select(Job).where(Job.job_id == job_id))).scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    if job.status not in (JobStatus.pending, JobStatus.processing):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job cannot be cancelled — current status is '{job.status.value}'.",
+        )
+
+    job.cancel_requested = True
+    await db.commit()
+
+    logger.info("job_cancel_requested", job_id=job_id)
+
+    return JobCancelResponse(
+        message="Cancellation requested. The job will stop after in-flight emails finish.",
+        job_id=job_id,
+        status=job.status.value,
+    )
 
 
 @router.delete("/jobs/{job_id}")

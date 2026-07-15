@@ -192,6 +192,12 @@ export const exportJobResults = (jobId) =>
 export const deleteJob = (jobId) =>
   apiEnhanced.delete(`/jobs/${jobId}`).then((r) => r.data)
 
+// Requests graceful cancellation of an in-progress/pending job. Backend only
+// flips a `cancel_requested` flag — the job's status becomes 'cancelled'
+// asynchronously once the background worker observes it (poll getJobStatus).
+export const cancelJob = (jobId) =>
+  apiEnhanced.post(`/jobs/${jobId}/cancel`).then((r) => r.data)
+
 // ── Dashboard ─────────────────────────────────────────────────────────────
 
 export const getDashboardStats = (days = 7) =>
@@ -305,3 +311,30 @@ export const getApiKeyUsage = (prefix, days = 30) =>
     params: { days },
     headers: getAdminHeaders(),
   }).then((r) => r.data)
+
+// ── Notifications ────────────────────────────────────────────────────────
+// Global (single-tenant) in-app notifications powering the header bell.
+// listNotifications' response already includes `unread_count`, so the bell
+// badge is derived from that same polled response instead of firing a
+// second dedicated request every cycle — keeps polling to one call per
+// interval. GET /notifications/unread-count still exists on the backend
+// (per spec) and is exposed here (getUnreadCount) for any future caller
+// that only wants the count.
+
+export const listNotifications = (params) =>
+  apiEnhanced.get('/notifications', { params }).then((r) => r.data)
+
+export const getUnreadCount = () =>
+  apiEnhanced.get('/notifications/unread-count').then((r) => r.data)
+
+export const markNotificationRead = (id) =>
+  apiEnhanced.post(`/notifications/${id}/read`).then((r) => r.data)
+
+export const markAllNotificationsRead = () =>
+  apiEnhanced.post('/notifications/read-all').then((r) => r.data)
+
+export const deleteNotification = (id) =>
+  apiEnhanced.delete(`/notifications/${id}`).then((r) => r.data)
+
+export const clearAllNotifications = () =>
+  apiEnhanced.delete('/notifications/clear-all').then((r) => r.data)

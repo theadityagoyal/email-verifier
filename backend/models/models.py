@@ -29,6 +29,26 @@ class JobStatus(str, enum.Enum):
     processing = "processing"
     completed = "completed"
     failed = "failed"
+    # NEW: graceful cancellation support. A job moves here only after the
+    # background worker actually observes Job.cancel_requested and stops
+    # submitting further work — never set directly by the cancel request
+    # itself (see api/v1/endpoints/bulk.py + tasks/bulk_processor.py).
+    cancelled = "cancelled"
+
+
+# ── Notifications ─────────────────────────────────────────────────────────
+
+class NotificationType(str, enum.Enum):
+    success = "success"
+    error = "error"
+    warning = "warning"
+    info = "info"
+
+
+class NotificationPriority(str, enum.Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
 
 
 class Email(Base):
@@ -78,7 +98,7 @@ class Domain(Base):
         CheckConstraint('bounce_rate >= 0.0 AND bounce_rate <= 100.0', name='check_bounce_rate_range'),
     )
     created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    updated_at = Column(DateTime, server_default=func.now())
 
 
 class Job(Base):
@@ -105,6 +125,13 @@ class Job(Base):
     invalid = Column(Integer, default=0)
     risky = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
+    # NEW: cooperative cancellation flag. Set to True by
+    # POST /api/v1/jobs/{job_id}/cancel; the background worker
+    # (tasks/bulk_processor.py) polls this periodically and stops
+    # submitting new work once it sees it, then flips `status` to
+    # JobStatus.cancelled itself. Already-processed emails are never
+    # touched — each one commits independently as it completes.
+    cancel_requested = Column(Boolean, nullable=False, default=False)
     __table_args__ = (
         CheckConstraint('progress_percent >= 0 AND progress_percent <= 100', name='check_progress_range'),
         CheckConstraint('total >= 0', name='check_total_nonnegative'),
@@ -156,3 +183,35 @@ class ApiKeyUsageLog(Base):
     endpoint = Column(String(20), nullable=False)  # "verify" | "bulk"
     status_code = Column(Integer, nullable=False)
     created_at = Column(DateTime, server_default=func.now(), index=True)
+
+
+class Notification(Base):
+    """
+    Global, in-app notifications surfaced via the header notification bell.
+    Single-tenant for now (no user/tenant scoping column) — every row is
+    visible to every viewer of the dashboard. Kept deliberately generic
+    (title/message/type/priority/metadata) so a `user_id` column can be
+    added later without changing the shape of existing rows or the API
+    contract; every write path goes through services/notification_service.py
+    so that's the only place such a change would need to happen.
+    """
+    __tablename__ = "notifications"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    title = Column(String(255), nullable=False)
+    message = Column(Text, nullable=False)
+    type = Column(SAEnum(NotificationType), nullable=False, default=NotificationType.info)
+    priority = Column(SAEnum(NotificationPriority), nullable=False, default=NotificationPriority.medium)
+    is_read = Column(Boolean, nullable=False, default=False)
+    # Mapped to a DB column literally named "metadata" (matches the
+    # requested schema), but exposed under a different Python attribute
+    # name because `metadata` is reserved on every SQLAlchemy Declarative
+    # model (Base.metadata is the schema/table registry) and would collide.
+    extra_data = Column("metadata", JSON, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index('ix_notifications_created_at', 'created_at'),
+        Index('ix_notifications_is_read', 'is_read'),
+    )

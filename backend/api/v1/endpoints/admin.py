@@ -12,12 +12,13 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.database import get_db
-from models.models import ApiKey, ApiKeyUsageLog
+from models.models import ApiKey, ApiKeyUsageLog, NotificationType, NotificationPriority
 from schemas.schemas import (
     AdminLoginRequest, AdminLoginResponse,
     ApiKeyListItem, ApiKeyCreateRequest, ApiKeyCreateResponse,
     ApiKeyUsageResponse, DailyUsageItem,
 )
+from services.notification_service import async_create_notification
 from utils.config import settings
 from utils.admin_auth import create_admin_token, require_admin
 from utils.api_key import generate_api_key
@@ -93,6 +94,15 @@ async def create_api_key(payload: ApiKeyCreateRequest, db: AsyncSession = Depend
 
     logger.info("admin_api_key_created", prefix=key_prefix, name=payload.name)
 
+    await async_create_notification(
+        db,
+        title="API Key Created",
+        message=f'New API key "{payload.name}" created ({key_prefix}...).',
+        type=NotificationType.success,
+        priority=NotificationPriority.low,
+        metadata={"prefix": key_prefix, "name": payload.name},
+    )
+
     return ApiKeyCreateResponse(
         api_key=full_key,
         prefix=key_prefix,
@@ -126,6 +136,16 @@ async def revoke_api_key(prefix: str, db: AsyncSession = Depends(get_db)):
     key.is_active = False
     await db.commit()
     logger.info("admin_api_key_revoked", prefix=prefix)
+
+    await async_create_notification(
+        db,
+        title="API Key Revoked",
+        message=f'API key "{key.name or prefix}" ({prefix}...) was revoked.',
+        type=NotificationType.warning,
+        priority=NotificationPriority.medium,
+        metadata={"prefix": prefix, "name": key.name},
+    )
+
     return {"message": "revoked", "prefix": prefix}
 
 

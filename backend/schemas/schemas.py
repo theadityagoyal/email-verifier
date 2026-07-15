@@ -1,7 +1,7 @@
 from pydantic import BaseModel, EmailStr, field_validator
 from typing import Optional, Dict, List
 from datetime import datetime, date
-from models.models import EmailStatus, JobStatus
+from models.models import EmailStatus, JobStatus, NotificationType, NotificationPriority
 
 
 # ── Request schemas ──────────────────────────────────────────────────────────
@@ -69,6 +69,16 @@ class BulkUploadResponse(BaseModel):
     total_emails: int
 
     model_config = {"from_attributes": True}
+
+
+class JobCancelResponse(BaseModel):
+    """Response for POST /jobs/{job_id}/cancel. Cancellation is cooperative —
+    this confirms the *request* was recorded, not that the job has stopped
+    yet. Poll GET /jobs/{job_id} (status becomes 'cancelled') to know when
+    the background worker has actually exited."""
+    message: str
+    job_id: str
+    status: str
 
 
 # ── List/pagination schemas ───────────────────────────────────────────────────
@@ -435,3 +445,41 @@ class ApiKeyUsageResponse(BaseModel):
     prefix: str
     days: int
     daily: List[DailyUsageItem]
+
+
+# ── Notifications ────────────────────────────────────────────────────────────
+
+class NotificationItem(BaseModel):
+    id: int
+    title: str
+    message: str
+    type: NotificationType
+    priority: NotificationPriority
+    is_read: bool
+    # NOTE: intentionally NOT populated via from_attributes/ORM auto-mapping
+    # — the DB/ORM attribute is `extra_data` (see models.Notification), so
+    # endpoints build this schema explicitly field-by-field. Named `metadata`
+    # here (not `extra_data`) to keep the public API contract matching the
+    # originally requested shape.
+    metadata: Optional[dict] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+class PaginatedNotificationsResponse(BaseModel):
+    items: List[NotificationItem]
+    total: int
+    unread_count: int
+    page: int
+    size: int
+    pages: int
+
+
+class UnreadCountResponse(BaseModel):
+    unread_count: int
+
+
+class NotificationActionResponse(BaseModel):
+    message: str
+    id: Optional[int] = None
+    count: Optional[int] = None

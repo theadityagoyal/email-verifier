@@ -10,9 +10,10 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 
 from models.database import SyncSessionLocal
-from models.models import Job, JobStatus
+from models.models import Job, JobStatus, NotificationType, NotificationPriority
 from services.email_service import verify_email
 from services.domain_service import sync_upsert_email, sync_upsert_domain
+from services.notification_service import sync_create_notification
 from utils.email_utils import detect_email_column
 from utils.file_utils import read_upload_file, FileReadError
 from utils.logging import get_logger
@@ -22,6 +23,12 @@ logger = get_logger(__name__)
 
 
 IST = ZoneInfo("Asia/Kolkata")
+
+# How many completed emails between each check of Job.cancel_requested.
+# Small enough that a cancel request is honored quickly, large enough that
+# it isn't hammering the DB with an extra query per email on top of the
+# per-email upsert that already happens in verify_single_email_sync.
+CANCEL_CHECK_INTERVAL = 10
 
 
 def _ist_now():
@@ -46,6 +53,28 @@ def _get_thread_event_loop() -> asyncio.AbstractEventLoop:
         loop = asyncio.new_event_loop()
         _thread_local.loop = loop
     return loop
+
+
+def _is_cancel_requested(job_id: str) -> bool:
+    """Fresh, isolated read of Job.cancel_requested.
+
+    Uses its own short-lived session (open -> query -> close) instead of
+    reusing process_bulk_job_sync's long-lived `db` session, so it always
+    sees the latest value committed by the cancel endpoint's own request —
+    regardless of what transaction/snapshot state the caller's session
+    happens to be sitting in at the time.
+    """
+    db = SyncSessionLocal()
+    try:
+        value = db.execute(
+            select(Job.cancel_requested).where(Job.job_id == job_id)
+        ).scalar_one_or_none()
+        return bool(value)
+    except Exception as exc:
+        logger.warning("cancel_flag_check_failed", job_id=job_id, error=str(exc))
+        return False
+    finally:
+        db.close()
 
 
 def verify_single_email_sync(email: str, job_id: str | None = None):
@@ -228,12 +257,81 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email") ->
 
         futures = {executor.submit(verify_single_email_sync, email, job_id): email for email in emails}
 
+        # ── Cooperative cancellation ─────────────────────────────────────
+        # `cancelled` short-circuits repeat DB checks once we've already
+        # detected cancellation and cancelled the remaining futures — no
+        # point re-checking every interval after that.
+        cancelled = False
+        completed_count = 0
+
         for future in as_completed(futures):
             email = futures[future]
             try:
                 future.result()
             except Exception as e:
                 logger.error("email_verification_failed", email=email, error=str(e), exc_info=True)
+
+            completed_count += 1
+
+            if not cancelled and completed_count % CANCEL_CHECK_INTERVAL == 0:
+                if _is_cancel_requested(job_id):
+                    cancelled = True
+                    # Futures that haven't started yet get cancelled here and
+                    # will never run — no email is processed for them, so
+                    # nothing partial or corrupted is written for those.
+                    # Futures already executing can't be interrupted
+                    # mid-verification (deliberately — each one commits its
+                    # own result independently via verify_single_email_sync,
+                    # so letting in-flight work finish is exactly what keeps
+                    # already-processed results consistent); as_completed()
+                    # will simply yield them normally when they finish, which
+                    # this same for-loop already handles above.
+                    still_pending = sum(1 for f in futures if not f.done())
+                    for pending_future in futures:
+                        pending_future.cancel()
+                    logger.info(
+                        "bulk_job_cancellation_detected",
+                        job_id=job_id,
+                        processed_so_far=completed_count,
+                        total=len(emails),
+                        futures_cancelled=still_pending,
+                    )
+
+        # Final authoritative check — covers the case where cancellation was
+        # requested after the very last CANCEL_CHECK_INTERVAL checkpoint but
+        # before the job would otherwise be marked completed.
+        if cancelled or _is_cancel_requested(job_id):
+            db.refresh(job)  # pick up the latest processed/verified/invalid/risky
+                              # counts written by the (separately-sessioned)
+                              # per-email commits above before we report them
+            job.status = JobStatus.cancelled
+            job.completed_at = _ist_now()
+            job.current_stage = 'cancelled'
+            db.commit()
+
+            logger.info(
+                "bulk_job_cancelled",
+                job_id=job_id,
+                processed=job.processed,
+                total=job.total,
+            )
+            sync_create_notification(
+                db,
+                title="Bulk Upload Cancelled",
+                message=(
+                    f'"{job.file_name}" was cancelled after processing '
+                    f'{job.processed}/{job.total} emails.'
+                ),
+                type=NotificationType.warning,
+                priority=NotificationPriority.medium,
+                metadata={
+                    "job_id": job_id,
+                    "file_name": job.file_name,
+                    "processed": job.processed,
+                    "total": job.total,
+                },
+            )
+            return
 
         # Mark job as completed
         job.status = JobStatus.completed
@@ -244,12 +342,39 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email") ->
 
         logger.info("bulk_job_completed", job_id=job_id, total=len(emails))
 
+        sync_create_notification(
+            db,
+            title="Bulk Upload Completed",
+            message=(
+                f'"{job.file_name}" finished — {job.verified} safe, '
+                f'{job.risky} risky, {job.invalid} unsafe out of {job.total}.'
+            ),
+            type=NotificationType.success,
+            priority=NotificationPriority.medium,
+            metadata={
+                "job_id": job_id,
+                "file_name": job.file_name,
+                "total": job.total,
+                "verified": job.verified,
+                "risky": job.risky,
+                "invalid": job.invalid,
+            },
+        )
+
     except FileReadError as exc:
         if job:
             job.status = JobStatus.failed
             job.error_message = str(exc)
             job.error_details = {"error": str(exc), "type": "FileReadError"}
             db.commit()
+            sync_create_notification(
+                db,
+                title="Bulk Upload Failed",
+                message=f'"{job.file_name}" failed — could not read the uploaded file: {str(exc)}',
+                type=NotificationType.error,
+                priority=NotificationPriority.high,
+                metadata={"job_id": job_id, "file_name": job.file_name, "error": str(exc)},
+            )
         logger.error("bulk_job_file_read_error", job_id=job_id, error=str(exc), exc_info=True)
     except Exception as exc:
         if job:
@@ -257,6 +382,14 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email") ->
             job.error_message = str(exc)
             job.error_details = {"error": str(exc), "type": type(exc).__name__}
             db.commit()
+            sync_create_notification(
+                db,
+                title="Bulk Upload Failed",
+                message=f'"{job.file_name}" failed: {str(exc)}',
+                type=NotificationType.error,
+                priority=NotificationPriority.high,
+                metadata={"job_id": job_id, "file_name": job.file_name, "error": str(exc)},
+            )
         logger.error("bulk_job_error", job_id=job_id, error=str(exc), exc_info=True)
         raise
     finally:

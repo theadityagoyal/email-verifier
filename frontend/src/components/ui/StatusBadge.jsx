@@ -26,6 +26,10 @@ const STATUS_CONFIG = {
   // Processing
   processing: { label: 'Processing', bucket: 'processing' },
 
+  // Cancelled (bulk jobs only — a job that was stopped via
+  // POST /jobs/{job_id}/cancel before it finished)
+  cancelled: { label: 'Cancelled', bucket: 'cancelled' },
+
   // Unknown
   unknown: { label: 'Unknown', bucket: 'unknown' },
 };
@@ -37,6 +41,7 @@ const BUCKET_CLASSES = {
   risky: 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20',
   unsafe: 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20',
   processing: 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20',
+  cancelled: 'text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-800/40',
   unknown: 'text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-900/20',
 };
 

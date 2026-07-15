@@ -5,9 +5,10 @@ import toast from 'react-hot-toast';
 import {
   Upload, FileText, Loader2, CheckCircle, XCircle, AlertTriangle, Clock,
   Trash2, Download, RotateCcw, ChevronDown, MoreVertical, Mail, Users,
-  ShieldAlert, Globe, Database, PieChart, TrendingUp, BarChart3, FolderOpen
+  ShieldAlert, Globe, Database, PieChart, TrendingUp, BarChart3, FolderOpen,
+  StopCircle, Ban,
 } from 'lucide-react';
-import { bulkUpload, getJobStatus, exportJobResults, listJobs, deleteJob } from '@/services/api';
+import { bulkUpload, getJobStatus, exportJobResults, listJobs, deleteJob, cancelJob } from '@/services/api';
 import StatusBadge from '@/components/ui/StatusBadge';
 import Button from '@/components/ui/Button';
 import { calculateJobStats, getStatusOrder, isJobActive } from '@/utils/jobUtils';
@@ -85,7 +86,7 @@ const matchesDateFilter = (job, filter) => {
 };
 
 const isValidStatus = (status) => {
-  return ['pending', 'processing', 'completed', 'failed'].includes(status);
+  return ['pending', 'processing', 'completed', 'failed', 'cancelled'].includes(status);
 };
 
 const FileUploadZone = ({ onDragEnter, onDragLeave, onDragOver, onDrop, dragActive, onFileSelect, fileInputRef }) => (
@@ -174,9 +175,10 @@ const JobStats = ({ job }) => {
   );
 };
 
-const JobActions = ({ job, onRetry, onDelete }) => {
+const JobActions = ({ job, onRetry, onDelete, onCancel, isCancelling }) => {
   const { progressPct } = calculateJobStats(job);
   const isProcessing = job.status === 'processing';
+  const isActive = isJobActive(job);
 
   return (
     <div className="flex items-center gap-2 flex-shrink-0">
@@ -185,6 +187,20 @@ const JobActions = ({ job, onRetry, onDelete }) => {
           <Loader2 className="h-4 w-4 animate-spin text-info" />
           <span className="text-sm font-medium text-info">{progressPct}%</span>
         </div>
+      )}
+      {isActive && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={(e) => { e.stopPropagation(); onCancel(job.job_id); }}
+          disabled={isCancelling || job.cancel_requested}
+          loading={isCancelling}
+          className="text-warning hover:text-warning hover:bg-warning/10"
+          title={job.cancel_requested ? 'Cancellation in progress…' : 'Cancel this job'}
+        >
+          {!isCancelling && <StopCircle className="h-4 w-4" />}
+          {job.cancel_requested ? 'Cancelling…' : 'Cancel'}
+        </Button>
       )}
       {job.status === 'completed' && (
         <a
@@ -267,6 +283,16 @@ const JobDetails = ({ job, expandedJob, onToggleExpand, formatDateIST }) => {
           </div>
         </div>
 
+        {job.status === 'cancelled' && (
+          <div className="px-4 pb-4">
+            <div className="flex items-center gap-2 rounded-lg bg-warning/10 border border-warning/20 px-3 py-2.5 text-sm text-warning">
+              <Ban className="h-4 w-4 shrink-0" />
+              Cancelled after processing {processedCount.toLocaleString()} of {totalCount.toLocaleString()} emails.
+              Results already processed are preserved and available in the counts above.
+            </div>
+          </div>
+        )}
+
         {isActive && (
           <div className="px-4 pb-4">
             <div className="flex items-center justify-between text-xs text-[var(--foreground)]/50 mb-1">
@@ -308,6 +334,7 @@ export default function BulkUploadPage() {
   const [expandedJob, setExpandedJob] = useState(null);
   const [polling, setPolling] = useState({});
   const [dateFilter, setDateFilter] = useState('all');
+  const [cancellingIds, setCancellingIds] = useState({});
   const fileInputRef = useRef(null);
   const queryClient = useQueryClient();
 
@@ -360,11 +387,13 @@ export default function BulkUploadPage() {
         risky: 0,
         unsafe: 0,
         progress_percent: 0,
+        cancel_requested: false,
       };
       setSelectedFile(null);
       setJobs(prev => [newJob, ...prev]);
       setPolling(prev => ({ ...prev, [newJob.job_id]: true }));
       queryClient.invalidateQueries({ queryKey: ['jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
       toast.success('File uploaded successfully!');
     },
     onError: (error) => {
@@ -412,8 +441,14 @@ export default function BulkUploadPage() {
         })
       );
 
-      if (data.status === 'completed' || data.status === 'failed') {
+      if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
         setPolling(prev => ({ ...prev, [jobId]: false }));
+        setCancellingIds(prev => {
+          if (!prev[jobId]) return prev;
+          const next = { ...prev };
+          delete next[jobId];
+          return next;
+        });
         queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
       }
     } catch (err) {
@@ -431,7 +466,7 @@ export default function BulkUploadPage() {
         const confirmData = await getJobStatus(jobId);
         pollFailuresRef.current[jobId] = 0;
         setJobs(prev => prev.map(job => job.job_id === jobId ? { ...job, ...confirmData } : job));
-        if (confirmData.status === 'completed' || confirmData.status === 'failed') {
+        if (confirmData.status === 'completed' || confirmData.status === 'failed' || confirmData.status === 'cancelled') {
           setPolling(prev => ({ ...prev, [jobId]: false }));
         }
         return;
@@ -525,6 +560,33 @@ export default function BulkUploadPage() {
     }
   }, [queryClient]);
 
+  // Graceful cancellation — asks the backend to stop submitting new work.
+  // The job's status flips to 'cancelled' asynchronously once the worker
+  // notices (existing 2s poll picks that up); here we just mark it
+  // "cancelling" locally so the button reflects that immediately, and
+  // refresh dashboard stats right away per spec.
+  const handleCancel = useCallback(async (jobId) => {
+    if (!window.confirm('Cancel this upload? Emails already processed will be kept — only remaining, not-yet-started emails are skipped.')) return;
+
+    setCancellingIds(prev => ({ ...prev, [jobId]: true }));
+    try {
+      await cancelJob(jobId);
+      setJobs(prev => prev.map(job => job.job_id === jobId ? { ...job, cancel_requested: true } : job));
+      pollFailuresRef.current[jobId] = 0;
+      setPolling(prev => ({ ...prev, [jobId]: true })); // ensure polling stays on to catch the transition
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+      toast.success('Cancellation requested — finishing in-flight emails…');
+    } catch (err) {
+      reportError('BulkUploadPage.cancelJob', err, { jobId });
+      toast.error(err.message || 'Failed to cancel upload');
+      setCancellingIds(prev => {
+        const next = { ...prev };
+        delete next[jobId];
+        return next;
+      });
+    }
+  }, [queryClient]);
+
   const handleClearAll = useCallback(async () => {
     if (jobs.length === 0) return;
     if (!window.confirm(`Permanently delete all ${jobs.length} uploads? This cannot be undone.`)) return;
@@ -550,6 +612,7 @@ export default function BulkUploadPage() {
       case 'processing': return <Loader2 className="h-4 w-4 text-info animate-spin" />;
       case 'completed': return <CheckCircle className="h-4 w-4 text-success" />;
       case 'failed': return <XCircle className="h-4 w-4 text-error" />;
+      case 'cancelled': return <Ban className="h-4 w-4 text-warning" />;
       default: return <AlertTriangle className="h-4 w-4 text-warning" />;
     }
   }, []);
@@ -663,6 +726,7 @@ export default function BulkUploadPage() {
                 >
                   <div className={`p-3 rounded-xl flex-shrink-0 min-w-[48px] ${job.status === 'completed' ? 'bg-success/20 text-success' :
                       job.status === 'failed' ? 'bg-error/20 text-error' :
+                        job.status === 'cancelled' ? 'bg-warning/20 text-warning' :
                         job.status === 'processing' ? 'bg-info/20 text-info' : 'bg-warning/20 text-warning'
                     }`}>
                     {getStatusIcon(job.status)}
@@ -686,6 +750,8 @@ export default function BulkUploadPage() {
                       job={job}
                       onRetry={handleRetry}
                       onDelete={handleDelete}
+                      onCancel={handleCancel}
+                      isCancelling={!!cancellingIds[job.job_id]}
                     />
                     <motion.div animate={{ rotate: expandedJob === job.job_id ? 180 : 0 }} transition={{ duration: 0.2 }} className="text-[var(--foreground)]/50">
                       <ChevronDown className="h-5 w-5" />
