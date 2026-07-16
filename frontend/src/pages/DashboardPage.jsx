@@ -362,6 +362,7 @@ function StatusBreakdownSection({
   verifiedCount,
   totalEmails,
   generatedAt,
+  lastSyncAt,
   flaggedOverview,
   domainSummary,
   perStatusCounts,
@@ -506,7 +507,7 @@ function StatusBreakdownSection({
 
           <div className="rounded-2xl shadow-sm hover:shadow-md transition-all border border-[var(--muted)] p-4">
             <p className="text-sm text-[var(--foreground)]/60">Last Sync</p>
-            <p className="mt-2 text-3xl font-bold">{relativeTime(generatedAt)}</p>
+            <p className="mt-2 text-3xl font-bold">{relativeTime(lastSyncAt || generatedAt)}</p>
             <div className="flex items-center gap-1 text-xs text-[var(--foreground)]/50">
               <CalendarClock className="h-3 w-3" />
               Auto-refreshes periodically
@@ -861,6 +862,7 @@ export default function DashboardPage() {
     flagged_overview: flaggedOverview = { total_flagged: 0, high_priority: 0, flag_rate: 0, last_7_days: 0, total_flagged_trend_pct: 0, high_priority_trend_pct: 0, flag_rate_trend_pct: 0, last_7_days_trend_pct: 0 },
     domain_summary: domainSummary = { avg_reputation: 0, high_risk_count: 0, total_domains: 0, improving_count: 0, total_domains_trend_pct: 0, improving_trend_pct: 0 },
     generated_at: generatedAt = new Date().toISOString(),
+    last_sync_at: lastSyncAt = null,
   } = stats || {};
 
   const trustScoreColor = trustScore >= 60 ? 'success' : trustScore >= 40 ? 'warning' : 'error';
@@ -973,6 +975,7 @@ export default function DashboardPage() {
         verifiedCount={verifiedCount}
         totalEmails={totalEmails}
         generatedAt={generatedAt}
+        lastSyncAt={lastSyncAt}
         flaggedOverview={flaggedOverview}
         domainSummary={domainSummary}
         perStatusCounts={perStatusCounts}
