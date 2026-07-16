@@ -1,30 +1,25 @@
 export type Theme = {
   background: string;
+  surface: string;
   foreground: string;
   primary: string;
   secondary: string;
   accent: string;
   muted: string;
+  border: string;
   success: string;
   error: string;
   warning: string;
   info: string;
 };
 
-// FIX (audit #1 — theme color drift): previously this file kept a second,
-// hand-written copy of every color value that index.css's --dark/--light
-// CSS variables already define. The two drifted (e.g. dark.background was
-// #0F172A here but #060419 in CSS), so anything reading color via
-// var(--background) (Tailwind classes) vs useTheme().background (charts,
-// CircularProgress, StatCard, ThemeToggle) rendered different colors.
-//
-// Fix: read the actual computed CSS custom properties at call time. index.css
-// is now the ONLY place color values are defined — this file just exposes
-// them in JS-friendly form for recharts/SVG props that can't take a
-// `var(--x)` string directly in every context.
+// Reads the actual computed CSS custom properties (defined once in
+// index.css) at call time, so JS (recharts/SVG props that can't take a
+// `var(--x)` string in every context) always matches the CSS that's
+// actually painted — no second hand-written copy to drift out of sync.
 const CSS_VAR_KEYS: (keyof Theme)[] = [
-  'background', 'foreground', 'primary', 'secondary',
-  'accent', 'muted', 'success', 'error', 'warning', 'info',
+  'background', 'surface', 'foreground', 'primary', 'secondary',
+  'accent', 'muted', 'border', 'success', 'error', 'warning', 'info',
 ];
 
 function readThemeFromCSS(): Theme {

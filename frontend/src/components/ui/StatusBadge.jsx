@@ -1,64 +1,65 @@
-// FIX (audit #19): the old dynamic template-string classes had a typo
-// (`dark:text:${...}` — colon instead of dash — so dark-mode text color
-// silently never applied), and dynamically-built Tailwind class names like
-// `text-${color}-600` generally don't survive production CSS purging unless
-// the full literal string appears somewhere Tailwind can statically scan.
-// Fixed by using a static, fully-literal class map (same pattern StatCard.jsx
-// already used correctly).
+import { CheckCircle2, AlertTriangle, XCircle, Loader2, HelpCircle, Ban } from 'lucide-react';
+
 const STATUS_CONFIG = {
-  // Safe
   verified: { label: 'Safe', bucket: 'safe' },
   deliverable: { label: 'Safe', bucket: 'safe' },
   trusted: { label: 'Safe', bucket: 'safe' },
   probably_valid: { label: 'Safe', bucket: 'safe' },
   safe: { label: 'Safe', bucket: 'safe' },
 
-  // Risky
   risky: { label: 'Risky', bucket: 'risky' },
   uncertain: { label: 'Risky', bucket: 'risky' },
   unconfirmed: { label: 'Risky', bucket: 'risky' },
 
-  // Unsafe
   invalid: { label: 'Unsafe', bucket: 'unsafe' },
   undeliverable: { label: 'Unsafe', bucket: 'unsafe' },
   unsafe: { label: 'Unsafe', bucket: 'unsafe' },
 
-  // Processing
   processing: { label: 'Processing', bucket: 'processing' },
 
   // Cancelled (bulk jobs only — a job that was stopped via
   // POST /jobs/{job_id}/cancel before it finished)
   cancelled: { label: 'Cancelled', bucket: 'cancelled' },
 
-  // Unknown
   unknown: { label: 'Unknown', bucket: 'unknown' },
 };
 
-// Fully literal class strings per bucket — safe under Tailwind's production
-// content-scanning/purge, unlike the previous `text-${color}-600` pattern.
+// Fully literal class strings — safe under Tailwind's production content-scanning/purge.
 const BUCKET_CLASSES = {
-  safe: 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20',
-  risky: 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20',
-  unsafe: 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20',
-  processing: 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20',
-  cancelled: 'text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-800/40',
-  unknown: 'text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-900/20',
+  safe: 'text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-400/10 border-emerald-200 dark:border-emerald-400/20',
+  risky: 'text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-400/10 border-amber-200 dark:border-amber-400/20',
+  unsafe: 'text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-400/10 border-red-200 dark:border-red-400/20',
+  processing: 'text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-400/10 border-blue-200 dark:border-blue-400/20',
+  cancelled: 'text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-400/10 border-slate-300 dark:border-slate-400/20',
+  unknown: 'text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-400/10 border-slate-200 dark:border-slate-400/20',
 };
 
-export default function StatusBadge({ status = 'unknown', className = '' }) {
+const BUCKET_ICONS = {
+  safe: CheckCircle2,
+  risky: AlertTriangle,
+  unsafe: XCircle,
+  processing: Loader2,
+  cancelled: Ban,
+  unknown: HelpCircle,
+};
+
+export default function StatusBadge({ status = 'unknown', className = '', showIcon = true }) {
   const config = STATUS_CONFIG[status] || STATUS_CONFIG.unknown;
   const colorClass = BUCKET_CLASSES[config.bucket] || BUCKET_CLASSES.unknown;
+  const Icon = BUCKET_ICONS[config.bucket] || HelpCircle;
 
   return (
     <span
-      className={`inline-flex items-center gap-2 rounded-full border border-[var(--muted)] px-3 py-1 text-xs font-semibold ${colorClass} ${className}`}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors ${colorClass} ${className}`}
     >
+      {showIcon && (
+        <Icon className={`h-3 w-3 ${config.bucket === 'processing' ? 'animate-spin' : ''}`} aria-hidden="true" />
+      )}
       <span>{config.label}</span>
     </span>
   );
 }
 
-// Helper function to get the bucket/category for a status
 export function getStatusBucket(status) {
   const statusLower = (status || '').toLowerCase();
   const config = STATUS_CONFIG[statusLower];

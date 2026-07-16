@@ -1,9 +1,6 @@
 import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useTheme } from '@/styles/theme';
 
-// FIX (audit #37): removed unused `isDark` variable (computed via
-// document.documentElement.classList.contains('dark') but never referenced
-// anywhere in this component).
 export default function TrendsChart({ data }) {
   const theme = useTheme();
 
@@ -35,22 +32,22 @@ export default function TrendsChart({ data }) {
         data={data}
         margin={{ top: 20, right: 30, left: 0, bottom: 5 }}
       >
-        <CartesianGrid strokeDasharray="3 3" stroke="var(--foreground) / 10" />
+        <CartesianGrid strokeDasharray="3 3" stroke={theme.border} opacity={0.6} />
         <XAxis
           dataKey="date"
-          tick={{ fill: 'var(--foreground)', fontSize: 10 }}
+          tick={{ fill: theme.foreground, fontSize: 10, opacity: 0.6 }}
         />
         <YAxis
-          tick={{ fill: 'var(--foreground)', fontSize: 11 }}
+          tick={{ fill: theme.foreground, fontSize: 11, opacity: 0.6 }}
         />
         <Tooltip
-          containerStyle={{
-            background: 'var(--background)',
-            border: '1px solid var(--muted)',
-            borderRadius: 8,
+          contentStyle={{
+            background: 'var(--card)',
+            border: '1px solid var(--border)',
+            borderRadius: 12,
             padding: '8px 12px',
           }}
-          labelStyle={{ fill: 'var(--foreground)', fontSize: '0.875rem' }}
+          labelStyle={{ color: 'var(--foreground)', fontSize: '0.875rem' }}
           formatter={(value, name) => [name, value]}
         />
         <Legend

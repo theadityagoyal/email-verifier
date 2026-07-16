@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   Mail,
   Upload,
@@ -86,7 +87,7 @@ export default function Layout() {
         )}
 
         <aside
-          className={`fixed top-0 left-0 z-50 h-screen border-r border-[var(--muted)] bg-[var(--card)] shadow-xl transition-all duration-300
+          className={`fixed top-0 left-0 z-50 h-screen border-r border-[var(--border)] bg-[var(--surface)] shadow-xl transition-all duration-300
           ${sidebarOpen ? 'w-72' : 'w-24'}
           ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}
         >
@@ -94,11 +95,11 @@ export default function Layout() {
           <div className="flex h-full flex-col">
 
             <div
-              className={`flex h-16 items-center border-b border-[var(--muted)] px-5 ${sidebarOpen ? 'justify-between' : 'justify-center'
+              className={`flex h-16 items-center border-b border-[var(--border)] px-5 ${sidebarOpen ? 'justify-between' : 'justify-center'
                 }`}
             >
-              <Link to="/" className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 text-white shadow-lg">
+              <Link to="/" className="flex items-center gap-3 group">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-500/25 transition-transform group-hover:scale-105">
                   <Mail size={20} />
                 </div>
 
@@ -113,7 +114,7 @@ export default function Layout() {
               {sidebarOpen && (
                 <button
                   onClick={() => setSidebarOpen(false)}
-                  className="rounded-lg p-2 transition hover:bg-[var(--muted)]"
+                  className="rounded-lg p-2 transition-colors cursor-pointer hover:bg-[var(--card-hover)]"
                 >
                   <X size={18} />
                 </button>
@@ -122,14 +123,14 @@ export default function Layout() {
               {!sidebarOpen && (
                 <button
                   onClick={() => setSidebarOpen(true)}
-                  className="rounded-lg p-2 transition hover:bg-[var(--muted)] hidden md:block"
+                  className="rounded-lg p-2 transition-colors cursor-pointer hover:bg-[var(--card-hover)] hidden md:block"
                 >
                   <Menu size={18} />
                 </button>
               )}
             </div>
 
-            <nav className="flex-1 space-y-2 overflow-y-auto p-4">
+            <nav className="flex-1 space-y-1.5 overflow-y-auto p-4">
               {navItems.map(({ path, label, icon: Icon }) => {
                 const active = location.pathname === path;
 
@@ -138,30 +139,37 @@ export default function Layout() {
                     key={path}
                     to={path}
                     onClick={() => setMobileMenuOpen(false)}
-                    className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-all duration-300
+                    className={`relative flex items-center gap-3 rounded-xl px-4 py-3 transition-all duration-200 cursor-pointer
                     ${active
-                        ? 'bg-gradient-to-r from-indigo-500 to-violet-600 text-white shadow-lg'
-                        : 'text-[var(--foreground)]/65 hover:bg-indigo-50 dark:hover:bg-slate-700 hover:text-[var(--foreground)]'
+                        ? 'text-white'
+                        : 'text-[var(--foreground)]/65 hover:bg-[var(--card-hover)] hover:text-[var(--foreground)]'
                       }
                     ${!sidebarOpen ? 'justify-center' : ''}
                     `}
                   >
-                    <Icon size={20} />
-                    {sidebarOpen && <span className="font-medium">{label}</span>}
+                    {active && (
+                      <motion.span
+                        layoutId="sidebar-active-pill"
+                        className="absolute inset-0 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/25"
+                        transition={{ type: 'spring', stiffness: 400, damping: 32 }}
+                      />
+                    )}
+                    <Icon size={20} className="relative z-10" />
+                    {sidebarOpen && <span className="relative z-10 font-medium">{label}</span>}
                   </Link>
                 );
               })}
             </nav>
 
             {/* Sidebar-footer profile — now uses its own independent state */}
-            <div className="border-t border-[var(--muted)] p-4 relative">
+            <div className="border-t border-[var(--border)] p-4 relative">
               <button
                 onClick={() => setSidebarProfileOpen((v) => !v)}
-                className={`w-full flex items-center gap-3 rounded-xl p-2 transition hover:bg-[var(--muted)] ${!sidebarOpen ? 'justify-center' : ''}`}
+                className={`w-full flex items-center gap-3 rounded-xl p-2 transition-colors cursor-pointer hover:bg-[var(--card-hover)] ${!sidebarOpen ? 'justify-center' : ''}`}
                 aria-haspopup="true"
                 aria-expanded={sidebarProfileOpen}
               >
-                <div className="h-9 w-9 rounded-full bg-gradient-to-r from-indigo-500 to-violet-600 text-white flex items-center justify-center text-xs font-semibold flex-shrink-0">
+                <div className="h-9 w-9 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 text-white flex items-center justify-center text-xs font-semibold flex-shrink-0 shadow-md shadow-indigo-500/20">
                   {APP_USER.initials}
                 </div>
                 {sidebarOpen && (
@@ -178,28 +186,36 @@ export default function Layout() {
                 )}
               </button>
 
-              {sidebarProfileOpen && (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setSidebarProfileOpen(false)} />
-                  <div className="absolute left-4 right-4 bottom-full z-50 mb-2 rounded-xl border border-[var(--muted)] bg-[var(--card)] shadow-xl py-1.5">
-                    <Link
-                      to="/settings"
-                      onClick={() => setSidebarProfileOpen(false)}
-                      className="flex items-center gap-2 px-3.5 py-2 text-sm text-[var(--foreground)]/80 hover:bg-[var(--muted)]/50"
+              <AnimatePresence>
+                {sidebarProfileOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setSidebarProfileOpen(false)} />
+                    <motion.div
+                      initial={{ opacity: 0, y: 8, scale: 0.97 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 8, scale: 0.97 }}
+                      transition={{ duration: 0.15 }}
+                      className="absolute left-4 right-4 bottom-full z-50 mb-2 rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl py-1.5"
                     >
-                      <Settings size={15} /> Settings
-                    </Link>
-                    {isAdmin && (
-                      <button
-                        onClick={handleAdminLogout}
-                        className="flex w-full items-center gap-2 px-3.5 py-2 text-sm text-error hover:bg-error/10"
+                      <Link
+                        to="/settings"
+                        onClick={() => setSidebarProfileOpen(false)}
+                        className="flex items-center gap-2 px-3.5 py-2 text-sm text-[var(--foreground)]/80 hover:bg-[var(--card-hover)] cursor-pointer"
                       >
-                        <LogOut size={15} /> Admin Logout
-                      </button>
-                    )}
-                  </div>
-                </>
-              )}
+                        <Settings size={15} /> Settings
+                      </Link>
+                      {isAdmin && (
+                        <button
+                          onClick={handleAdminLogout}
+                          className="flex w-full items-center gap-2 px-3.5 py-2 text-sm text-error hover:bg-error/10 cursor-pointer"
+                        >
+                          <LogOut size={15} /> Admin Logout
+                        </button>
+                      )}
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
             </div>
 
           </div>
@@ -216,12 +232,12 @@ export default function Layout() {
             }`}
         >
 
-          <header className="sticky top-0 z-30 border-b border-[var(--muted)] bg-[var(--card)]/90 backdrop-blur-xl">
+          <header className="sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--surface)]/85 backdrop-blur-xl">
 
             <div className="flex h-16 items-center justify-between px-4 sm:px-8">
 
               <button
-                className="rounded-lg p-2 hover:bg-[var(--muted)] md:hidden"
+                className="rounded-lg p-2 cursor-pointer hover:bg-[var(--card-hover)] md:hidden"
                 onClick={() => setMobileMenuOpen(true)}
                 aria-label="Open menu"
               >
@@ -230,7 +246,7 @@ export default function Layout() {
 
               <div className="ml-auto flex items-center gap-1.5">
                 <button
-                  className="rounded-lg p-2 hover:bg-[var(--muted)] transition text-[var(--foreground)]/60"
+                  className="rounded-lg p-2 hover:bg-[var(--card-hover)] transition-colors cursor-pointer text-[var(--foreground)]/60"
                   aria-label="Help"
                 >
                   <HelpCircle size={20} />
@@ -245,11 +261,11 @@ export default function Layout() {
                 <div className="relative">
                   <button
                     onClick={() => setHeaderProfileOpen((v) => !v)}
-                    className="flex items-center gap-1.5 rounded-full pl-1 pr-2 py-1 transition hover:bg-[var(--muted)]"
+                    className="flex items-center gap-1.5 rounded-full pl-1 pr-2 py-1 transition-colors cursor-pointer hover:bg-[var(--card-hover)]"
                     aria-haspopup="true"
                     aria-expanded={headerProfileOpen}
                   >
-                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-r from-indigo-500 to-violet-600 text-white text-xs font-semibold">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 text-white text-xs font-semibold shadow-sm">
                       {APP_USER.initials}
                     </div>
                     <ChevronDown
@@ -258,32 +274,40 @@ export default function Layout() {
                     />
                   </button>
 
-                  {headerProfileOpen && (
-                    <>
-                      <div className="fixed inset-0 z-40" onClick={() => setHeaderProfileOpen(false)} />
-                      <div className="absolute right-0 top-full z-50 mt-2 w-48 rounded-xl border border-[var(--muted)] bg-[var(--card)] shadow-xl py-1.5">
-                        <div className="px-3.5 py-2 border-b border-[var(--muted)]">
-                          <p className="text-sm font-medium text-[var(--foreground)]">{APP_USER.name}</p>
-                          <p className="text-xs text-[var(--foreground)]/50">Admin</p>
-                        </div>
-                        <Link
-                          to="/settings"
-                          onClick={() => setHeaderProfileOpen(false)}
-                          className="flex items-center gap-2 px-3.5 py-2 text-sm text-[var(--foreground)]/80 hover:bg-[var(--muted)]/50"
+                  <AnimatePresence>
+                    {headerProfileOpen && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setHeaderProfileOpen(false)} />
+                        <motion.div
+                          initial={{ opacity: 0, y: 8, scale: 0.97 }}
+                          animate={{ opacity: 1, y: 0, scale: 1 }}
+                          exit={{ opacity: 0, y: 8, scale: 0.97 }}
+                          transition={{ duration: 0.15 }}
+                          className="absolute right-0 top-full z-50 mt-2 w-48 rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl py-1.5"
                         >
-                          <Settings size={15} /> Settings
-                        </Link>
-                        {isAdmin && (
-                          <button
-                            onClick={handleAdminLogout}
-                            className="flex w-full items-center gap-2 px-3.5 py-2 text-sm text-error hover:bg-error/10"
+                          <div className="px-3.5 py-2 border-b border-[var(--border)]">
+                            <p className="text-sm font-medium text-[var(--foreground)]">{APP_USER.name}</p>
+                            <p className="text-xs text-[var(--foreground)]/50">Admin</p>
+                          </div>
+                          <Link
+                            to="/settings"
+                            onClick={() => setHeaderProfileOpen(false)}
+                            className="flex items-center gap-2 px-3.5 py-2 text-sm text-[var(--foreground)]/80 hover:bg-[var(--card-hover)] cursor-pointer"
                           >
-                            <LogOut size={15} /> Admin Logout
-                          </button>
-                        )}
-                      </div>
-                    </>
-                  )}
+                            <Settings size={15} /> Settings
+                          </Link>
+                          {isAdmin && (
+                            <button
+                              onClick={handleAdminLogout}
+                              className="flex w-full items-center gap-2 px-3.5 py-2 text-sm text-error hover:bg-error/10 cursor-pointer"
+                            >
+                              <LogOut size={15} /> Admin Logout
+                            </button>
+                          )}
+                        </motion.div>
+                      </>
+                    )}
+                  </AnimatePresence>
                 </div>
               </div>
 

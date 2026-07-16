@@ -1,15 +1,8 @@
 import { useEffect, useState } from 'react';
 
-// FIX (audit #39): previously `progressColor = color in theme ? theme[color] : color`
-// only worked when the caller passed a theme key like 'success' (DashboardPage
-// does this), but was dead logic when a caller passed a raw CSS var string
-// like 'var(--success)' (VerifyEmailPage does this) since that string is
-// never a key of the theme object — it just fell through to `color` either
-// way, working by accident rather than by a real contract.
-//
-// Fixed contract: `color` may be either one of the named keys below, or any
-// valid CSS color value (e.g. 'var(--success)', '#10B981'). Named keys are
-// resolved to the matching CSS variable; anything else passes through as-is.
+// `color` may be either one of the named keys below, or any valid CSS
+// color value (e.g. 'var(--success)', '#10B981'). Named keys resolve to
+// the matching CSS variable; anything else passes through as-is.
 const NAMED_COLORS = {
   success: 'var(--success)',
   warning: 'var(--warning)',
@@ -67,13 +60,16 @@ export default function CircularProgress({
           strokeLinecap="round"
           strokeDasharray={circumference}
           strokeDashoffset={offset}
-          style={{ transition: 'stroke-dashoffset .9s cubic-bezier(.4,0,.2,1)' }}
+          style={{
+            transition: 'stroke-dashoffset .9s cubic-bezier(.4,0,.2,1)',
+            filter: `drop-shadow(0 0 6px ${progressColor}66)`,
+          }}
         />
       </svg>
 
       <div className="absolute text-center">
-        <div className="text-3xl font-bold text-[var(--foreground)]">{percent}%</div>
-        <div className="mt-1 text-xs uppercase tracking-wider text-[var(--foreground)]/50">{label}</div>
+        <div className="text-3xl font-bold text-[var(--foreground)] tabular-nums">{percent}%</div>
+        <div className="mt-1 text-xs uppercase tracking-wider text-[var(--foreground-muted)]">{label}</div>
       </div>
     </div>
   );

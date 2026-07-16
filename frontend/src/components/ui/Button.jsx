@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { useTheme } from '@/styles/theme';
 
 export default function Button({
   children,
@@ -12,10 +11,8 @@ export default function Button({
   className = '',
   ...props
 }) {
-  const theme = useTheme();
   const [isLoading, setIsLoading] = useState(loading);
 
-  // Sync loading prop with state
   useEffect(() => {
     setIsLoading(loading);
   }, [loading]);
@@ -26,33 +23,33 @@ export default function Button({
   };
 
   const base =
-    'inline-flex items-center justify-center gap-2 rounded-xl font-semibold transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-[var(--primary)] disabled:pointer-events-none disabled:opacity-50 hover:-translate-y-0.5';
+    'inline-flex items-center justify-center gap-2 rounded-xl font-semibold transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--background)] disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98]';
 
   const variantMap = {
     primary:
-      'bg-gradient-to-r from-indigo-500 to-violet-600 text-white shadow-lg hover:shadow-xl hover:from-indigo-600 hover:to-violet-700',
+      'bg-gradient-to-r from-indigo-500 to-violet-600 text-white shadow-md shadow-indigo-500/20 hover:shadow-lg hover:shadow-indigo-500/30 hover:from-indigo-600 hover:to-violet-700 hover:-translate-y-0.5',
 
     secondary:
-      'bg-slate-100 dark:bg-slate-800 text-[var(--foreground)] hover:bg-slate-200 dark:hover:bg-slate-700',
+      'bg-[var(--muted)] text-[var(--foreground)] hover:bg-[var(--card-hover)]',
 
     outline:
-      'border border-[var(--muted)] bg-transparent hover:bg-[var(--background)] text-[var(--foreground)]',
+      'border border-[var(--border)] bg-transparent hover:bg-[var(--card-hover)] hover:border-[var(--foreground-muted)] text-[var(--foreground)]',
 
     accent:
-      'bg-gradient-to-r from-emerald-500 to-green-600 text-white shadow-lg hover:shadow-xl',
+      'bg-gradient-to-r from-emerald-500 to-green-600 text-white shadow-md shadow-emerald-500/20 hover:shadow-lg hover:shadow-emerald-500/30 hover:-translate-y-0.5',
 
     danger:
-      'bg-gradient-to-r from-red-500 to-rose-600 text-white shadow-lg hover:shadow-xl hover:from-red-600 hover:to-rose-700',
+      'bg-gradient-to-r from-red-500 to-rose-600 text-white shadow-md shadow-red-500/20 hover:shadow-lg hover:shadow-red-500/30 hover:from-red-600 hover:to-rose-700 hover:-translate-y-0.5',
 
     ghost:
-      'hover:bg-[var(--background)] text-[var(--foreground)]',
+      'hover:bg-[var(--card-hover)] text-[var(--foreground)]',
 
     link:
-      `text-[var(--foreground)] underline-offset-4 hover:underline hover:bg-[var(--background)] dark:hover:bg-[var(--muted)]/20`,
+      'text-[var(--foreground)] underline-offset-4 hover:underline hover:bg-[var(--card-hover)]',
   };
 
   const sizeMap = {
-    sm: 'h-9 px-4 text-sm',
+    sm: 'h-9 px-3.5 text-sm',
     md: 'h-11 px-6 text-sm',
     lg: 'h-12 px-8 text-base',
   };

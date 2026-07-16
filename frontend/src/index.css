@@ -2,119 +2,252 @@
 @tailwind components;
 @tailwind utilities;
 
-/* CSS Variables for Light and Dark Mode */
+/* ============================================================
+   DESIGN TOKENS — layered surfaces instead of flat gray.
+   Light: premium white surfaces, soft shadows.
+   Dark: OLED-friendly layered hierarchy (bg -> surface -> card -> hover).
+   ============================================================ */
 :root {
-  --background: #F5F3FF;
-  --foreground: #1E1B4B;
+  /* Layered light surfaces */
+  --background: #F8FAFC;
+  --surface: #FFFFFF;
   --card: #FFFFFF;
+  --card-hover: #F1F5F9;
+  --muted: #E2E8F0;
+  --border: #E2E8F0;
+
+  --foreground: #0F172A;
+  --foreground-secondary: #475569;
+  --foreground-muted: #64748B;
+
   --primary: #6366F1;
+  --primary-hover: #4F46E5;
   --secondary: #818CF8;
   --accent: #10B981;
-  --muted: #E2E8F0;
+  --accent-hover: #0EA271;
+
   --success: #10B981;
   --error: #EF4444;
   --warning: #F59E0B;
   --info: #3B82F6;
-  /* RGB variables for gradients */
+
   --primary-rgb: 99, 102, 241;
   --accent-rgb: 16, 185, 129;
-  --accent-hover-rgb: 52, 211, 153; /* #34D399 */
+  --accent-hover-rgb: 14, 162, 113;
+
+  --shadow-color: 15, 23, 42;
+  --ring: var(--primary);
 }
 
 .dark {
-  --background: #060419;
-  --foreground: #F8FAFC;
-  --card: #1E293B;
-  --primary: #6366F1;
-  --secondary: #060419;
-  --accent: #22C55E;
+  /* Layered dark hierarchy — background < surface < card < hover, each a step lighter */
+  --background: #020617;
+  --surface: #0B1220;
+  --card: #0F172A;
+  --card-hover: #16213A;
   --muted: #1E293B;
-  --success: #10B981;
-  --error: #EF4444;
-  --warning: #F59E0B;
-  --info: #3B82F6;
-  /* RGB variables */
-  --primary-rgb: 99, 102, 241;
-  --accent-rgb: 34, 197, 94; /* #22C55E */
-  --accent-hover-rgb: 52, 211, 153; /* #34D399 */
+  --border: #1E293B;
+
+  --foreground: #F8FAFC;
+  --foreground-secondary: #CBD5E1;
+  --foreground-muted: #94A3B8;
+
+  --primary: #818CF8;
+  --primary-hover: #A5B4FC;
+  --secondary: #6366F1;
+  --accent: #34D399;
+  --accent-hover: #6EE7B7;
+
+  --success: #34D399;
+  --error: #F87171;
+  --warning: #FBBF24;
+  --info: #60A5FA;
+
+  --primary-rgb: 129, 140, 248;
+  --accent-rgb: 52, 211, 153;
+  --accent-hover-rgb: 110, 231, 183;
+
+  --shadow-color: 0, 0, 0;
+  --ring: var(--primary);
 }
 
 @layer base {
+  * {
+    @apply border-[var(--border)];
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
   body {
     @apply bg-[var(--background)] text-[var(--foreground)] antialiased;
+    font-feature-settings: "cv11", "ss01";
+    text-rendering: optimizeLegibility;
 
     background-image:
-      radial-gradient(circle at top right, rgba(var(--primary-rgb), .08), transparent 35%),
-      radial-gradient(circle at bottom left, rgba(var(--accent-rgb), .05), transparent 30%);
+      radial-gradient(circle at top right, rgba(var(--primary-rgb), .07), transparent 40%),
+      radial-gradient(circle at bottom left, rgba(var(--accent-rgb), .05), transparent 35%);
+    background-attachment: fixed;
+  }
+
+  /* Visible, consistent focus rings everywhere (keyboard nav) */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background: rgba(var(--primary-rgb), .25);
+  }
+
+  /* Thin, theme-aware scrollbars */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--muted);
+    border-radius: 999px;
+    border: 2px solid var(--background);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--foreground-muted);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
 
 @layer components {
+  /* ── Card — elevated surface with soft shadow + hover lift ─────────── */
   .card {
-    @apply bg-[var(--card)] rounded-2xl p-6 border border-[var(--muted)] shadow-xl transition-all duration-300;
-
-    background: var(--card);
-    backdrop-filter: blur(12px);
+    @apply bg-[var(--card)] rounded-2xl p-6 border border-[var(--border)] transition-all duration-300;
+    box-shadow: 0 1px 2px rgba(var(--shadow-color), 0.06), 0 1px 3px rgba(var(--shadow-color), 0.04);
   }
 
   .card:hover {
+    background: var(--card-hover);
     transform: translateY(-2px);
     box-shadow:
-      0 15px 40px rgba(15, 23, 42, 0.12),
-      0 4px 12px rgba(15, 23, 42, 0.08);
+      0 12px 28px rgba(var(--shadow-color), 0.14),
+      0 4px 10px rgba(var(--shadow-color), 0.08);
   }
 
+  .dark .card {
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 4px 16px rgba(0, 0, 0, 0.35);
+  }
+
+  .dark .card:hover {
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 16px 32px rgba(0, 0, 0, 0.45);
+  }
+
+  /* ── Buttons ─────────────────────────────────────────────────────── */
   .btn-primary {
-    @apply font-semibold px-4 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply font-semibold px-4 py-2.5 rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer;
     background-color: var(--accent);
     color: white;
+    box-shadow: 0 1px 2px rgba(var(--shadow-color), .08);
   }
-  .btn-primary:hover {
+  .btn-primary:hover:not(:disabled) {
     background-color: var(--accent-hover);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(var(--accent-rgb), .3);
+  }
+  .btn-primary:active:not(:disabled) {
+    transform: translateY(0);
   }
 
   .btn-secondary {
-    @apply bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium px-4 py-2 rounded-lg transition-colors;
-  }
-
-  .input {
-    @apply bg-[var(--card)] border border-[var(--muted)] rounded-lg px-4 py-2 text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] w-full;
-  }
-
-  .input::placeholder {
+    @apply font-medium px-4 py-2.5 rounded-xl transition-all duration-200 cursor-pointer;
+    background: var(--muted);
     color: var(--foreground);
-    opacity: 0.4;
+  }
+  .btn-secondary:hover {
+    background: var(--card-hover);
   }
 
-  .badge-verified {
-    @apply bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full text-xs font-medium;
+  /* ── Inputs ──────────────────────────────────────────────────────── */
+  .input {
+    @apply bg-[var(--surface)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-[var(--foreground)] transition-all duration-200 w-full;
+  }
+  .input:hover {
+    border-color: var(--foreground-muted);
+  }
+  .input:focus {
+    @apply outline-none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(var(--primary-rgb), .15);
+  }
+  .input::placeholder {
+    color: var(--foreground-muted);
+    opacity: 0.7;
   }
 
-  .badge-invalid {
-    @apply bg-red-500/30 text-red-400 border border-red-500/30 px-2 py-0.5 rounded-full text-xs font-medium;
-  }
-
-  .badge-risky {
-    @apply bg-amber-500/30 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded-full text-xs font-medium;
-  }
-
-  .badge-processing {
-    @apply bg-sky-500/30 text-sky-400 border border-sky-500/30 px-2 py-0.5 rounded-full text-xs font-medium;
-  }
-
+  /* ── Status badges — literal classes for Tailwind purge safety ─────── */
+  .badge-verified,
   .badge-success {
-    @apply bg-success bg-opacity-20 text-success text-opacity-80 border-success border-opacity-30 px-2 py-0.5 rounded-full text-xs font-medium;
+    @apply border px-2.5 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1;
+    background: rgba(var(--accent-rgb), .12);
+    color: var(--success);
+    border-color: rgba(var(--accent-rgb), .25);
   }
 
+  .badge-invalid,
   .badge-error {
-    @apply bg-error bg-opacity-20 text-error text-opacity-80 border-error border-opacity-30 px-2 py-0.5 rounded-full text-xs font-medium;
+    @apply border px-2.5 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1;
+    background: rgba(239, 68, 68, .12);
+    color: var(--error);
+    border-color: rgba(239, 68, 68, .25);
   }
 
+  .badge-risky,
   .badge-warning {
-    @apply bg-warning bg-opacity-20 text-warning text-opacity-80 border-warning border-opacity-30 px-2 py-0.5 rounded-full text-xs font-medium;
+    @apply border px-2.5 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1;
+    background: rgba(245, 158, 11, .12);
+    color: var(--warning);
+    border-color: rgba(245, 158, 11, .25);
   }
 
+  .badge-processing,
   .badge-info {
-    @apply bg-info bg-opacity-20 text-info text-opacity-80 border-info border-opacity-30 px-2 py-0.5 rounded-full text-xs font-medium;
+    @apply border px-2.5 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1;
+    background: rgba(59, 130, 246, .12);
+    color: var(--info);
+    border-color: rgba(59, 130, 246, .25);
+  }
+
+  /* ── Skeleton loader — shimmer instead of flat pulse ────────────────── */
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background: var(--muted);
+    border-radius: 0.75rem;
+  }
+  .skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgba(var(--primary-rgb), .12), transparent);
+    animation: shimmer 1.6s infinite;
+  }
+  @keyframes shimmer {
+    100% { transform: translateX(100%); }
+  }
+
+  /* ── Glow accents for key numbers/icons ──────────────────────────── */
+  .glow-text {
+    text-shadow: 0 0 24px rgba(var(--primary-rgb), .35);
   }
 }
