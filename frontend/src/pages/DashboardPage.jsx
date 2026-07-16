@@ -30,7 +30,7 @@ import {
   BadgeCheck,
   MailX,
   HelpCircle,
-  Clock,
+  Info,
   CalendarClock,
   Mail,
   Sparkles,
@@ -73,19 +73,49 @@ function dayTotal(entry) {
   }, 0);
 }
 
+// ── UI/UX FIX: reusable, accessible info tooltip ────────────────────────────
+// Small "?" affordance next to a label. Hover/focus reveals a short
+// explanation popover. Used to clarify metrics whose meaning isn't obvious
+// at a glance (e.g. "Improving").
+function InfoTooltip({ text, className = '' }) {
+  return (
+    <span className={`group/tip relative inline-flex ${className}`}>
+      <button
+        type="button"
+        tabIndex={0}
+        className="inline-flex items-center justify-center rounded-full text-[var(--foreground)]/30 hover:text-[var(--primary)] focus-visible:text-[var(--primary)] transition-colors duration-150 cursor-help"
+        aria-label={text}
+      >
+        <Info className="h-3.5 w-3.5" />
+      </button>
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute left-1/2 bottom-full z-50 mb-2 w-56 -translate-x-1/2 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-xs font-normal leading-relaxed text-[var(--foreground)]/80 opacity-0 shadow-xl transition-all duration-150 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100 translate-y-1 group-hover/tip:translate-y-0"
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
 // FIX (audit #17): MiniStat now takes an explicit `windowLabel` prop instead
 // of a hardcoded "vs last 7 days" caption. Some of these stats are actually
 // 24h-vs-previous-24h deltas on the backend — the old fixed caption
 // mislabeled every one of them the same way regardless of the real window.
-function MiniStat({ label, value, trend, windowLabel, Icon, iconBg, iconColor }) {
+// Also now supports an optional `tooltip` string for metrics whose meaning
+// isn't self-evident (see UI/UX fix #2 — "Improving").
+function MiniStat({ label, value, trend, windowLabel, Icon, iconBg, iconColor, tooltip }) {
   const isPositive = trend >= 0;
   return (
-    <div className="rounded-xl border border-[var(--muted)] p-3">
-      <div className={`flex h-9 w-9 items-center justify-center rounded-xl mb-2 ${iconBg}`}>
+    <div className="rounded-xl border border-[var(--muted)] p-3 transition-all duration-200 hover:border-[var(--foreground)]/15 hover:shadow-sm hover:-translate-y-0.5">
+      <div className={`flex h-9 w-9 items-center justify-center rounded-xl mb-2 transition-transform duration-200 ${iconBg}`}>
         <Icon className={`h-4 w-4 ${iconColor}`} />
       </div>
       <p className="text-xl font-bold text-[var(--foreground)]">{value}</p>
-      <p className="text-xs text-[var(--foreground)]/50">{label}</p>
+      <p className="text-xs text-[var(--foreground)]/50 flex items-center gap-1">
+        {label}
+        {tooltip && <InfoTooltip text={tooltip} />}
+      </p>
       <p className={`text-xs font-medium mt-1 ${isPositive ? 'text-success' : 'text-error'}`}>
         {isPositive ? '↑' : '↓'} {Math.abs(trend)}%{' '}
         <span className="text-[var(--foreground)]/40 font-normal">{windowLabel}</span>
@@ -122,9 +152,14 @@ function MiniSparkline({ data, color }) {
 function TopStatCard({ label, value, trendPct, sparkData, color, Icon, iconBg, iconColor }) {
   const isPositive = trendPct >= 0;
   return (
-    <motion.div variants={itemVariants} className="card !p-5">
+    <motion.div
+      variants={itemVariants}
+      className="card !p-5 group cursor-default"
+      whileHover={{ y: -3 }}
+      transition={{ type: 'spring', stiffness: 300, damping: 22 }}
+    >
       <div className="flex items-center justify-between mb-3">
-        <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${iconBg}`}>
+        <div className={`flex h-10 w-10 items-center justify-center rounded-xl transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3 ${iconBg}`}>
           <Icon className={`h-5 w-5 ${iconColor}`} />
         </div>
         <span className={`text-xs font-semibold ${isPositive ? 'text-success' : 'text-error'}`}>
@@ -209,7 +244,7 @@ function StatusGroup({ title, statuses, perStatusCounts, bucketTotal, totalEmail
   return (
     <div className="py-5 h-full flex flex-col">
       <div className="flex items-center gap-3 mb-4">
-        <div className={`flex h-12 w-12 items-center justify-center rounded-2xl shadow-sm ${item.bgClass}`}>
+        <div className={`flex h-12 w-12 items-center justify-center rounded-2xl shadow-sm transition-transform duration-300 hover:scale-105 ${item.bgClass}`}>
           <Icon className={`h-6 w-6 ${item.colorClass}`} />
         </div>
         <h3 className={`text-xl font-bold ${item.colorClass}`}>{title}</h3>
@@ -239,7 +274,7 @@ function StatusGroup({ title, statuses, perStatusCounts, bucketTotal, totalEmail
           return (
             <div
               key={status}
-              className="flex items-center justify-between rounded-xl border border-[var(--muted)] px-3 py-2.5 transition-all duration-200 hover:shadow-sm"
+              className="flex items-center justify-between rounded-xl border border-[var(--muted)] px-3 py-2.5 transition-all duration-200 hover:shadow-sm hover:border-[var(--foreground)]/15 hover:bg-[var(--card-hover)]/40"
             >
               <div className="flex items-center gap-2">
                 <RowIcon className={`h-4 w-4 ${item.colorClass}`} />
@@ -298,7 +333,8 @@ function TrustScoreCard({ trustScore, trustScoreColor, trustScoreLabel, textClas
           <CircularProgress value={trustScore} size={110} strokeWidth={9} color={trustScoreColor} />
           <div>
             <p className="text-sm font-medium text-[var(--foreground)]/60 flex items-center gap-1">
-              Trust Score <HelpCircle className="h-3.5 w-3.5 text-[var(--foreground)]/30" />
+              Trust Score
+              <InfoTooltip text="Percentage of all-time verified emails classified as Safe (verified, deliverable, trusted, or probably valid)." />
             </p>
             <p className={`text-5xl font-bold mt-1 ${textClassMap[trustScoreColor]}`}>{trustScore}%</p>
             <div className="mt-2">
@@ -414,13 +450,27 @@ function StatusBreakdownSection({
             <CircularProgress value={trustScore} size={110} strokeWidth={9} color="success" />
 
             <div className="space-y-4">
+              {/*
+                UI/UX FIX #3: the old "Last updated" row here (relativeTime
+                of `generatedAt`, i.e. "when this API response was built")
+                was redundant with the "Last Sync" stat card lower on this
+                page (relativeTime of `lastSyncAt`, i.e. "when an email was
+                actually last verified") — the two values are almost always
+                within a second of each other and confused users about which
+                one to trust. "Last Sync" is the meaningful one and stays.
+                This slot now shows a genuinely different signal: whether
+                the dashboard itself is actively auto-refreshing.
+              */}
               <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--muted)]/60">
-                  <Clock className="h-4 w-4 text-[var(--foreground)]/70" />
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-success/10 dark:bg-success/20">
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75" />
+                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-success" />
+                  </span>
                 </div>
                 <div>
-                  <p className="text-xs text-[var(--foreground)]/50">Last updated</p>
-                  <p className="text-sm font-semibold text-[var(--foreground)]">{relativeTime(generatedAt)}</p>
+                  <p className="text-xs text-[var(--foreground)]/50">Dashboard status</p>
+                  <p className="text-sm font-semibold text-[var(--foreground)]">Live — auto-refreshing</p>
                 </div>
               </div>
 
@@ -487,17 +537,17 @@ function StatusBreakdownSection({
         </div>
 
         <div className="mt-8 grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="rounded-2xl shadow-sm hover:shadow-md transition-all border border-[var(--muted)] p-4">
+          <div className="rounded-2xl shadow-sm hover:shadow-md transition-all duration-200 hover:-translate-y-0.5 border border-[var(--muted)] p-4">
             <p className="text-sm text-[var(--foreground)]/60">Total Emails</p>
             <p className="mt-2 text-3xl font-bold">{totalEmails.toLocaleString()}</p>
           </div>
 
-          <div className="rounded-2xl shadow-sm hover:shadow-md transition-all border border-[var(--muted)] p-4">
+          <div className="rounded-2xl shadow-sm hover:shadow-md transition-all duration-200 hover:-translate-y-0.5 border border-[var(--muted)] p-4">
             <p className="text-sm text-[var(--foreground)]/60">Success Rate</p>
             <p className="mt-2 text-3xl font-bold text-success">{trustScore}%</p>
           </div>
 
-          <div className="rounded-2xl shadow-sm hover:shadow-md transition-all border border-[var(--muted)] p-4">
+          <div className="rounded-2xl shadow-sm hover:shadow-md transition-all duration-200 hover:-translate-y-0.5 border border-[var(--muted)] p-4">
             <p className="text-sm text-[var(--foreground)]/60">Avg Response Time</p>
             <p className="mt-2 text-3xl font-bold">
               <span>{formatAvgTime(avgProcessingTimeMs)}</span>
@@ -505,8 +555,11 @@ function StatusBreakdownSection({
             <p className="text-xs text-[var(--foreground)]/50">Per email</p>
           </div>
 
-          <div className="rounded-2xl shadow-sm hover:shadow-md transition-all border border-[var(--muted)] p-4">
-            <p className="text-sm text-[var(--foreground)]/60">Last Sync</p>
+          <div className="rounded-2xl shadow-sm hover:shadow-md transition-all duration-200 hover:-translate-y-0.5 border border-[var(--muted)] p-4">
+            <p className="text-sm text-[var(--foreground)]/60 flex items-center gap-1">
+              Last Sync
+              <InfoTooltip text="Timestamp of the most recent email that actually finished verification (not just when this page refreshed)." />
+            </p>
             <p className="mt-2 text-3xl font-bold">{relativeTime(lastSyncAt || generatedAt)}</p>
             <div className="flex items-center gap-1 text-xs text-[var(--foreground)]/50">
               <CalendarClock className="h-3 w-3" />
@@ -538,7 +591,7 @@ function StatusBreakdownSection({
         </div>
 
         <div className="mt-8 grid grid-cols-2 lg:grid-cols-4 gap-5">
-          <div className="rounded-2xl border border-[var(--muted)] bg-[var(--card)] p-5 shadow-sm">
+          <div className="rounded-2xl border border-[var(--muted)] bg-[var(--card)] p-5 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5">
             <div className="flex items-center gap-4">
               <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-success/10 dark:bg-success/20">
                 <TrendingUp className="h-8 w-8 text-success" />
@@ -551,7 +604,7 @@ function StatusBreakdownSection({
             </div>
           </div>
 
-          <div className="rounded-2xl border border-[var(--muted)] bg-[var(--card)] p-5 shadow-sm">
+          <div className="rounded-2xl border border-[var(--muted)] bg-[var(--card)] p-5 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5">
             <div className="flex items-center gap-4">
               <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-warning/10 dark:bg-warning/20">
                 <BarChart3 className="h-8 w-8 text-warning" />
@@ -564,7 +617,7 @@ function StatusBreakdownSection({
             </div>
           </div>
 
-          <div className="rounded-2xl border border-[var(--muted)] bg-[var(--card)] p-5 shadow-sm">
+          <div className="rounded-2xl border border-[var(--muted)] bg-[var(--card)] p-5 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5">
             <div className="flex items-center gap-4">
               <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 dark:bg-primary/20">
                 <Database className="h-8 w-8 text-primary" />
@@ -577,7 +630,7 @@ function StatusBreakdownSection({
             </div>
           </div>
 
-          <div className="rounded-2xl border border-[var(--muted)] bg-[var(--card)] p-5 shadow-sm">
+          <div className="rounded-2xl border border-[var(--muted)] bg-[var(--card)] p-5 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5">
             <div className="flex items-center gap-4">
               <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-success/10 dark:bg-success/20">
                 <PieChart className="h-8 w-8 text-success" />
@@ -603,7 +656,7 @@ function StatusBreakdownSection({
           </div>
 
           <div className="space-y-4">
-            <div className="flex items-center justify-between rounded-2xl bg-red-50 dark:bg-red-900/20 p-4">
+            <div className="flex items-center justify-between rounded-2xl bg-red-50 dark:bg-red-900/20 p-4 transition-all duration-200 hover:shadow-sm">
               <div className="flex items-center gap-4">
                 <div className="rounded-xl bg-red-100 dark:bg-red-900/30 p-3">
                   <Trash2 className="h-6 w-6 text-red-600" />
@@ -616,7 +669,7 @@ function StatusBreakdownSection({
               <p className="text-3xl font-bold text-red-600">{(flaggedCounts.disposable || 0).toLocaleString()}</p>
             </div>
 
-            <div className="flex items-center justify-between rounded-2xl bg-amber-50 dark:bg-amber-900/20 p-4">
+            <div className="flex items-center justify-between rounded-2xl bg-amber-50 dark:bg-amber-900/20 p-4 transition-all duration-200 hover:shadow-sm">
               <div className="flex items-center gap-4">
                 <div className="rounded-xl bg-amber-100 dark:bg-amber-900/30 p-3">
                   <Users className="h-6 w-6 text-amber-600" />
@@ -629,7 +682,7 @@ function StatusBreakdownSection({
               <p className="text-3xl font-bold text-amber-600">{(flaggedCounts.role_based || 0).toLocaleString()}</p>
             </div>
 
-            <div className="flex items-center justify-between rounded-2xl bg-blue-50 dark:bg-blue-900/20 p-4">
+            <div className="flex items-center justify-between rounded-2xl bg-blue-50 dark:bg-blue-900/20 p-4 transition-all duration-200 hover:shadow-sm">
               <div className="flex items-center gap-4">
                 <div className="rounded-xl bg-blue-100 dark:bg-blue-900/30 p-3">
                   <ShieldAlert className="h-6 w-6 text-[var(--foreground)]/60" />
@@ -712,7 +765,7 @@ function StatusBreakdownSection({
               {worstDomains.map((d) => (
                 <div
                   key={d.domain}
-                  className="flex items-center justify-between rounded-xl border border-[var(--muted)] p-4"
+                  className="flex items-center justify-between rounded-xl border border-[var(--muted)] p-4 transition-all duration-200 hover:shadow-sm hover:border-[var(--foreground)]/15"
                 >
                   <div>
                     <p className="font-semibold">{d.domain}</p>
@@ -777,14 +830,22 @@ function StatusBreakdownSection({
                 iconBg="bg-blue-100 dark:bg-blue-900/20"
                 iconColor="text-[var(--foreground)]/60"
               />
+              {/*
+                UI/UX FIX #2 — "Improving" was an unlabeled raw number with
+                zero context. Renamed to "Improving Domains" and added a
+                tooltip that spells out exactly what it counts and over
+                what window, matching what the backend actually computes
+                in dashboard.py's _compute_domain_summary().
+              */}
               <MiniStat
-                label="Improving"
+                label="Improving Domains"
                 value={domainSummary.improving_count}
                 trend={domainSummary.improving_trend_pct}
                 windowLabel="vs prior 7 days"
                 Icon={TrendingUp}
                 iconBg="bg-success/10 dark:bg-success/20"
                 iconColor="text-success"
+                tooltip="Domains (with enough volume to measure) whose risk percentage has dropped by more than 2 points over the last 7 days compared to the 7 days before that — i.e. getting safer over time."
               />
             </div>
           </div>
@@ -825,7 +886,7 @@ export default function DashboardPage() {
         </motion.h1>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
           {Array.from({ length: 6 }).map((_, i) => (
-            <motion.div key={i} variants={itemVariants} className="card h-32 animate-pulse">
+            <motion.div key={i} variants={itemVariants} className="card h-32 skeleton">
               <div className="h-4 w-3/4 bg-[var(--foreground)]/10 rounded mb-4" />
               <div className="h-8 w-1/2 bg-[var(--foreground)]/10 rounded" />
             </motion.div>
@@ -891,11 +952,7 @@ export default function DashboardPage() {
   const sparkUnsafe = dailyVolume.map((d) => ({ v: d.unsafe || 0 }));
 
   return (
-    <motion.div id="main-content" initial="hidden" animate="visible" variants={containerVariants} className="space-y-6">
-      <a href="#main-content" className="absolute left-0 top-0 bg-[var(--accent)] text-white px-4 py-2 z-50 transform -translate-y-full focus:translate-y-0 transition-transform duration-300">
-        Skip to main content
-      </a>
-
+    <motion.div initial="hidden" animate="visible" variants={containerVariants} className="space-y-6">
       <motion.div variants={itemVariants} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold text-[var(--foreground)]">Welcome back, {APP_USER.name.split(' ')[0]}! 👋</h1>
@@ -907,7 +964,7 @@ export default function DashboardPage() {
             id="chart-period-select"
             value={days}
             onChange={(e) => setDays(Number(e.target.value))}
-            className="rounded-xl border border-[var(--muted)] bg-[var(--background)] px-4 py-2 text-sm shadow-sm text-[var(--foreground)]"
+            className="rounded-xl border border-[var(--muted)] bg-[var(--background)] px-4 py-2 text-sm shadow-sm text-[var(--foreground)] transition-colors duration-200 hover:border-[var(--foreground)]/20 cursor-pointer"
           >
             <option value={7}>Chart: Last 7 Days</option>
             <option value={30}>Chart: Last 30 Days</option>

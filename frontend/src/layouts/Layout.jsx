@@ -73,7 +73,23 @@ export default function Layout() {
 
   return (
     <>
-      <a href="#main-content" className="hidden sm:block">
+      {/*
+        FIX (UI/UX #1 — stray white/blurred strip on scroll-to-top):
+        This link previously used `className="hidden sm:block"`, which meant
+        from the `sm` breakpoint upward it rendered as a real, visible,
+        unstyled block-level element at the very top of the page — sitting
+        in normal document flow, above/overlapping the fixed sidebar and
+        sticky header. That unstyled block was exactly the "unwanted
+        element" flashing near the top on scroll.
+
+        Fixed with the standard accessible "skip link" pattern: invisible by
+        default (`sr-only`), and only becomes visible + properly positioned
+        when it actually receives keyboard focus (`focus:not-sr-only`).
+      */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[100] focus:rounded-lg focus:bg-[var(--accent)] focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-white focus:shadow-lg"
+      >
         Skip to main content
       </a>
 
@@ -99,7 +115,7 @@ export default function Layout() {
                 }`}
             >
               <Link to="/" className="flex items-center gap-3 group">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-500/25 transition-transform group-hover:scale-105">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-500/25 transition-transform duration-300 group-hover:scale-105 group-hover:rotate-3">
                   <Mail size={20} />
                 </div>
 
@@ -114,7 +130,7 @@ export default function Layout() {
               {sidebarOpen && (
                 <button
                   onClick={() => setSidebarOpen(false)}
-                  className="rounded-lg p-2 transition-colors cursor-pointer hover:bg-[var(--card-hover)]"
+                  className="rounded-lg p-2 transition-all duration-200 cursor-pointer hover:bg-[var(--card-hover)] hover:scale-105 active:scale-95"
                 >
                   <X size={18} />
                 </button>
@@ -123,7 +139,7 @@ export default function Layout() {
               {!sidebarOpen && (
                 <button
                   onClick={() => setSidebarOpen(true)}
-                  className="rounded-lg p-2 transition-colors cursor-pointer hover:bg-[var(--card-hover)] hidden md:block"
+                  className="rounded-lg p-2 transition-all duration-200 cursor-pointer hover:bg-[var(--card-hover)] hover:scale-105 active:scale-95 hidden md:block"
                 >
                   <Menu size={18} />
                 </button>
@@ -142,7 +158,7 @@ export default function Layout() {
                     className={`relative flex items-center gap-3 rounded-xl px-4 py-3 transition-all duration-200 cursor-pointer
                     ${active
                         ? 'text-white'
-                        : 'text-[var(--foreground)]/65 hover:bg-[var(--card-hover)] hover:text-[var(--foreground)]'
+                        : 'text-[var(--foreground)]/65 hover:bg-[var(--card-hover)] hover:text-[var(--foreground)] hover:translate-x-0.5'
                       }
                     ${!sidebarOpen ? 'justify-center' : ''}
                     `}
@@ -154,7 +170,7 @@ export default function Layout() {
                         transition={{ type: 'spring', stiffness: 400, damping: 32 }}
                       />
                     )}
-                    <Icon size={20} className="relative z-10" />
+                    <Icon size={20} className="relative z-10 transition-transform duration-200" />
                     {sidebarOpen && <span className="relative z-10 font-medium">{label}</span>}
                   </Link>
                 );
@@ -180,7 +196,7 @@ export default function Layout() {
                     </div>
                     <ChevronDown
                       size={16}
-                      className={`ml-auto text-[var(--foreground)]/40 flex-shrink-0 transition-transform ${sidebarProfileOpen ? 'rotate-180' : ''}`}
+                      className={`ml-auto text-[var(--foreground)]/40 flex-shrink-0 transition-transform duration-200 ${sidebarProfileOpen ? 'rotate-180' : ''}`}
                     />
                   </>
                 )}
@@ -200,14 +216,14 @@ export default function Layout() {
                       <Link
                         to="/settings"
                         onClick={() => setSidebarProfileOpen(false)}
-                        className="flex items-center gap-2 px-3.5 py-2 text-sm text-[var(--foreground)]/80 hover:bg-[var(--card-hover)] cursor-pointer"
+                        className="flex items-center gap-2 px-3.5 py-2 text-sm text-[var(--foreground)]/80 hover:bg-[var(--card-hover)] cursor-pointer transition-colors"
                       >
                         <Settings size={15} /> Settings
                       </Link>
                       {isAdmin && (
                         <button
                           onClick={handleAdminLogout}
-                          className="flex w-full items-center gap-2 px-3.5 py-2 text-sm text-error hover:bg-error/10 cursor-pointer"
+                          className="flex w-full items-center gap-2 px-3.5 py-2 text-sm text-error hover:bg-error/10 cursor-pointer transition-colors"
                         >
                           <LogOut size={15} /> Admin Logout
                         </button>
@@ -232,12 +248,18 @@ export default function Layout() {
             }`}
         >
 
-          <header className="sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--surface)]/85 backdrop-blur-xl">
+          {/*
+            FIX (UI/UX #1): `isolate` creates a fresh stacking context for
+            the header, so any absolutely-positioned child (now or in the
+            future) is contained to the header's own layer and can never
+            visually bleed above/behind other page content while scrolling.
+          */}
+          <header className="isolate sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--surface)]/85 backdrop-blur-xl">
 
             <div className="flex h-16 items-center justify-between px-4 sm:px-8">
 
               <button
-                className="rounded-lg p-2 cursor-pointer hover:bg-[var(--card-hover)] md:hidden"
+                className="rounded-lg p-2 cursor-pointer hover:bg-[var(--card-hover)] transition-all duration-200 hover:scale-105 active:scale-95 md:hidden"
                 onClick={() => setMobileMenuOpen(true)}
                 aria-label="Open menu"
               >
@@ -246,8 +268,9 @@ export default function Layout() {
 
               <div className="ml-auto flex items-center gap-1.5">
                 <button
-                  className="rounded-lg p-2 hover:bg-[var(--card-hover)] transition-colors cursor-pointer text-[var(--foreground)]/60"
+                  className="rounded-lg p-2 hover:bg-[var(--card-hover)] transition-all duration-200 cursor-pointer text-[var(--foreground)]/60 hover:text-[var(--foreground)] hover:scale-105 active:scale-95"
                   aria-label="Help"
+                  title="Help & documentation"
                 >
                   <HelpCircle size={20} />
                 </button>
@@ -261,7 +284,7 @@ export default function Layout() {
                 <div className="relative">
                   <button
                     onClick={() => setHeaderProfileOpen((v) => !v)}
-                    className="flex items-center gap-1.5 rounded-full pl-1 pr-2 py-1 transition-colors cursor-pointer hover:bg-[var(--card-hover)]"
+                    className="flex items-center gap-1.5 rounded-full pl-1 pr-2 py-1 transition-all duration-200 cursor-pointer hover:bg-[var(--card-hover)]"
                     aria-haspopup="true"
                     aria-expanded={headerProfileOpen}
                   >
@@ -270,7 +293,7 @@ export default function Layout() {
                     </div>
                     <ChevronDown
                       size={16}
-                      className={`text-[var(--foreground)]/50 transition-transform ${headerProfileOpen ? 'rotate-180' : ''}`}
+                      className={`text-[var(--foreground)]/50 transition-transform duration-200 ${headerProfileOpen ? 'rotate-180' : ''}`}
                     />
                   </button>
 
@@ -292,14 +315,14 @@ export default function Layout() {
                           <Link
                             to="/settings"
                             onClick={() => setHeaderProfileOpen(false)}
-                            className="flex items-center gap-2 px-3.5 py-2 text-sm text-[var(--foreground)]/80 hover:bg-[var(--card-hover)] cursor-pointer"
+                            className="flex items-center gap-2 px-3.5 py-2 text-sm text-[var(--foreground)]/80 hover:bg-[var(--card-hover)] cursor-pointer transition-colors"
                           >
                             <Settings size={15} /> Settings
                           </Link>
                           {isAdmin && (
                             <button
                               onClick={handleAdminLogout}
-                              className="flex w-full items-center gap-2 px-3.5 py-2 text-sm text-error hover:bg-error/10 cursor-pointer"
+                              className="flex w-full items-center gap-2 px-3.5 py-2 text-sm text-error hover:bg-error/10 cursor-pointer transition-colors"
                             >
                               <LogOut size={15} /> Admin Logout
                             </button>
@@ -315,7 +338,7 @@ export default function Layout() {
 
           </header>
 
-          <div className="p-4 sm:p-8 md:p-10 flex-1">
+          <div id="main-content" className="p-4 sm:p-8 md:p-10 flex-1">
             <Outlet />
           </div>
 
