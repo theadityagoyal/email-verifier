@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { AreaChart, Area, ResponsiveContainer } from 'recharts';
 import CircularProgress from '@/components/ui/CircularProgress';
 import StackedBarChart from '@/components/charts/StackedBarChart';
-import { getDashboardStats } from '@/services/api';
+import { getDashboardStats, listEmails, listDomains } from '@/services/api';
 import { APP_USER } from '@/utils/appConfig';
 
 import Button from '@/components/ui/Button';
@@ -19,6 +19,7 @@ import {
   RefreshCw,
   TrendingUp,
   TrendingDown,
+  Minus,
   BarChart3,
   Database,
   PieChart,
@@ -35,6 +36,8 @@ import {
   Mail,
   Sparkles,
   Star,
+  Briefcase,
+  Coins,
 } from 'lucide-react';
 import { formatDateTimeIST, formatAvgTime, relativeTime } from '@/utils/dateUtils';
 
@@ -356,11 +359,21 @@ function TrustScoreCard({ trustScore, trustScoreColor, trustScoreLabel, textClas
   );
 }
 
-function ActiveJobSection({ activeJob, navigate }) {
+// FIX: trimmed from 3 cards to 3 *honest* cards. The old 3rd slot was just
+// the "Verify Email" button duplicated — that CTA now lives in the page
+// header (next to the chart-period selector, matching the new layout).
+// We do NOT fabricate a "Verification Engine: X% Operational" card here —
+// there's no real backend health metric wired up for it, and inventing one
+// would be exactly the kind of fake-data UI this project's audit already
+// stripped out elsewhere (see memory: "Honest UI over placeholder UI").
+function ActiveJobSection({ activeJob }) {
   return (
-    <motion.div variants={itemVariants} className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-stretch">
+    <motion.div variants={itemVariants} className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-stretch">
       <div className="card h-full">
-        <p className="text-xs text-[var(--foreground)]/50 mb-2">Active job</p>
+        <div className="flex items-center gap-2 mb-2">
+          <Briefcase className="h-4 w-4 text-[var(--foreground)]/40" />
+          <p className="text-xs text-[var(--foreground)]/50">Active Jobs</p>
+        </div>
         {activeJob ? (
           <div className="space-y-2">
             <p className="text-sm font-medium text-[var(--foreground)] truncate">{activeJob.file_name}</p>
@@ -375,21 +388,174 @@ function ActiveJobSection({ activeJob, navigate }) {
             </p>
           </div>
         ) : (
-          <p className="text-sm text-[var(--foreground)]/50 py-2">No active jobs</p>
+          <>
+            <p className="text-2xl font-bold text-[var(--foreground)]">0</p>
+            <p className="text-xs text-[var(--foreground)]/40">No active jobs</p>
+          </>
         )}
       </div>
 
-      <div className="card flex h-full items-center justify-center">
-        <p className="text-[var(--foreground)]/50">Credits tracking not implemented</p>
-      </div>
-
-      <div className="card flex h-full items-center justify-center">
-        <Button variant="success" size="lg" className="w-full" onClick={() => navigate('/verify')}>
-          <Zap className="h-5 w-5 text-[var(--foreground)]" />
-          Verify Email
-        </Button>
+      <div className="card h-full">
+        <div className="flex items-center gap-2 mb-2">
+          <Coins className="h-4 w-4 text-[var(--foreground)]/40" />
+          <p className="text-xs text-[var(--foreground)]/50">Credits</p>
+        </div>
+        <p className="text-sm text-[var(--foreground)]/50 py-1">Credits tracking not implemented</p>
       </div>
     </motion.div>
+  );
+}
+
+// ── Recent flagged-activity feed ────────────────────────────────────────────
+// Real data only: pulls the last N flagged emails via /emails?flagged=any,
+// sorted newest-first. No fabricated "confidence %" — the backend doesn't
+// compute one, so we don't invent one either (see memory: honest UI over
+// placeholder UI). Each row shows the actual flag reason + real relative
+// timestamp from verified_at.
+function flagReason(email) {
+  if (email.disposable) {
+    return { label: 'Disposable Domain Detected', Icon: Trash2, tone: 'error' };
+  }
+  if (email.role_based) {
+    return { label: 'Role-Based Account', Icon: Users, tone: 'warning' };
+  }
+  if (email.catch_all) {
+    return { label: 'Catch-All Domain', Icon: ShieldAlert, tone: 'info' };
+  }
+  return { label: 'Flagged for Review', Icon: AlertTriangle, tone: 'warning' };
+}
+
+const TONE_CLASSES = {
+  error: { bg: 'bg-error/10', text: 'text-error' },
+  warning: { bg: 'bg-warning/10', text: 'text-warning' },
+  info: { bg: 'bg-info/10', text: 'text-info' },
+};
+
+function RecentFlaggedActivity({ items, navigate }) {
+  return (
+    <div className="mt-6 pt-6 border-t border-[var(--muted)]">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-sm font-semibold text-[var(--foreground)]">Recent Activity</p>
+        <span className="inline-flex items-center gap-1.5 text-xs text-[var(--foreground)]/40">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-success" />
+          </span>
+          Live feed
+        </span>
+      </div>
+
+      {items.length === 0 ? (
+        <p className="text-sm text-[var(--foreground)]/40 py-4 text-center">No flagged emails yet</p>
+      ) : (
+        <div className="space-y-2">
+          {items.map((email) => {
+            const reason = flagReason(email);
+            const Icon = reason.Icon;
+            const tone = TONE_CLASSES[reason.tone];
+            return (
+              <div
+                key={email.email}
+                onClick={() => navigate(`/emails?domain=${encodeURIComponent(email.domain || '')}`)}
+                className="flex items-center gap-3 rounded-xl border border-[var(--muted)] px-3 py-2.5 cursor-pointer transition-colors hover:bg-[var(--muted)]/30"
+              >
+                <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${tone.bg}`}>
+                  <Icon className={`h-4 w-4 ${tone.text}`} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-[var(--foreground)] truncate">{reason.label}</p>
+                  <p className="text-xs text-[var(--foreground)]/50 truncate font-mono">{email.email}</p>
+                </div>
+                <span className="text-xs text-[var(--foreground)]/40 shrink-0">
+                  {relativeTime(email.verified_at)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Domain Risk Leaderboard (replaces the old flat "Worst Domains" list) ───
+// Rank / Domain / Risk (bar) / Emails / Trend — real trend_delta_pct comes
+// straight from /domains (same field DomainsPage/DomainTable already use),
+// not re-derived client-side.
+function DomainRiskLeaderboard({ items, navigate }) {
+  if (items.length === 0) {
+    return <div className="py-10 text-center text-[var(--foreground)]/50">No risky domains found</div>;
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--foreground)]/40 border-b border-[var(--muted)]">
+            <th className="py-2 pr-2 font-semibold">Rank</th>
+            <th className="py-2 px-2 font-semibold">Domain</th>
+            <th className="py-2 px-2 font-semibold">Risk</th>
+            <th className="py-2 px-2 font-semibold text-right">Emails</th>
+            <th className="py-2 pl-2 font-semibold text-right">Trend</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-[var(--muted)]">
+          {items.map((d, i) => {
+            const TrendIcon = d.trend === 'up' ? TrendingUp : d.trend === 'down' ? TrendingDown : Minus;
+            // "up" trend = risk % rising = bad = red. "down" = improving = green.
+            const trendColor =
+              d.trend === 'up' ? 'text-error' : d.trend === 'down' ? 'text-success' : 'text-[var(--foreground)]/40';
+            const riskColor =
+              d.risk_percent >= 50 ? 'text-error' : d.risk_percent >= 25 ? 'text-warning' : 'text-success';
+            const riskBar = d.risk_percent >= 50 ? 'bg-error' : d.risk_percent >= 25 ? 'bg-warning' : 'bg-success';
+
+            return (
+              <tr
+                key={d.domain}
+                onClick={() => navigate(`/emails?domain=${encodeURIComponent(d.domain)}`)}
+                className="cursor-pointer transition-colors hover:bg-[var(--muted)]/20"
+              >
+                <td className="py-3 pr-2">
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[var(--muted)]/60 text-xs font-bold text-[var(--foreground)]/70">
+                    {i + 1}
+                  </span>
+                </td>
+                <td className="py-3 px-2 min-w-[120px]">
+                  <p className="font-medium text-[var(--foreground)] truncate max-w-[160px]">{d.domain}</p>
+                  <p className="text-[10px] text-[var(--foreground)]/40">
+                    {d.low_sample ? 'Low sample size' : 'Domain Reputation'}
+                  </p>
+                </td>
+                <td className="py-3 px-2">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-sm font-semibold tabular-nums ${riskColor}`}>{d.risk_percent}%</span>
+                    <div className="hidden sm:block w-16 h-1.5 rounded-full bg-[var(--muted)] overflow-hidden shrink-0">
+                      <div
+                        className={`h-full rounded-full ${riskBar}`}
+                        style={{ width: `${Math.min(d.risk_percent, 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                </td>
+                <td className="py-3 px-2 text-right tabular-nums text-[var(--foreground)]/70">
+                  {d.total_emails}
+                </td>
+                <td className="py-3 pl-2 text-right">
+                  {d.trend_delta_pct === null || d.trend_delta_pct === undefined ? (
+                    <span className="text-xs text-[var(--foreground)]/30">—</span>
+                  ) : (
+                    <span className={`inline-flex items-center gap-1 text-xs font-medium ${trendColor}`}>
+                      <TrendIcon className="h-3 w-3" />
+                      {Math.abs(d.trend_delta_pct)}%
+                    </span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -406,7 +572,8 @@ function StatusBreakdownSection({
   perStatusTrend,
   bucketTrendPct,
   flaggedCounts,
-  worstDomains,
+  recentFlagged,
+  domainLeaderboard,
   dailyVolume,
   days,
   verificationSpeed,
@@ -424,66 +591,33 @@ function StatusBreakdownSection({
   return (
     <motion.div variants={itemVariants} className="grid grid-cols-1 gap-6 items-start">
       <div className="card w-full rounded-3xl p-8 shadow-lg">
-        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6 mb-6">
-          <div className="flex-1">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+          <div>
             <h2 className="text-3xl font-bold text-[var(--foreground)]">Status breakdown</h2>
             <p className="mt-2 text-sm text-[var(--foreground)]/60">Detailed breakdown of verification statuses (all-time)</p>
-
-            <div className="mt-6 max-w-md">
-              <p className="text-sm text-[var(--foreground)]/60">Overall Verification Progress</p>
-              <div className="flex items-center gap-4 mt-1">
-                <span className="text-4xl font-bold text-success">{trustScore}%</span>
-                <div className="flex-1 h-2 rounded-full bg-[var(--muted)] overflow-hidden">
-                  <div
-                    className="h-2 rounded-full bg-success transition-all duration-700"
-                    style={{ width: `${trustScore}%` }}
-                  />
-                </div>
-              </div>
-              <p className="mt-1 text-xs text-[var(--foreground)]/50">
-                {verifiedCount.toLocaleString()} of {totalEmails.toLocaleString()} emails verified
-              </p>
-            </div>
           </div>
 
-          <div className="flex items-center gap-6">
-            <CircularProgress value={trustScore} size={110} strokeWidth={9} color="success" />
-
-            <div className="space-y-4">
-              {/*
-                UI/UX FIX #3: the old "Last updated" row here (relativeTime
-                of `generatedAt`, i.e. "when this API response was built")
-                was redundant with the "Last Sync" stat card lower on this
-                page (relativeTime of `lastSyncAt`, i.e. "when an email was
-                actually last verified") — the two values are almost always
-                within a second of each other and confused users about which
-                one to trust. "Last Sync" is the meaningful one and stays.
-                This slot now shows a genuinely different signal: whether
-                the dashboard itself is actively auto-refreshing.
-              */}
-              <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-success/10 dark:bg-success/20">
-                  <span className="relative flex h-2.5 w-2.5">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75" />
-                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-success" />
-                  </span>
-                </div>
-                <div>
-                  <p className="text-xs text-[var(--foreground)]/50">Dashboard status</p>
-                  <p className="text-sm font-semibold text-[var(--foreground)]">Live — auto-refreshing</p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 dark:bg-primary/20">
-                  <Zap className="h-4 w-4 text-primary" />
-                </div>
-                <div>
-                  <p className="text-xs text-[var(--foreground)]/50">Verification speed</p>
-                  <p className="text-sm font-semibold text-[var(--foreground)]">{verificationSpeed} emails/sec</p>
-                </div>
-              </div>
+          {/* FIX: removed the duplicate Trust Score display that used to
+              live here (a second CircularProgress + "Overall Verification
+              Progress" bar repeating the exact same number already shown in
+              the TrustScoreCard at the top of the page). Trust Score now
+              appears exactly once on the dashboard. This header is now a
+              single compact status pill — live indicator + verification
+              speed — replacing the old separate "Dashboard status: Live"
+              line (which duplicated the Auto-refresh card below) and the
+              "Verification speed" line. */}
+          <div className="flex items-center gap-4 rounded-xl border border-[var(--muted)] bg-[var(--background)] px-5 py-3 shadow-sm">
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-success" />
+              </span>
+              <span className="text-xs font-medium text-[var(--foreground)]">Live</span>
             </div>
+            <div className="h-4 w-px bg-[var(--muted)]" />
+            <span className="text-xs text-[var(--foreground)]/60">
+              verification speed: {verificationSpeed} emails/sec
+            </span>
           </div>
         </div>
 
@@ -696,6 +830,11 @@ function StatusBreakdownSection({
             </div>
           </div>
 
+          {/* NEW: real recent-activity feed — see RecentFlaggedActivity above.
+              Replaces nothing that existed before; this is new insight the
+              old card didn't give (which specific emails, when). */}
+          <RecentFlaggedActivity items={recentFlagged} navigate={navigate} />
+
           <div className="mt-6 pt-6 border-t border-[var(--muted)]">
             <p className="text-sm font-semibold text-[var(--foreground)] mb-4">Overview</p>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -752,53 +891,13 @@ function StatusBreakdownSection({
         <div className="card h-full">
           <div className="mb-6 flex items-center justify-between">
             <div>
-              <h2 className="text-2xl font-bold">Worst Domains</h2>
-              <p className="text-sm text-[var(--foreground)]/60">Highest risk domains detected</p>
+              <h2 className="text-2xl font-bold">Domain Risk Leaderboard</h2>
+              <p className="text-sm text-[var(--foreground)]/60">Top domains by risk score</p>
             </div>
             <Globe className="h-8 w-8 text-[var(--foreground)]/60" />
           </div>
 
-          {worstDomains.length === 0 ? (
-            <div className="py-10 text-center text-[var(--foreground)]/50">No risky domains found</div>
-          ) : (
-            <div className="space-y-3">
-              {worstDomains.map((d) => (
-                <div
-                  key={d.domain}
-                  className="flex items-center justify-between rounded-xl border border-[var(--muted)] p-4 transition-all duration-200 hover:shadow-sm hover:border-[var(--foreground)]/15"
-                >
-                  <div>
-                    <p className="font-semibold">{d.domain}</p>
-                    <p className="text-xs text-[var(--foreground)]/50">Domain Reputation</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span
-                      className={`rounded-full px-3 py-1 text-sm font-semibold ${d.risk_pct >= 50
-                        ? 'bg-red-100 text-red-600 dark:bg-red-900/20 dark:text-red-400'
-                        : 'bg-amber-100 text-amber-600 dark:bg-amber-900/20 dark:text-amber-400'
-                        }`}
-                    >
-                      {d.risk_pct}%
-                    </span>
-                    <div className="hidden sm:flex items-center gap-2">
-                      <div className="w-20 h-1.5 rounded-full bg-[var(--muted)] overflow-hidden">
-                        <div
-                          className={`h-full rounded-full ${d.risk_pct >= 50 ? 'bg-red-500' : 'bg-amber-500'}`}
-                          style={{ width: `${d.risk_pct}%` }}
-                        />
-                      </div>
-                      <AlertTriangle
-                        className={`h-3.5 w-3.5 ${d.risk_pct >= 50 ? 'text-red-500' : 'text-amber-500'}`}
-                      />
-                      <span className="text-xs text-[var(--foreground)]/50 whitespace-nowrap">
-                        {d.total} emails
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          <DomainRiskLeaderboard items={domainLeaderboard} navigate={navigate} />
 
           <div className="mt-6 pt-6 border-t border-[var(--muted)]">
             <p className="text-sm font-semibold text-[var(--foreground)] mb-4">Summary</p>
@@ -830,13 +929,6 @@ function StatusBreakdownSection({
                 iconBg="bg-blue-100 dark:bg-blue-900/20"
                 iconColor="text-[var(--foreground)]/60"
               />
-              {/*
-                UI/UX FIX #2 — "Improving" was an unlabeled raw number with
-                zero context. Renamed to "Improving Domains" and added a
-                tooltip that spells out exactly what it counts and over
-                what window, matching what the backend actually computes
-                in dashboard.py's _compute_domain_summary().
-              */}
               <MiniStat
                 label="Improving Domains"
                 value={domainSummary.improving_count}
@@ -878,6 +970,25 @@ export default function DashboardPage() {
     staleTime: 0,
   });
 
+  // NEW: real recent flagged-emails feed for the "Flagged Emails" card.
+  const { data: recentFlaggedData } = useQuery({
+    queryKey: ['dashboard-recent-flagged'],
+    queryFn: () => listEmails({ page: 1, size: 5, flagged: 'any', sort_by: 'created_at', sort_order: 'desc' }),
+    refetchInterval: isTabVisible ? 15000 : false,
+    refetchOnWindowFocus: true,
+  });
+
+  // NEW: dedicated top-5-by-risk domains query for the Domain Risk
+  // Leaderboard — reuses the same /domains endpoint (and trend_delta_pct
+  // field) DomainsPage/DomainTable already rely on, so the trend arrows
+  // here are real, not re-derived from the coarser dashboard-stats top_domains.
+  const { data: leaderboardData } = useQuery({
+    queryKey: ['dashboard-domain-leaderboard'],
+    queryFn: () => listDomains({ page: 1, size: 5, sort_by: 'risk_percent', sort_order: 'desc' }),
+    refetchInterval: isTabVisible ? 15000 : false,
+    refetchOnWindowFocus: true,
+  });
+
   if (isLoading) {
     return (
       <motion.div initial="hidden" animate="visible" variants={containerVariants} className="space-y-6">
@@ -912,7 +1023,6 @@ export default function DashboardPage() {
     bucket_counts: bucketCounts = {},
     trust_score: trustScore = 0,
     flagged_counts: flaggedCounts = {},
-    top_domains: topDomains = [],
     daily_volume: dailyVolume = [],
     active_job: activeJob = null,
     per_status_trend: perStatusTrend = {},
@@ -941,10 +1051,8 @@ export default function DashboardPage() {
 
   const verifiedCount = (bucketCounts.safe || 0) + (bucketCounts.risky || 0) + (bucketCounts.unsafe || 0);
 
-  const worstDomains = [...(topDomains || [])]
-    .filter((d) => d.total >= 5)
-    .sort((a, b) => b.risk_pct - a.risk_pct)
-    .slice(0, 5);
+  const recentFlagged = recentFlaggedData?.items || [];
+  const domainLeaderboard = leaderboardData?.items || [];
 
   const sparkTotal = dailyVolume.map((d) => ({ v: dayTotal(d) }));
   const sparkSafe = dailyVolume.map((d) => ({ v: d.safe || 0 }));
@@ -955,10 +1063,13 @@ export default function DashboardPage() {
     <motion.div initial="hidden" animate="visible" variants={containerVariants} className="space-y-6">
       <motion.div variants={itemVariants} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-[var(--foreground)]">Welcome back, {APP_USER.name.split(' ')[0]}! 👋</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold text-[var(--foreground)]">Welcome back, {APP_USER.name.split(' ')[0]}!</h1>
           <p className="text-sm text-[var(--foreground)]/60">Here's your email verification overview.</p>
         </div>
-        <div>
+        {/* FIX: "Verify Email" CTA moved up here (matches the reference
+            layout — primary action next to the period selector) instead of
+            being buried as a 3rd card lower on the page. */}
+        <div className="flex items-center gap-3">
           <label htmlFor="chart-period-select" className="sr-only">Chart period</label>
           <select
             id="chart-period-select"
@@ -971,6 +1082,10 @@ export default function DashboardPage() {
             <option value={90}>Chart: Last 90 Days</option>
             <option value={365}>Chart: All Time</option>
           </select>
+          <Button variant="primary" onClick={() => navigate('/verify')}>
+            <Zap className="h-4 w-4" />
+            Verify Email
+          </Button>
         </div>
       </motion.div>
 
@@ -1025,7 +1140,7 @@ export default function DashboardPage() {
         />
       </div>
 
-      <ActiveJobSection activeJob={activeJob} navigate={navigate} />
+      <ActiveJobSection activeJob={activeJob} />
 
       <StatusBreakdownSection
         trustScore={trustScore}
@@ -1040,7 +1155,8 @@ export default function DashboardPage() {
         perStatusTrend={perStatusTrend}
         bucketTrendPct={bucketTrendPct}
         flaggedCounts={flaggedCounts}
-        worstDomains={worstDomains}
+        recentFlagged={recentFlagged}
+        domainLeaderboard={domainLeaderboard}
         dailyVolume={dailyVolume}
         days={days}
         verificationSpeed={verificationSpeed}

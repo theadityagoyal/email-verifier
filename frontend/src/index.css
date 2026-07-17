@@ -5,7 +5,9 @@
 /* ============================================================
    DESIGN TOKENS — layered surfaces instead of flat gray.
    Light: premium white surfaces, soft shadows.
-   Dark: OLED-friendly layered hierarchy (bg -> surface -> card -> hover).
+   Dark: "Premium Black" — true near-black tonal layers
+   (#050505 -> #090909 -> #101010 -> #161616), violet/green
+   brand accents, matching the reference dashboard screenshot.
    ============================================================ */
 :root {
   /* Layered light surfaces */
@@ -40,32 +42,37 @@
 }
 
 .dark {
-  /* Layered dark hierarchy — background < surface < card < hover, each a step lighter */
-  --background: #020617;
-  --surface: #0B1220;
-  --card: #0F172A;
-  --card-hover: #16213A;
-  --muted: #1E293B;
-  --border: #1E293B;
+  /* ===== Background Layers ===== */
+  --background: #050505;   /* Level 0 — page background */
+  --surface: #090909;      /* sidebar / header surface */
+  --card: #101010;         /* Level 1 — dashboard cards */
+  --card-hover: #161616;   /* Level 2 — hover / modals */
 
-  --foreground: #F8FAFC;
-  --foreground-secondary: #CBD5E1;
-  --foreground-muted: #94A3B8;
+  /* ===== Borders ===== */
+  --muted: #202020;
+  --border: #2A2A2A;
 
-  --primary: #818CF8;
-  --primary-hover: #A5B4FC;
-  --secondary: #6366F1;
-  --accent: #34D399;
-  --accent-hover: #6EE7B7;
+  /* ===== Text ===== */
+  --foreground: #F5F5F5;
+  --foreground-secondary: #D4D4D8;
+  --foreground-muted: #8A8A8A;
 
-  --success: #34D399;
-  --error: #F87171;
-  --warning: #FBBF24;
-  --info: #60A5FA;
+  /* ===== Brand ===== */
+  --primary: #8B5CF6;
+  --primary-hover: #A78BFA;
+  --secondary: #A78BFA;
 
-  --primary-rgb: 129, 140, 248;
-  --accent-rgb: 52, 211, 153;
-  --accent-hover-rgb: 110, 231, 183;
+  --accent: #22C55E;
+  --accent-hover: #4ADE80;
+
+  --success: #22C55E;
+  --warning: #F59E0B;
+  --error: #EF4444;
+  --info: #3B82F6;
+
+  --primary-rgb: 139, 92, 246;
+  --accent-rgb: 34, 197, 94;
+  --accent-hover-rgb: 74, 222, 128;
 
   --shadow-color: 0, 0, 0;
   --ring: var(--primary);
@@ -88,6 +95,14 @@
     background-image:
       radial-gradient(circle at top right, rgba(var(--primary-rgb), .07), transparent 40%),
       radial-gradient(circle at bottom left, rgba(var(--accent-rgb), .05), transparent 35%);
+    background-attachment: fixed;
+  }
+
+  /* Premium near-black dark body — subtle single glow, no blue/green wash */
+  .dark body {
+    background: var(--background);
+    background-image:
+      radial-gradient(circle at top right, rgba(139, 92, 246, .03), transparent 55%);
     background-attachment: fixed;
   }
 
@@ -144,12 +159,42 @@
       0 4px 10px rgba(var(--shadow-color), 0.08);
   }
 
+  /* Premium black card treatment */
   .dark .card {
-    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 4px 16px rgba(0, 0, 0, 0.35);
+    background: var(--card);
+    border: 1px solid var(--border);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, .02),
+      0 10px 30px rgba(0, 0, 0, .55);
   }
 
   .dark .card:hover {
-    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 16px 32px rgba(0, 0, 0, 0.45);
+    background: var(--card-hover);
+    transform: translateY(-2px);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, .04),
+      0 20px 45px rgba(0, 0, 0, .7);
+  }
+
+  /* ── Sidebar / Header — dedicated near-black surfaces ───────────────── */
+  .sidebar {
+    @apply bg-[var(--surface)];
+    border-right: 1px solid var(--border);
+  }
+
+  .dark .sidebar {
+    background: #080808;
+    border-right: 1px solid #1E1E1E;
+  }
+
+  .header {
+    @apply bg-[var(--surface)];
+    border-bottom: 1px solid var(--border);
+  }
+
+  .dark .header {
+    background: #080808;
+    border-bottom: 1px solid #1E1E1E;
   }
 
   /* ── Buttons ─────────────────────────────────────────────────────── */
@@ -166,6 +211,19 @@
   }
   .btn-primary:active:not(:disabled) {
     transform: translateY(0);
+  }
+
+  /* Premium violet gradient CTA in dark mode (matches "Verify Email" button) */
+  .dark .btn-primary {
+    background: linear-gradient(180deg, #8B5CF6, #7C3AED);
+    color: white;
+    box-shadow: 0 8px 20px rgba(124, 58, 237, .35);
+  }
+
+  .dark .btn-primary:hover:not(:disabled) {
+    background: linear-gradient(180deg, #9D6BFF, #8B5CF6);
+    transform: translateY(-1px);
+    box-shadow: 0 10px 24px rgba(124, 58, 237, .45);
   }
 
   .btn-secondary {
@@ -192,6 +250,16 @@
   .input::placeholder {
     color: var(--foreground-muted);
     opacity: 0.7;
+  }
+
+  .dark .input {
+    background: #0E0E0E;
+    border: 1px solid #2A2A2A;
+  }
+
+  .dark .input:focus {
+    border-color: #8B5CF6;
+    box-shadow: 0 0 0 3px rgba(139, 92, 246, .18);
   }
 
   /* ── Status badges — literal classes for Tailwind purge safety ─────── */
