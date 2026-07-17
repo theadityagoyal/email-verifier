@@ -136,3 +136,30 @@ export function istDateKey(date) {
 export function istMonthKey(date) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: IST_TIMEZONE, year: 'numeric', month: '2-digit' }).format(date);
 }
+
+/**
+ * NEW — short human duration between two UTC ISO strings, e.g. "45s",
+ * "1m 24s", "2h 05m". Used by the redesigned Bulk Upload history cards
+ * (JobCard.jsx) to show job duration.
+ *
+ * If `endDateString` is omitted/null, measures up to "now" — safe to call
+ * on every render for an in-progress job since it naturally ticks forward
+ * on each poll-triggered re-render, no separate timer needed.
+ */
+export function formatDurationShort(startDateString, endDateString) {
+  if (!startDateString) return '—';
+  const start = parseUTC(startDateString);
+  const end = endDateString ? parseUTC(endDateString) : new Date();
+  let diffSec = Math.floor((end.getTime() - start.getTime()) / 1000);
+  if (!Number.isFinite(diffSec) || diffSec < 0) diffSec = 0;
+
+  if (diffSec < 60) return `${diffSec}s`;
+
+  const totalMin = Math.floor(diffSec / 60);
+  const sec = diffSec % 60;
+  if (totalMin < 60) return `${totalMin}m ${sec}s`;
+
+  const hr = Math.floor(totalMin / 60);
+  const remMin = totalMin % 60;
+  return `${hr}h ${remMin}m`;
+}
