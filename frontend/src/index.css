@@ -2,6 +2,10 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Dual-sans pairing per DESIGN.md: Geist for headlines/metrics (technical,
+   high-impact), Inter for body/labels (legibility at small sizes). */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Geist:wght@400;500;600;700;800&display=swap');
+
 /* ============================================================
    DESIGN TOKENS — layered surfaces instead of flat gray.
    Light: premium white surfaces, soft shadows.
@@ -10,35 +14,67 @@
    brand accents, matching the reference dashboard screenshot.
    ============================================================ */
 :root {
-  /* Layered light surfaces */
-  --background: #F8FAFC;
+  /* ===== Layered light surfaces =====
+     Background is a whisper of warm gray (not pure #fff) so cards can
+     read as "raised" against it — pure-white-on-white had almost no
+     depth cue without a shadow doing all the work. */
+  --background: #F6F6F8;
   --surface: #FFFFFF;
   --card: #FFFFFF;
-  --card-hover: #F1F5F9;
-  --muted: #E2E8F0;
-  --border: #E2E8F0;
+  --card-hover: #F3F1FA;   /* subtle violet-tinted hover, not flat gray */
+  --muted: #ECECF1;
+  --border: #E4E4EA;
 
-  --foreground: #0F172A;
-  --foreground-secondary: #475569;
-  --foreground-muted: #64748B;
+  /* ===== Text =====
+     Near-black instead of navy-900 — reads as neutral ink, not
+     blue-tinted, and pairs cleanly with the violet brand color. */
+  --foreground: #16161A;
+  --foreground-secondary: #4B4B55;
+  --foreground-muted: #7A7A87;
 
-  --primary: #6366F1;
-  --primary-hover: #4F46E5;
-  --secondary: #818CF8;
-  --accent: #10B981;
-  --accent-hover: #0EA271;
+  /* ===== Brand — same violet/green family as the dark theme, shifted
+     to 600-weight shades for AA contrast on a light background ===== */
+  --primary: #7C3AED;
+  --primary-hover: #6D28D9;
+  --secondary: #A78BFA;
 
-  --success: #10B981;
-  --error: #EF4444;
-  --warning: #F59E0B;
-  --info: #3B82F6;
+  --accent: #16A34A;
+  --accent-hover: #15803D;
 
-  --primary-rgb: 99, 102, 241;
-  --accent-rgb: 16, 185, 129;
-  --accent-hover-rgb: 14, 162, 113;
+  --success: #16A34A;
+  --error: #DC2626;
+  --warning: #D97706;
+  --info: #2563EB;
 
-  --shadow-color: 15, 23, 42;
+  --primary-rgb: 124, 58, 237;
+  --accent-rgb: 22, 163, 74;
+  --accent-hover-rgb: 21, 128, 61;
+
+  --shadow-color: 23, 23, 30;
   --ring: var(--primary);
+
+  /* ===== Layout & Spacing (DESIGN.md) — theme-independent, so they live
+     once in :root rather than being repeated in .dark ===== */
+  --container-max: 1440px;
+  --margin-page: 2rem;        /* 32px desktop */
+  --margin-page-mobile: 1rem; /* 16px mobile */
+  --gutter: 1.5rem;           /* 24px between cards */
+  --stack-sm: 0.5rem;
+  --stack-md: 1rem;
+  --stack-lg: 2rem;
+  --card-padding: 1.5rem; /* 24px internal card padding per DESIGN.md */
+
+  /* ===== Shape scale (DESIGN.md) ===== */
+  --radius-sm: 0.25rem;   /* 4px */
+  --radius: 0.5rem;       /* 8px — inputs, buttons, small elements */
+  --radius-md: 0.75rem;   /* 12px */
+  --radius-lg: 1rem;      /* 16px — dashboard cards */
+  --radius-xl: 1.5rem;    /* 24px */
+  --radius-full: 9999px;  /* pill chips, avatars */
+
+  /* ===== Typography families (DESIGN.md dual-sans pairing) ===== */
+  --font-headline: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --font-body: 'Inter', ui-sans-serif, system-ui, sans-serif;
 }
 
 .dark {
@@ -89,6 +125,7 @@
 
   body {
     @apply bg-[var(--background)] text-[var(--foreground)] antialiased;
+    font-family: var(--font-body);
     font-feature-settings: "cv11", "ss01";
     text-rendering: optimizeLegibility;
 
@@ -145,10 +182,101 @@
 }
 
 @layer components {
+  /* ════════════════════════════════════════════════════════════════
+     TYPOGRAPHY (DESIGN.md) — Geist for headlines/metrics, Inter for
+     body/labels. Use these instead of ad-hoc text-* + font-* combos so
+     the type scale stays consistent everywhere.
+     ════════════════════════════════════════════════════════════════ */
+  .text-display-metrics {
+    font-family: var(--font-headline);
+    font-size: 36px;
+    font-weight: 700;
+    line-height: 44px;
+    letter-spacing: -0.02em;
+  }
+
+  .text-headline-lg {
+    font-family: var(--font-headline);
+    font-size: 24px;
+    font-weight: 600;
+    line-height: 32px;
+    letter-spacing: -0.01em;
+  }
+
+  .text-headline-md {
+    font-family: var(--font-headline);
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 28px;
+  }
+
+  .text-body-lg {
+    font-family: var(--font-body);
+    font-size: 16px;
+    font-weight: 400;
+    line-height: 24px;
+  }
+
+  .text-body-md {
+    font-family: var(--font-body);
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 20px;
+  }
+
+  .text-label-sm {
+    font-family: var(--font-body);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 16px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  /* headline-lg collapses to the headline-md scale on mobile — same
+     rule DESIGN.md encodes as a separate "headline-lg-mobile" token */
+  @media (max-width: 640px) {
+    .text-headline-lg {
+      font-size: 20px;
+      line-height: 28px;
+      letter-spacing: normal;
+    }
+  }
+
+  /* ════════════════════════════════════════════════════════════════
+     LAYOUT (DESIGN.md) — fluid 12-col grid, 1440px container, 24px
+     gutters, 32px page margin (16px mobile).
+     ════════════════════════════════════════════════════════════════ */
+  .container-app {
+    max-width: var(--container-max);
+    margin-inline: auto;
+    padding-inline: var(--margin-page);
+  }
+  @media (max-width: 640px) {
+    .container-app {
+      padding-inline: var(--margin-page-mobile);
+    }
+  }
+
+  .gap-gutter {
+    gap: var(--gutter);
+  }
+
   /* ── Card — elevated surface with soft shadow + hover lift ─────────── */
   .card {
-    @apply bg-[var(--card)] rounded-2xl p-6 border border-[var(--border)] transition-all duration-300;
+    @apply bg-[var(--card)] border border-[var(--border)] transition-all duration-300;
+    border-radius: var(--radius-lg);  /* 16px per DESIGN.md */
+    padding: var(--card-padding);     /* 24px per DESIGN.md */
     box-shadow: 0 1px 2px rgba(var(--shadow-color), 0.06), 0 1px 3px rgba(var(--shadow-color), 0.04);
+  }
+
+  /* Bottom border for card headers that precede a complex/multi-table
+     body — DESIGN.md: "Header sections... should use a bottom border of
+     1px if the card contains multiple complex data tables." */
+  .card-header-divider {
+    padding-bottom: var(--stack-md);
+    margin-bottom: var(--stack-md);
+    border-bottom: 1px solid var(--border);
   }
 
   .card:hover {
@@ -199,7 +327,9 @@
 
   /* ── Buttons ─────────────────────────────────────────────────────── */
   .btn-primary {
-    @apply font-semibold px-4 py-2.5 rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer;
+    @apply font-semibold px-4 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer;
+    padding-block: 0.75rem;      /* 12px per DESIGN.md */
+    border-radius: var(--radius); /* 8px per DESIGN.md */
     background-color: var(--accent);
     color: white;
     box-shadow: 0 1px 2px rgba(var(--shadow-color), .08);
@@ -227,7 +357,9 @@
   }
 
   .btn-secondary {
-    @apply font-medium px-4 py-2.5 rounded-xl transition-all duration-200 cursor-pointer;
+    @apply font-medium px-4 transition-all duration-200 cursor-pointer;
+    padding-block: 0.75rem;       /* 12px per DESIGN.md */
+    border-radius: var(--radius); /* 8px per DESIGN.md */
     background: var(--muted);
     color: var(--foreground);
   }
@@ -237,7 +369,8 @@
 
   /* ── Inputs ──────────────────────────────────────────────────────── */
   .input {
-    @apply bg-[var(--surface)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-[var(--foreground)] transition-all duration-200 w-full;
+    @apply bg-[var(--surface)] border border-[var(--border)] px-4 py-2.5 text-[var(--foreground)] transition-all duration-200 w-full;
+    border-radius: var(--radius); /* 8px per DESIGN.md */
   }
   .input:hover {
     border-color: var(--foreground-muted);
@@ -318,4 +451,44 @@
   .glow-text {
     text-shadow: 0 0 24px rgba(var(--primary-rgb), .35);
   }
+
+  /* ════════════════════════════════════════════════════════════════
+     DATA VISUALIZATION (DESIGN.md)
+     ════════════════════════════════════════════════════════════════ */
+
+  /* Progress bar — 8px height, dark track, functional color fill.
+     Usage: <div class="progress-track"><div class="progress-fill
+     progress-fill--success" style="width: 62%" /></div> */
+  .progress-track {
+    width: 100%;
+    height: 8px;
+    border-radius: var(--radius-full);
+    background: var(--muted);
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    border-radius: var(--radius-full);
+    transition: width 0.5s ease;
+  }
+  .progress-fill--success { background: var(--success); }
+  .progress-fill--warning { background: var(--warning); }
+  .progress-fill--error   { background: var(--error); }
+  .progress-fill--info    { background: var(--info); }
+  .progress-fill--primary { background: var(--primary); }
+
+  /* Trend indicator — small bold Geist text + icon, colored by direction.
+     Usage: <span class="trend-indicator trend-indicator--up"><Icon
+     class="h-3.5 w-3.5" />12%</span> */
+  .trend-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-family: var(--font-headline);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .trend-indicator--up { color: var(--success); }
+  .trend-indicator--down { color: var(--error); }
+  .trend-indicator--neutral { color: var(--foreground-muted); }
 }
