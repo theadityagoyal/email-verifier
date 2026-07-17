@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Copy, Check, FileDown, Code2, RotateCcw } from 'lucide-react';
+import { Copy, Check, FileDown, RotateCcw } from 'lucide-react';
 import Button from '@/components/ui/Button';
 
 /**
@@ -33,13 +33,6 @@ export default function QuickActions({ email, result, onVerifyAnother }) {
     setTimeout(() => setCopiedResult(false), 1800);
   };
 
-  const handleViewRaw = () => {
-    const el = document.getElementById('technical-details');
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-  };
-
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button variant="outline" size="sm" onClick={handleCopyEmail}>
@@ -53,10 +46,6 @@ export default function QuickActions({ email, result, onVerifyAnother }) {
       <Button variant="outline" size="sm" onClick={triggerPrintReport}>
         <FileDown className="h-3.5 w-3.5" />
         Download PDF Report
-      </Button>
-      <Button variant="outline" size="sm" onClick={handleViewRaw}>
-        <Code2 className="h-3.5 w-3.5" />
-        View Raw Details
       </Button>
       <Button variant="ghost" size="sm" onClick={onVerifyAnother}>
         <RotateCcw className="h-3.5 w-3.5" />

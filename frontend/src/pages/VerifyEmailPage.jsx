@@ -13,17 +13,20 @@ import ScoreRing from '@/components/verify/ScoreRing';
 import RecommendationBanner from '@/components/verify/RecommendationBanner';
 import WhyThisScore from '@/components/verify/WhyThisScore';
 import UsernameAnalysisCard from '@/components/verify/UsernameAnalysisCard';
-import TechnicalDetailsAccordion from '@/components/verify/TechnicalDetailsAccordion';
 import StatusLegend from '@/components/verify/StatusLegend';
 import QuickActions from '@/components/verify/QuickActions';
 import RecentVerificationsList from '@/components/verify/RecentVerificationsList';
 
-// ── Animation timing (tuned to land the full sequence around ~2.5-3s) ──────
+// ── Animation timing ────────────────────────────────────────────────────────
+// Checks reveal one-by-one for a "live scanning" feel. The moment the LAST
+// check resolves, score + recommendation + details reveal IMMEDIATELY — no
+// extra pause/spinner sitting between "7/7 done" and the actual result.
+// (Old code had POST_CHECKS_PAUSE_MS + SCORE_COUNT_MS + POST_SCORE_PAUSE_MS
+// as blocking delays here — ~1050ms of "looks stuck" after the last check
+// already went green. That block is gone; ScoreRing still animates its own
+// count-up internally, but that's a visual flourish, not a wait.)
 const CHECK_STEP_MS = 300; // time between each check starting
 const CHECKING_SPINNER_MS = 200; // how long the spinner shows before resolving
-const POST_CHECKS_PAUSE_MS = 250; // pause before the score starts counting
-const SCORE_COUNT_MS = 900; // score ring count-up duration
-const POST_SCORE_PAUSE_MS = 150; // pause before recommendation/detail sections reveal
 
 function formatSeconds(ms) {
   if (ms == null) return null;
@@ -41,6 +44,7 @@ export default function VerifyEmailPage() {
 
   const timeoutsRef = useRef([]);
   const startTimeRef = useRef(null);
+  const inputRef = useRef(null);
 
   const clearAllTimeouts = () => {
     timeoutsRef.current.forEach((id) => clearTimeout(id));
@@ -91,6 +95,7 @@ export default function VerifyEmailPage() {
     CHECK_DEFS.forEach((def, i) => {
       const startAt = i * CHECK_STEP_MS;
       const resolveAt = startAt + CHECKING_SPINNER_MS;
+      const isLast = i === CHECK_DEFS.length - 1;
 
       timeoutsRef.current.push(
         setTimeout(() => {
@@ -100,25 +105,16 @@ export default function VerifyEmailPage() {
       timeoutsRef.current.push(
         setTimeout(() => {
           setCheckPhases((prev) => ({ ...prev, [def.key]: 'resolved' }));
+          // FIX (Issue 3): reveal everything the instant the last check
+          // resolves. No artificial gap, no second loading state.
+          if (isLast) {
+            setScoreRevealed(true);
+            setDetailsRevealed(true);
+            setPhase('complete');
+          }
         }, resolveAt)
       );
     });
-
-    const allChecksDoneAt = CHECK_DEFS.length * CHECK_STEP_MS;
-    const scoreStartAt = allChecksDoneAt + POST_CHECKS_PAUSE_MS;
-    const detailsRevealAt = scoreStartAt + SCORE_COUNT_MS + POST_SCORE_PAUSE_MS;
-
-    timeoutsRef.current.push(
-      setTimeout(() => {
-        setScoreRevealed(true);
-      }, scoreStartAt)
-    );
-    timeoutsRef.current.push(
-      setTimeout(() => {
-        setDetailsRevealed(true);
-        setPhase('complete');
-      }, detailsRevealAt)
-    );
   }, []);
 
   const { data: recentData } = useQuery({
@@ -133,13 +129,24 @@ export default function VerifyEmailPage() {
     refetchInterval: 30000,
   });
 
+  // Covers BOTH the real network wait (verifyMutation.isPending) AND the
+  // staged check-reveal animation (phase === 'verifying'). Using only
+  // `phase` here would leave a gap during the actual API call — before
+  // runRevealSequence() ever fires — where a fast double-click/double-Enter
+  // could fire two verifications at once.
+  const isBusy = verifyMutation.isPending || phase === 'verifying';
+
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!email.trim() || verifyMutation.isPending) return;
+    if (!email.trim() || isBusy) return;
     startTimeRef.current = performance.now();
     verifyMutation.mutate(email.trim().toLowerCase());
   };
 
+  // FIX (Issue 1): the input never unmounts anymore, so this is no longer
+  // required to "get back" to a usable search bar — it's just a convenience
+  // clear+focus, wired to the existing "Verify Another Email" button in
+  // QuickActions so that button still works but nothing depends on it.
   const handleReset = () => {
     clearAllTimeouts();
     setPhase('idle');
@@ -147,6 +154,7 @@ export default function VerifyEmailPage() {
     setEmail('');
     setScoreRevealed(false);
     setDetailsRevealed(false);
+    inputRef.current?.focus();
   };
 
   const handleVerifyAnother = () => {
@@ -187,151 +195,160 @@ export default function VerifyEmailPage() {
 
       <div className="grid grid-cols-1 xl:grid-cols-[2fr_1fr] gap-6 items-start">
         <div className="space-y-6">
-          {/* ── THE SAME CARD — transforms across idle / verifying / complete ── */}
+          {/* ── PERSISTENT CARD ──────────────────────────────────────────────
+              FIX (Issue 1): the input form is now ALWAYS rendered — it never
+              gets swapped out by an idle/verifying/complete AnimatePresence
+              transform like before. Results simply grow underneath it in
+              the same card. User can replace the email and hit Verify again
+              without ever losing the search bar or scrolling to a button. */}
           <motion.div layout className="card overflow-hidden">
-            <AnimatePresence mode="wait" initial={false}>
-              {phase === 'idle' && (
+            <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3">
+              <div className="relative flex-1">
+                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-[var(--foreground)]/40" aria-hidden="true" />
+                <label htmlFor="verify-email-input" className="sr-only">Email address to verify</label>
+                <input
+                  ref={inputRef}
+                  id="verify-email-input"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Enter email address (e.g., user@example.com)"
+                  className="input pl-12 pr-10 py-3 text-lg w-full !bg-[var(--card)] !border !border-[var(--muted)] !text-[var(--foreground)] disabled:opacity-60"
+                  autoComplete="email"
+                  autoFocus
+                  disabled={isBusy}
+                />
+                {email && !isBusy && (
+                  <button
+                    type="button"
+                    onClick={() => setEmail('')}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-[var(--foreground)]/40 hover:text-[var(--foreground)] transition-colors"
+                    aria-label="Clear email"
+                  >
+                    <XIcon className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+              <button
+                type="submit"
+                disabled={!email.trim() || isBusy}
+                className="btn-primary sm:w-auto whitespace-nowrap flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isBusy ? (
+                  <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Search className="h-5 w-5" aria-hidden="true" />
+                )}
+                {isBusy ? 'Verifying…' : 'Verify Email'}
+              </button>
+            </form>
+
+            {!result && (
+              <>
+                <p className="text-sm text-[var(--foreground)]/50 mt-4">
+                  We'll check 7 key signals to calculate a deliverability score.
+                </p>
+                <div className="flex flex-wrap gap-2 mt-4">
+                  {CHECK_DEFS.map(({ key, title, icon: Icon }) => (
+                    <span
+                      key={key}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border border-[var(--muted)] text-[var(--foreground)]/60"
+                    >
+                      <Icon className="h-3.5 w-3.5" aria-hidden="true" /> {title}
+                    </span>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* Results grow inside the SAME card, below the input — no card
+                swap, no unmount. On a re-verify, this block stays mounted
+                (result was already truthy) and just updates in place, so
+                "previous result updates with the new verification" instead
+                of flashing/resetting. */}
+            <AnimatePresence>
+              {result && (
                 <motion.div
-                  key="idle"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
                   transition={{ duration: 0.25 }}
+                  className="overflow-hidden"
                 >
-                  <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3">
-                    <div className="relative flex-1">
-                      <Mail className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-[var(--foreground)]/40" aria-hidden="true" />
-                      <label htmlFor="verify-email-input" className="sr-only">Email address to verify</label>
-                      <input
-                        id="verify-email-input"
-                        type="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        placeholder="Enter email address (e.g., user@example.com)"
-                        className="input pl-12 pr-10 py-3 text-lg w-full !bg-[var(--card)] !border !border-[var(--muted)] !text-[var(--foreground)]"
-                        autoComplete="email"
-                        autoFocus
-                      />
-                      {email && (
-                        <button
-                          type="button"
-                          onClick={() => setEmail('')}
-                          className="absolute right-4 top-1/2 -translate-y-1/2 text-[var(--foreground)]/40 hover:text-[var(--foreground)] transition-colors"
-                          aria-label="Clear email"
-                        >
-                          <XIcon className="h-4 w-4" />
-                        </button>
+                  <div className="pt-5 mt-5 border-t border-[var(--muted)] space-y-5">
+                    {/* Header row — email + status */}
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm text-[var(--foreground)]/50">Email</p>
+                        <p className="text-xl font-mono font-semibold text-[var(--foreground)] break-all">{result.email}</p>
+                      </div>
+                      {phase === 'verifying' && (
+                        <div className="flex items-center gap-2 text-sm text-[var(--primary)] shrink-0">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Checking {Object.values(checkPhases).filter((p) => p !== 'idle').length} of {CHECK_DEFS.length}
+                        </div>
+                      )}
+                      {phase === 'complete' && (
+                        <div className="flex items-center gap-2 text-sm text-success shrink-0">
+                          <CheckCircle className="h-4 w-4" />
+                          Verification Completed
+                          {verifyDurationMs != null && (
+                            <span className="text-[var(--foreground)]/40">· {formatSeconds(verifyDurationMs)}</span>
+                          )}
+                        </div>
                       )}
                     </div>
-                    <button
-                      type="submit"
-                      disabled={!email.trim()}
-                      className="btn-primary sm:w-auto whitespace-nowrap flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <Search className="h-5 w-5" aria-hidden="true" />
-                      Verify Email
-                    </button>
-                  </form>
-                  <p className="text-sm text-[var(--foreground)]/50 mt-4">
-                    We'll check 7 key signals to calculate a deliverability score.
-                  </p>
 
-                  <div className="flex flex-wrap gap-2 mt-4">
-                    {CHECK_DEFS.map(({ key, title, icon: Icon }) => (
-                      <span
-                        key={key}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border border-[var(--muted)] text-[var(--foreground)]/60"
-                      >
-                        <Icon className="h-3.5 w-3.5" aria-hidden="true" /> {title}
-                      </span>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-
-              {(phase === 'verifying' || phase === 'complete') && result && (
-                <motion.div
-                  key="active"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.25 }}
-                  className="space-y-5"
-                >
-                  {/* Header row — email + status */}
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm text-[var(--foreground)]/50">Email</p>
-                      <p className="text-xl font-mono font-semibold text-[var(--foreground)] break-all">{result.email}</p>
-                    </div>
+                    {/* Progress bar during verifying */}
                     {phase === 'verifying' && (
-                      <div className="flex items-center gap-2 text-sm text-[var(--primary)] shrink-0">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Checking {Object.values(checkPhases).filter((p) => p !== 'idle').length} of {CHECK_DEFS.length}
-                      </div>
-                    )}
-                    {phase === 'complete' && (
-                      <div className="flex items-center gap-2 text-sm text-success shrink-0">
-                        <CheckCircle className="h-4 w-4" />
-                        Verification Completed
-                        {verifyDurationMs != null && (
-                          <span className="text-[var(--foreground)]/40">· {formatSeconds(verifyDurationMs)}</span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Progress bar during verifying */}
-                  {phase === 'verifying' && (
-                    <div className="h-1.5 w-full rounded-full bg-[var(--muted)] overflow-hidden">
-                      <motion.div
-                        className="h-full rounded-full bg-[var(--primary)]"
-                        initial={{ width: '0%' }}
-                        animate={{
-                          width: `${(Object.values(checkPhases).filter((p) => p === 'resolved').length / CHECK_DEFS.length) * 100}%`,
-                        }}
-                        transition={{ duration: 0.25 }}
-                      />
-                    </div>
-                  )}
-
-                  {/* Recommendation banner + score — reveal only once detailsRevealed */}
-                  {detailsRevealed && recommendation && (
-                    <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-4 items-center">
-                      <RecommendationBanner recommendation={recommendation} reason={scoreReason} />
-                      <div className="flex justify-center sm:justify-end">
-                        <ScoreRing value={result.score} animate={scoreRevealed} color={recommendation.color} />
-                      </div>
-                    </div>
-                  )}
-                  {!detailsRevealed && scoreRevealed && (
-                    <div className="flex justify-center py-2">
-                      <ScoreRing value={result.score} animate color="primary" />
-                    </div>
-                  )}
-
-                  {/* Horizontal checks row — always visible, animates left to right */}
-                  <div className="flex flex-wrap gap-2.5">
-                    {CHECK_DEFS.map((def) => {
-                      const phaseForCheck = checkPhases[def.key];
-                      const resolved = phaseForCheck === 'resolved' ? resolvedChecks.find((c) => c.key === def.key) : null;
-                      return (
-                        <CheckCard
-                          key={def.key}
-                          title={def.title}
-                          Icon={def.icon}
-                          phase={phaseForCheck}
-                          resolved={resolved}
+                      <div className="h-1.5 w-full rounded-full bg-[var(--muted)] overflow-hidden">
+                        <motion.div
+                          className="h-full rounded-full bg-[var(--primary)]"
+                          initial={{ width: '0%' }}
+                          animate={{
+                            width: `${(Object.values(checkPhases).filter((p) => p === 'resolved').length / CHECK_DEFS.length) * 100}%`,
+                          }}
+                          transition={{ duration: 0.25 }}
                         />
-                      );
-                    })}
+                      </div>
+                    )}
+
+                    {/* Recommendation banner + score — reveal instantly once
+                        the last check resolves (see runRevealSequence). */}
+                    {detailsRevealed && recommendation && (
+                      <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-4 items-center">
+                        <RecommendationBanner recommendation={recommendation} reason={scoreReason} />
+                        <div className="flex justify-center sm:justify-end">
+                          <ScoreRing value={result.score} animate={scoreRevealed} color={recommendation.color} />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Horizontal checks row — always visible, animates left to right */}
+                    <div className="flex flex-wrap gap-2.5">
+                      {CHECK_DEFS.map((def) => {
+                        const phaseForCheck = checkPhases[def.key];
+                        const resolved = phaseForCheck === 'resolved' ? resolvedChecks.find((c) => c.key === def.key) : null;
+                        return (
+                          <CheckCard
+                            key={def.key}
+                            title={def.title}
+                            Icon={def.icon}
+                            phase={phaseForCheck}
+                            resolved={resolved}
+                          />
+                        );
+                      })}
+                    </div>
                   </div>
                 </motion.div>
               )}
             </AnimatePresence>
           </motion.div>
 
-          {/* ── Rest of the completed result — Why this score / Username / Domain / Quick Actions ── */}
+          {/* ── Rest of the completed result — Why this score / Username / Domain / Quick Actions ──
+              FIX (Issue 2): Technical Details accordion is completely gone —
+              no import, no render, no raw-fields mapping. */}
           <AnimatePresence>
             {detailsRevealed && result && (
               <motion.div
@@ -368,10 +385,6 @@ export default function VerifyEmailPage() {
 
                 <div className="no-print">
                   <QuickActions email={result.email} result={result} onVerifyAnother={handleVerifyAnother} />
-                </div>
-
-                <div className="no-print">
-                  <TechnicalDetailsAccordion result={result} />
                 </div>
               </motion.div>
             )}
