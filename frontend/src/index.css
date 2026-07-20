@@ -1,10 +1,15 @@
+/* Dual-sans pairing per DESIGN.md: Geist for headlines/metrics (technical,
+   high-impact), Inter for body/labels (legibility at small sizes).
+   NOTE: @import MUST be the very first statement in the file (only
+   @charset or an empty @layer are allowed before it) — that's why this
+   moved above the @tailwind directives. Previously it sat after them,
+   which Vite's CSS processor warned about (harmless in dev, but not
+   spec-compliant and can silently be dropped by some minifiers/browsers). */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Geist:wght@400;500;600;700;800&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-/* Dual-sans pairing per DESIGN.md: Geist for headlines/metrics (technical,
-   high-impact), Inter for body/labels (legibility at small sizes). */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Geist:wght@400;500;600;700;800&display=swap');
 
 /* ============================================================
    DESIGN TOKENS — layered surfaces instead of flat gray.
