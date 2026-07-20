@@ -323,7 +323,18 @@ function StatusGroup({ title, statuses, perStatusCounts, bucketTotal, totalEmail
   );
 }
 
-function TrustScoreCard({ trustScore, trustScoreColor, trustScoreLabel, textClassMap, badgeClassMap }) {
+/**
+ * FIX (bug report — 20 Jul 2026): "79%" was being rendered TWICE in this
+ * card — once inside CircularProgress's own ring (its SVG label), and a
+ * second time here as a standalone `text-5xl` line right next to it. On
+ * screen this looked like the Trust Score number duplicated itself.
+ *
+ * Fix: keep the number in exactly ONE place — inside the ring (that's the
+ * primary visual per the design mockup). This card now only shows the
+ * "Trust Score" label + info tooltip + the safe/needs-review badge next to
+ * the ring, with no repeated percentage text.
+ */
+function TrustScoreCard({ trustScore, trustScoreColor, trustScoreLabel, badgeClassMap }) {
   return (
     <motion.div variants={itemVariants} className="card overflow-hidden relative">
       <div className="flex items-center justify-between gap-6 flex-wrap">
@@ -334,7 +345,6 @@ function TrustScoreCard({ trustScore, trustScoreColor, trustScoreLabel, textClas
               Trust Score
               <InfoTooltip text="Percentage of all-time verified emails classified as Safe (verified, deliverable, trusted, or probably valid)." />
             </p>
-            <p className={`text-5xl font-bold mt-1 ${textClassMap[trustScoreColor]}`}>{trustScore}%</p>
             <div className="mt-2">
               <span className={`text-xs font-medium px-2.5 py-0.5 rounded-md ${badgeClassMap[trustScoreColor]}`}>
                 {trustScoreLabel}
@@ -1038,11 +1048,6 @@ export default function DashboardPage() {
     warning: 'bg-warning/15 text-warning',
     error: 'bg-error/15 text-error',
   };
-  const textClassMap = {
-    success: 'text-success',
-    warning: 'text-warning',
-    error: 'text-error',
-  };
 
   const verifiedCount = (bucketCounts.safe || 0) + (bucketCounts.risky || 0) + (bucketCounts.unsafe || 0);
 
@@ -1088,7 +1093,6 @@ export default function DashboardPage() {
         trustScore={trustScore}
         trustScoreColor={trustScoreColor}
         trustScoreLabel={trustScoreLabel}
-        textClassMap={textClassMap}
         badgeClassMap={badgeClassMap}
       />
 
