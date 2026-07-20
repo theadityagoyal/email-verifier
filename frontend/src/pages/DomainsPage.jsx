@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 
-import { listDomains, getDomainOverview, getDashboardStats, bulkDeleteDomains, downloadDomainsExport } from '@/services/api';
+import { listDomains, getDomainOverview, getDashboardStats, getNewDomainsPerDay, bulkDeleteDomains, downloadDomainsExport } from '@/services/api';
 import { reportError } from '@/utils/errorReporter';
 import { formatChartLabelIST } from '@/utils/dateUtils';
 import { useIsTabVisible } from '@/hooks/useIsTabVisible';
@@ -176,7 +176,7 @@ export default function DomainsPage() {
 
   const { data: topRiskData } = useQuery({
     queryKey: ['domains-top-risk'],
-    queryFn: () => listDomains({ page: 1, size: 5, sort_by: 'risk_percent', sort_order: 'desc' }),
+    queryFn: () => listDomains({ page: 1, size: 5, sort_by: 'risk_percent', sort_order: 'desc', min_emails: 5 }),
     // FIX: "Top 5 Riskiest Domains" card — same story, was static after
     // first load.
     refetchInterval: isTabVisible ? DOMAINS_REFETCH_INTERVAL_MS : false,
@@ -188,6 +188,14 @@ export default function DomainsPage() {
     queryFn: () => getDashboardStats(7),
     // FIX: powers the 7-Day Risk Trend chart + New Domains sparkline on
     // this page — was static after first load.
+    refetchInterval: isTabVisible ? DOMAINS_REFETCH_INTERVAL_MS : false,
+    refetchOnWindowFocus: true,
+  });
+
+  const { data: newDomainsPerDay = [] } = useQuery({
+    queryKey: ['new-domains-per-day', 7],
+    queryFn: () => getNewDomainsPerDay(7),
+    // FIX: provides data for New Domains sparkline — was static after first load.
     refetchInterval: isTabVisible ? DOMAINS_REFETCH_INTERVAL_MS : false,
     refetchOnWindowFocus: true,
   });
@@ -247,14 +255,13 @@ export default function DomainsPage() {
   }, [dailyRiskTrend]);
 
   const newDomainsSparkline = useMemo(() => {
-    const daily = trendStats?.daily_volume || [];
-    return daily
+    return newDomainsPerDay
       .filter((d) => d?.date)
       .map((d) => ({
         date: d.date,
-        count: (d.safe || 0) + (d.risky || 0) + (d.unsafe || 0) + (d.processing || 0),
+        count: d.count || 0,
       }));
-  }, [trendStats]);
+  }, [newDomainsPerDay]);
 
   const newDomainsPct =
     overview && overview.total_domains > 0

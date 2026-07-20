@@ -979,7 +979,7 @@ export default function DashboardPage() {
   // here are real, not re-derived from the coarser dashboard-stats top_domains.
   const { data: leaderboardData } = useQuery({
     queryKey: ['dashboard-domain-leaderboard'],
-    queryFn: () => listDomains({ page: 1, size: 5, sort_by: 'risk_percent', sort_order: 'desc' }),
+    queryFn: () => listDomains({ page: 1, size: 5, sort_by: 'risk_percent', sort_order: 'desc', min_emails: 5 }),
     refetchInterval: isTabVisible ? 15000 : false,
     refetchOnWindowFocus: true,
   });

@@ -1,3 +1,5 @@
+import { useMemo } from 'react';
+
 export type Theme = {
   background: string;
   surface: string;
@@ -33,5 +35,5 @@ function readThemeFromCSS(): Theme {
 }
 
 export const useTheme = (): Theme => {
-  return readThemeFromCSS();
+  return useMemo(() => readThemeFromCSS(), []);
 };

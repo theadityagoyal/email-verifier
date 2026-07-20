@@ -245,8 +245,8 @@ async def _compute_flagged_overview(db: AsyncSession):
     tw = {row.window: row for row in trend_rows}
     recent, prev = tw.get("recent"), tw.get("previous")
 
-    total_flagged_trend_pct = pct_delta(recent.flagged if recent else 0, prev.flagged if prev else 0)
-    high_priority_trend_pct = pct_delta(recent.disposable if recent else 0, prev.disposable if prev else 0)
+    total_flagged_trend_pct = pct_delta(float(recent.flagged) if recent else 0.0, float(prev.flagged) if prev else 0.0)
+    high_priority_trend_pct = pct_delta(float(recent.disposable) if recent else 0.0, float(prev.disposable) if prev else 0.0)
 
     recent_rate = float(recent.flagged / recent.total * 100) if recent and recent.total else 0.0
     prev_rate = float(prev.flagged / prev.total * 100) if prev and prev.total else 0.0
@@ -277,6 +277,7 @@ async def _compute_domain_summary(db: AsyncSession, domain_map: dict, bucket_exp
     now = utc_now_naive()
     week_start = now - timedelta(days=TREND_WINDOW_DAYS)
     prev_week_start = now - timedelta(days=TREND_WINDOW_DAYS * 2)
+    prev_week_start_minus = prev_week_start - timedelta(days=TREND_WINDOW_DAYS)
 
     all_domains = list(domain_map.values())
     for d in all_domains:
@@ -296,47 +297,112 @@ async def _compute_domain_summary(db: AsyncSession, domain_map: dict, bucket_exp
             return round(((cur - prev) / prev) * 100, 1)
         return 100.0 if cur else 0.0
 
-    domain_trend = {}
+    # Helper function to compute trend from rows
+    def _compute_trend_from_rows(rows, domain_names, trend_delta_pct):
+        trends = {}
+        for domain, window, bad, total in rows:
+            if domain not in trends:
+                trends[domain] = {}
+            trends[domain][window] = (bad, total)
+        result = {}
+        for domain in domain_names:
+            if domain not in trends:
+                result[domain] = "stable"
+                continue
+            windows = trends[domain]
+            recent = windows.get("recent", (0, 0))
+            previous = windows.get("previous", (0, 0))
+            r_bad_raw, r_tot_raw = recent
+            p_bad_raw, p_tot_raw = previous
+            # Convert to float to avoid Decimal/float incompatibility
+            if r_bad_raw is not None:
+                r_bad = float(r_bad_raw)
+            else:
+                r_bad = 0.0
+            if r_tot_raw is not None:
+                r_tot = float(r_tot_raw)
+            else:
+                r_tot = 0.0
+            if p_bad_raw is not None:
+                p_bad = float(p_bad_raw)
+            else:
+                p_bad = 0.0
+            if p_tot_raw is not None:
+                p_tot = float(p_tot_raw)
+            else:
+                p_tot = 0.0
+            if r_tot == 0 or p_tot == 0:
+                trend = "stable"
+            else:
+                r_pct = (r_bad / r_tot) * 100.0
+                p_pct = (p_bad / p_tot) * 100.0
+                delta = r_pct - p_pct
+                if delta < -trend_delta_pct:
+                    trend = "down"
+                elif delta > trend_delta_pct:
+                    trend = "up"
+                else:
+                    trend = "stable"
+            result[domain] = trend
+        return result
+
     domain_names = [d["domain"] for d in sample_domains]
+
+    # Compute current trend: recent week [week_start, now) vs previous week [prev_week_start, week_start)
+    current_trend = {}
     if domain_names:
-        window_expr = case((Email.created_at >= week_start, "recent"), else_="previous")
-        rows = (
+        window_expr_current = case(
+            (Email.created_at >= week_start, "recent"),
+            else_="previous"
+        )
+        rows_current = (
             await db.execute(
                 select(
                     Email.domain,
-                    window_expr.label("window"),
+                    window_expr_current.label("window"),
                     func.sum(case((bucket_expr.in_(["risky", "unsafe"]), 1), else_=0)).label("bad"),
                     func.count(Email.id).label("total"),
                 )
                 .where(Email.domain.in_(domain_names), Email.created_at >= prev_week_start)
-                .group_by(Email.domain, window_expr)
+                .group_by(Email.domain, window_expr_current)
             )
         ).all()
-        stats = {}
-        for domain, window, bad, tot in rows:
-            stats.setdefault(domain, {})[window] = (bad, tot)
-        for domain, windows in stats.items():
-            r_bad, r_tot = windows.get("recent", (0, 0))
-            p_bad, p_tot = windows.get("previous", (0, 0))
-            if r_tot and p_tot:
-                delta = (r_bad / r_tot * 100) - (p_bad / p_tot * 100)
-                domain_trend[domain] = (
-                    "down" if delta < -TREND_DELTA_PCT else ("up" if delta > TREND_DELTA_PCT else "stable")
+        current_trend = _compute_trend_from_rows(rows_current, domain_names, TREND_DELTA_PCT)
+
+    # Compute prior trend: recent week [prev_week_start, week_start) vs previous week [prev_week_start_minus, prev_week_start)
+    prior_trend = {}
+    if domain_names:
+        window_expr_prior = case(
+            (Email.created_at >= prev_week_start, "recent"),
+            else_="previous"
+        )
+        rows_prior = (
+            await db.execute(
+                select(
+                    Email.domain,
+                    window_expr_prior.label("window"),
+                    func.sum(case((bucket_expr.in_(["risky", "unsafe"]), 1), else_=0)).label("bad"),
+                    func.count(Email.id).label("total"),
                 )
-            else:
-                domain_trend[domain] = "stable"
+                .where(Email.domain.in_(domain_names), Email.created_at >= prev_week_start_minus, Email.created_at < week_start)
+                .group_by(Email.domain, window_expr_prior)
+            )
+        ).all()
+        prior_trend = _compute_trend_from_rows(rows_prior, domain_names, TREND_DELTA_PCT)
 
-    improving_count = sum(1 for t in domain_trend.values() if t == "down")
+    improving_count = sum(1 for trend in current_trend.values() if trend == "down")
+    prior_improving_count = sum(1 for trend in prior_trend.values() if trend == "down")
 
-    prev_rows = (
+    # Previous week's statistics: [prev_week_start, week_start)
+    prev_week_rows = (
         await db.execute(
             select(Email.domain, bucket_expr.label("bucket"), func.count(Email.id))
-            .where(Email.domain.isnot(None), Email.created_at < week_start)
+            .where(Email.domain.isnot(None), Email.created_at >= prev_week_start, Email.created_at < week_start)
             .group_by(Email.domain, bucket_expr)
         )
     ).all()
     prev_map = {}
-    for domain, bucket, count in prev_rows:
+    for domain, bucket, count in prev_week_rows:
         entry = prev_map.setdefault(domain, {"safe": 0, "risky": 0, "unsafe": 0})
         entry[bucket] = entry.get(bucket, 0) + count
 
@@ -359,7 +425,7 @@ async def _compute_domain_summary(db: AsyncSession, domain_map: dict, bucket_exp
         total_domains=total_domains_count,
         total_domains_trend_pct=pct_delta(total_domains_count, prev_total_domains),
         improving_count=improving_count,
-        improving_trend_pct=pct_delta(improving_count, 0),
+        improving_trend_pct=pct_delta(improving_count, prior_improving_count),
     )
 
 

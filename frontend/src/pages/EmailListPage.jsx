@@ -9,6 +9,7 @@ import {
   ArrowUpDown, ArrowUp, ArrowDown, Globe, Shield, AlertCircle, Info, Calendar,
   ChevronLeft, ChevronRight, Loader2
 } from 'lucide-react';
+import { getPageWindow } from '@/utils/pagination';
 import { listEmails, downloadEmailsExport, deleteEmail, getDashboardStats } from '@/services/api';
 import StatusBadge from '@/components/ui/StatusBadge';
 import Button from '@/components/ui/Button';
@@ -39,6 +40,8 @@ const flaggedOptions = [
   { value: 'role_based', label: 'Role Based Only' },
   { value: 'catch_all', label: 'Catch All Only' },
 ];
+
+import SortHeader from '@/components/pages/SortHeader';
 
 // FIX (audit #7): fields the backend actually accepts sort_by for now
 // (SORTABLE_EMAIL_FIELDS in dashboard.py). Kept as a whitelist here too so
@@ -98,22 +101,6 @@ function KpiCard({ icon: Icon, iconBg, iconColor, label, value, subtitle, subtit
   );
 }
 
-function getPageNumbers(current, total) {
-  const pages = [];
-  const windowSize = 1;
-
-  pages.push(1);
-  if (current - windowSize > 2) pages.push('...');
-
-  for (let p = Math.max(2, current - windowSize); p <= Math.min(total - 1, current + windowSize); p++) {
-    pages.push(p);
-  }
-
-  if (current + windowSize < total - 1) pages.push('...');
-  if (total > 1) pages.push(total);
-
-  return pages;
-}
 
 export default function EmailListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -620,17 +607,13 @@ export default function EmailListPage() {
                             aria-label="Select all emails on this page"
                           />
                         ) : col.sortable ? (
-                          <button
-                            onClick={() => handleSort(col.key)}
-                            className="flex items-center gap-1 hover:text-[var(--foreground)] transition-colors"
-                          >
-                            <span>{col.label}</span>
-                            {sortConfig.key === col.key ? (
-                              sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3 text-[var(--foreground)]" /> : <ArrowDown className="h-3 w-3 text-[var(--foreground)]" />
-                            ) : (
-                              <ArrowUpDown className="h-3 w-3 text-[var(--foreground)]/30" />
-                            )}
-                          </button>
+                            <SortHeader
+                              label={col.label}
+                              field={col.key}
+                              sortBy={sortConfig.key}
+                              sortOrder={sortConfig.direction}
+                              onSort={handleSort}
+                            />
                         ) : (
                           col.label
                         )}
@@ -755,7 +738,7 @@ export default function EmailListPage() {
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
 
-                {getPageNumbers(page, totalPages).map((p, idx) =>
+                {getPageWindow(page, totalPages).map((p, idx) =>
                   p === '...' ? (
                     <span key={`ellipsis-${idx}`} className="px-2 text-sm text-[var(--foreground)]/40">...</span>
                   ) : (
