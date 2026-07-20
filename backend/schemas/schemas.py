@@ -44,6 +44,29 @@ class EmailVerifyResponse(BaseModel):
 
 
 class JobStatusResponse(BaseModel):
+    """
+    Response shape for GET /api/v1/jobs/{job_id} (the endpoint the frontend
+    polls every 2s while a bulk job is running — see BulkUploadPage.jsx's
+    pollJob()).
+
+    FIX (progress % stuck bug): this schema previously only declared
+    job_id/file_name/status/total/processed/verified/invalid/risky.
+    FastAPI's response_model strips any attribute not declared here — so
+    even though tasks/bulk_processor.py's _update_job_counter() was
+    correctly computing and saving progress_percent/current_stage/
+    estimated_time_remaining to the DB on every processed email, those
+    fields never made it into the polled response. The frontend's merge
+    logic only overwrites keys that are actually present in the response,
+    so progress_percent silently froze at whatever value happened to load
+    initially from GET /jobs (the jobs-list endpoint, which has no
+    response_model and therefore leaked every SQLAlchemy attribute
+    through unfiltered — which is why the very first render was correct
+    and every poll after that was not).
+
+    All fields below already exist on the Job DB model (models/models.py)
+    and were already being populated — this change only makes them visible
+    in the API response. Purely additive / backward compatible.
+    """
     job_id: str
     file_name: Optional[str]
     status: JobStatus
@@ -53,6 +76,16 @@ class JobStatusResponse(BaseModel):
     invalid: int
     risky: int
 
+    # ── NEW: previously silently stripped from this response ──────────────
+    current_stage: Optional[str] = None
+    progress_percent: int = 0
+    estimated_time_remaining: Optional[int] = None
+    cancel_requested: bool = False
+    created_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+
     model_config = {"from_attributes": True}
 
     @field_validator('total', 'processed', 'verified', 'invalid', 'risky')
@@ -60,6 +93,13 @@ class JobStatusResponse(BaseModel):
     def count_must_be_non_negative(cls, v):
         if v < 0:
             raise ValueError('Count must be non-negative')
+        return v
+
+    @field_validator('progress_percent')
+    @classmethod
+    def progress_percent_must_be_valid(cls, v):
+        if not 0 <= v <= 100:
+            raise ValueError('Progress percent must be between 0 and 100')
         return v
 
 

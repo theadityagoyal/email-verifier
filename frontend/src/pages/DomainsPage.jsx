@@ -4,9 +4,10 @@ import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 
-import { listDomains, getDomainOverview, getDashboardStats, getNewDomainsPerDay, bulkDeleteDomains, downloadDomainsExport } from '@/services/api';
+import { listDomains, getDomainOverview, getDashboardStats, bulkDeleteDomains, downloadDomainsExport } from '@/services/api';
 import { reportError } from '@/utils/errorReporter';
 import { formatChartLabelIST } from '@/utils/dateUtils';
+import { useIsTabVisible } from '@/hooks/useIsTabVisible';
 
 import DomainHeader from '@/components/pages/DomainHeader';
 import DomainStats from '@/components/pages/DomainStats';
@@ -25,9 +26,19 @@ const SORTABLE_FIELDS = new Set([
 const DEFAULT_SORT_BY = 'first_seen';
 const DEFAULT_SORT_ORDER = 'desc';
 
+// FIX (project-wide live-update audit): none of the 4 queries on this page
+// had a refetchInterval, so newly-verified emails changing a domain's
+// counts/risk% (from an active bulk job, or another tab/user verifying)
+// never showed up here without a manual page reload — inconsistent with
+// DashboardPage, which already auto-refreshes every 10s. isTabVisible
+// (shared hook, src/hooks/useIsTabVisible.js) pauses polling on background
+// tabs so this doesn't hammer the backend for no reason.
+const DOMAINS_REFETCH_INTERVAL_MS = 10000;
+
 export default function DomainsPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const isTabVisible = useIsTabVisible();
 
   const [page, setPage] = useState(() => {
     const p = Number(searchParams.get('page'));
@@ -146,6 +157,9 @@ export default function DomainsPage() {
         ...serverFilterParams,
       }),
     placeholderData: (previousData) => previousData,
+    // FIX: main domains table now stays live — was manual-refresh-only.
+    refetchInterval: isTabVisible ? DOMAINS_REFETCH_INTERVAL_MS : false,
+    refetchOnWindowFocus: true,
   });
 
   const isSorting = isFetching && !isLoading;
@@ -153,21 +167,29 @@ export default function DomainsPage() {
   const { data: overview } = useQuery({
     queryKey: ['domains-overview'],
     queryFn: getDomainOverview,
+    // FIX: top stat cards (Total Domains/Emails/Safe/Risky+Unsafe/Flagged)
+    // now refresh with the rest of the page instead of freezing at
+    // whatever they were on initial load.
+    refetchInterval: isTabVisible ? DOMAINS_REFETCH_INTERVAL_MS : false,
+    refetchOnWindowFocus: true,
   });
 
   const { data: topRiskData } = useQuery({
     queryKey: ['domains-top-risk'],
     queryFn: () => listDomains({ page: 1, size: 5, sort_by: 'risk_percent', sort_order: 'desc' }),
+    // FIX: "Top 5 Riskiest Domains" card — same story, was static after
+    // first load.
+    refetchInterval: isTabVisible ? DOMAINS_REFETCH_INTERVAL_MS : false,
+    refetchOnWindowFocus: true,
   });
 
   const { data: trendStats } = useQuery({
     queryKey: ['dashboard-stats', 7],
     queryFn: () => getDashboardStats(7),
-  });
-
-  const { data: newDomainsPerDay } = useQuery({
-    queryKey: ['domains-new-per-day', 7],
-    queryFn: () => getNewDomainsPerDay(7),
+    // FIX: powers the 7-Day Risk Trend chart + New Domains sparkline on
+    // this page — was static after first load.
+    refetchInterval: isTabVisible ? DOMAINS_REFETCH_INTERVAL_MS : false,
+    refetchOnWindowFocus: true,
   });
 
   const domains = domainsData?.items || [];
@@ -225,14 +247,14 @@ export default function DomainsPage() {
   }, [dailyRiskTrend]);
 
   const newDomainsSparkline = useMemo(() => {
-    const daily = newDomainsPerDay?.items || [];
+    const daily = trendStats?.daily_volume || [];
     return daily
       .filter((d) => d?.date)
       .map((d) => ({
         date: d.date,
-        count: d.count || 0,
+        count: (d.safe || 0) + (d.risky || 0) + (d.unsafe || 0) + (d.processing || 0),
       }));
-  }, [newDomainsPerDay]);
+  }, [trendStats]);
 
   const newDomainsPct =
     overview && overview.total_domains > 0

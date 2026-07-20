@@ -10,13 +10,12 @@ import {
   ChevronLeft, ChevronRight, Loader2
 } from 'lucide-react';
 import { listEmails, downloadEmailsExport, deleteEmail, getDashboardStats } from '@/services/api';
-import { getPageWindow } from '@/utils/pagination';
-import SortHeader from '@/components/pages/SortHeader';
 import StatusBadge from '@/components/ui/StatusBadge';
 import Button from '@/components/ui/Button';
 import { scoreColorClass } from '@/utils/scoreThresholds';
 import { formatDateTimeIST } from '@/utils/dateUtils';
 import { reportError } from '@/utils/errorReporter';
+import { useIsTabVisible } from '@/hooks/useIsTabVisible';
 
 const statusOptions = [
   { value: '', label: 'All Statuses' },
@@ -28,9 +27,9 @@ const statusOptions = [
 
 const scoreRangeOptions = [
   { value: '', label: 'All Scores' },
-  { value: '76-100', label: '76+' },
-  { value: '46-75', label: '46 - 75' },
-  { value: '0-45', label: 'Below 46' },
+  { value: '80-100', label: '80+' },
+  { value: '60-79', label: '60 - 79' },
+  { value: '0-59', label: 'Below 60' },
 ];
 
 const flaggedOptions = [
@@ -46,6 +45,15 @@ const flaggedOptions = [
 // clicking a non-sortable header is simply a no-op instead of silently
 // sending a param the backend ignores.
 const SORTABLE_FIELDS = new Set(['email', 'domain', 'status', 'score', 'verified_at', 'created_at']);
+
+// FIX (project-wide live-update audit): this page previously had NO
+// refetchInterval on either query below, so a bulk job finishing, a new
+// single verification, or another tab making changes never showed up here
+// without a manual browser refresh — inconsistent with DashboardPage /
+// VerifyEmailPage, which already auto-refresh. isTabVisible (shared hook,
+// see src/hooks/useIsTabVisible.js) keeps this from polling a backgrounded
+// tab.
+const LIST_REFETCH_INTERVAL_MS = 10000;
 
 const CHECK_DEFS = [
   { key: 'syntax_valid', icon: Check, tone: 'positive', label: 'Syntax' },
@@ -90,9 +98,26 @@ function KpiCard({ icon: Icon, iconBg, iconColor, label, value, subtitle, subtit
   );
 }
 
+function getPageNumbers(current, total) {
+  const pages = [];
+  const windowSize = 1;
+
+  pages.push(1);
+  if (current - windowSize > 2) pages.push('...');
+
+  for (let p = Math.max(2, current - windowSize); p <= Math.min(total - 1, current + windowSize); p++) {
+    pages.push(p);
+  }
+
+  if (current + windowSize < total - 1) pages.push('...');
+  if (total > 1) pages.push(total);
+
+  return pages;
+}
 
 export default function EmailListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const isTabVisible = useIsTabVisible();
 
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(20);
@@ -111,8 +136,7 @@ export default function EmailListPage() {
   // FIX (audit #7): sort is now real server state, sent as sort_by/sort_order
   // to /emails, instead of a client-side re-sort of whatever 20 rows the
   // current page happened to return.
-  const [sortBy, setSortBy] = useState('created_at');
-  const [sortOrder, setSortOrder] = useState('desc');
+  const [sortConfig, setSortConfig] = useState({ key: 'created_at', direction: 'desc' });
   const [selectedEmails, setSelectedEmails] = useState(new Set());
   const [isDeleting, setIsDeleting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -145,6 +169,12 @@ export default function EmailListPage() {
   const { data: stats } = useQuery({
     queryKey: ['dashboard-stats', 7],
     queryFn: () => getDashboardStats(7),
+    // FIX: was static (fetched once, never refreshed) — KPI cards (Safe/
+    // Risky/Unsafe/Total counts) at the top of this page never moved
+    // without a manual reload, even while bulk jobs were actively
+    // completing emails in the background.
+    refetchInterval: isTabVisible ? LIST_REFETCH_INTERVAL_MS : false,
+    refetchOnWindowFocus: true,
   });
 
   const [scoreMin, scoreMax] =
@@ -162,8 +192,8 @@ export default function EmailListPage() {
       dateFrom,
       dateTo,
       flaggedFilter,
-      sortBy,
-      sortOrder,
+      sortConfig.key,
+      sortConfig.direction,
     ],
     queryFn: () =>
       listEmails({
@@ -177,10 +207,17 @@ export default function EmailListPage() {
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
         flagged: flaggedFilter || undefined,
-        sort_by: sortBy,
-        sort_order: sortOrder,
+        sort_by: sortConfig.key,
+        sort_order: sortConfig.direction,
       }),
     placeholderData: (previousData) => previousData,
+    // FIX (project-wide live-update audit): this table previously required
+    // a manual page reload to show newly verified/updated emails. Now
+    // polls every 10s (paused when the tab isn't visible) — same pattern
+    // DashboardPage already used. placeholderData above keeps the table
+    // from flashing/resetting scroll position on each refetch.
+    refetchInterval: isTabVisible ? LIST_REFETCH_INTERVAL_MS : false,
+    refetchOnWindowFocus: true,
   });
 
   const emails = data?.items || [];
@@ -292,10 +329,12 @@ export default function EmailListPage() {
 
   // FIX (audit #7): now updates real sort state that feeds the query,
   // instead of re-sorting only the currently-loaded page client-side.
-  const handleSort = (field, nextOrder) => {
-    if (!SORTABLE_FIELDS.has(field)) return;
-    setSortBy(field);
-    setSortOrder(nextOrder);
+  const handleSort = (key) => {
+    if (!SORTABLE_FIELDS.has(key)) return;
+    setSortConfig((prev) => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc',
+    }));
     setPage(1);
   };
 
@@ -581,14 +620,17 @@ export default function EmailListPage() {
                             aria-label="Select all emails on this page"
                           />
                         ) : col.sortable ? (
-                          <SortHeader
-                            label={col.label}
-                            field={col.key}
-                            sortBy={sortBy}
-                            sortOrder={sortOrder}
-                            onSort={handleSort}
-                            className={`py-3.5 text-[var(--foreground)]/50 ${col.width}`}
-                          />
+                          <button
+                            onClick={() => handleSort(col.key)}
+                            className="flex items-center gap-1 hover:text-[var(--foreground)] transition-colors"
+                          >
+                            <span>{col.label}</span>
+                            {sortConfig.key === col.key ? (
+                              sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3 text-[var(--foreground)]" /> : <ArrowDown className="h-3 w-3 text-[var(--foreground)]" />
+                            ) : (
+                              <ArrowUpDown className="h-3 w-3 text-[var(--foreground)]/30" />
+                            )}
+                          </button>
                         ) : (
                           col.label
                         )}
@@ -637,7 +679,7 @@ export default function EmailListPage() {
                         </a>
                       </td>
                       <td className="px-4 py-3.5">
-                        <StatusBadge email={email} />
+                        <StatusBadge status={email.status} />
                       </td>
                       <td className="px-4 py-3.5">
                         <span className={`inline-flex items-center justify-center min-w-[2.5rem] rounded-full px-2.5 py-1 font-mono text-sm font-semibold tabular-nums ${scoreColorClass(email.score)}`}>
@@ -713,7 +755,7 @@ export default function EmailListPage() {
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
 
-                {getPageWindow(page, totalPages).map((p, idx) =>
+                {getPageNumbers(page, totalPages).map((p, idx) =>
                   p === '...' ? (
                     <span key={`ellipsis-${idx}`} className="px-2 text-sm text-[var(--foreground)]/40">...</span>
                   ) : (

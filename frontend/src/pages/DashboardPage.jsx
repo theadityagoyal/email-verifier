@@ -5,8 +5,9 @@ import { useQuery } from '@tanstack/react-query';
 import { AreaChart, Area, ResponsiveContainer } from 'recharts';
 import CircularProgress from '@/components/ui/CircularProgress';
 import StackedBarChart from '@/components/charts/StackedBarChart';
-import { getDashboardStats, listEmails, listDomains, getNewDomainsPerDay } from '@/services/api';
+import { getDashboardStats, listEmails, listDomains } from '@/services/api';
 import { APP_USER } from '@/utils/appConfig';
+import { useIsTabVisible } from '@/hooks/useIsTabVisible';
 
 import Button from '@/components/ui/Button';
 import {
@@ -58,15 +59,9 @@ const UNSAFE_STATUSES = ['invalid', 'undeliverable'];
 // FIX (audit #36): tab-visibility hook — pauses expensive polling
 // (dashboard/stats runs ~10 aggregate queries per call) while the tab isn't
 // actually being looked at.
-function useIsTabVisible() {
-  const [visible, setVisible] = useState(document.visibilityState === 'visible');
-  useEffect(() => {
-    const handler = () => setVisible(document.visibilityState === 'visible');
-    document.addEventListener('visibilitychange', handler);
-    return () => document.removeEventListener('visibilitychange', handler);
-  }, []);
-  return visible;
-}
+// NOTE: this hook now lives in src/hooks/useIsTabVisible.js (single source
+// of truth) so EmailListPage/DomainsPage can share the exact same logic
+// instead of each rolling their own copy — see that file's docstring.
 
 function dayTotal(entry) {
   return Object.keys(entry).reduce((sum, key) => {
@@ -982,10 +977,9 @@ export default function DashboardPage() {
   // Leaderboard — reuses the same /domains endpoint (and trend_delta_pct
   // field) DomainsPage/DomainTable already rely on, so the trend arrows
   // here are real, not re-derived from the coarser dashboard-stats top_domains.
-  // FIX (audit #H3): Add min_emails=5 filter to riskiest-domain leaderboards
   const { data: leaderboardData } = useQuery({
     queryKey: ['dashboard-domain-leaderboard'],
-    queryFn: () => listDomains({ page: 1, size: 5, sort_by: 'risk_percent', sort_order: 'desc', min_emails: 5 }),
+    queryFn: () => listDomains({ page: 1, size: 5, sort_by: 'risk_percent', sort_order: 'desc' }),
     refetchInterval: isTabVisible ? 15000 : false,
     refetchOnWindowFocus: true,
   });
