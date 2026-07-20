@@ -90,6 +90,9 @@ class Domain(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     domain = Column(String(255), unique=True, nullable=False, index=True)
     mx_records = Column(JSON, nullable=True)
+    # NOTE: The following columns are legacy and unused; aggregates are computed
+    #       dynamically from the emails table for dashboards.
+    total_emails = Column(Integer, default=0)
     total_emails = Column(Integer, default=0)
     verified_count = Column(Integer, default=0)
     invalid_count = Column(Integer, default=0)
@@ -158,7 +161,7 @@ class ApiKey(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     key_hash = Column(String(64), unique=True, nullable=False, index=True)
-    key_prefix = Column(String(20), nullable=False, index=True)
+    key_prefix = Column(String(20), nullable=False, unique=True)
     name = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     rate_limit_per_min = Column(Integer, default=60, nullable=False)

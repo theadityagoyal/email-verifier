@@ -3,7 +3,6 @@ import {
   TrendingUp,
   TrendingDown,
   Minus,
-  Sparkles,
   ShieldAlert,
 } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, LineChart, Line } from 'recharts';

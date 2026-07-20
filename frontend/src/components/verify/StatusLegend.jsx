@@ -50,17 +50,17 @@ export default function StatusLegend() {
         <p className="text-xs font-medium text-[var(--foreground)]/60">Score bands</p>
         <div className="flex items-center gap-2 text-xs">
           <span className="h-2 w-2 rounded-full bg-success shrink-0" />
-          <span className="text-[var(--foreground)]/50">80–100</span>
+          <span className="text-[var(--foreground)]/50">76–100</span>
           <span className="ml-auto text-success font-medium">Safe to Send</span>
         </div>
         <div className="flex items-center gap-2 text-xs">
           <span className="h-2 w-2 rounded-full bg-warning shrink-0" />
-          <span className="text-[var(--foreground)]/50">60–79</span>
+          <span className="text-[var(--foreground)]/50">46–75</span>
           <span className="ml-auto text-warning font-medium">Use with Caution</span>
         </div>
         <div className="flex items-center gap-2 text-xs">
           <span className="h-2 w-2 rounded-full bg-error shrink-0" />
-          <span className="text-[var(--foreground)]/50">Below 60</span>
+          <span className="text-[var(--foreground)]/50">0–45</span>
           <span className="ml-auto text-error font-medium">Not Recommended</span>
         </div>
       </div>

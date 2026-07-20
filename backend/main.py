@@ -9,6 +9,8 @@ from api.external.v1.router import api_external_router
 from utils.config import settings
 from utils.logging import configure_logging, get_logger
 from utils.executor import get_executor, shutdown_executor, init_executor
+from models.database import check_database_connection
+
 
 configure_logging()
 logger = get_logger(__name__)
@@ -16,9 +18,45 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Initialize executor
     init_executor()
     executor = get_executor()
     logger.info("application_startup", workers=executor._max_workers)
+
+    # Check database connection
+    db_connected = await check_database_connection()
+    if not db_connected:
+        logger.warning("database_connection_failed_on_startup")
+    else:
+        logger.info("database_connection_verified")
+
+    # Check for weak default configurations
+    warnings = []
+
+    # Check for weak SECRET_KEY
+    if settings.SECRET_KEY == "change-me-in-production":
+        warnings.append("SECRET_KEY is still set to the default value. This is a security risk!")
+
+    # Check for weak ADMIN_PASSWORD
+    if settings.ADMIN_PASSWORD == "change-me-admin-password":
+        warnings.append("ADMIN_PASSWORD is still set to the default value. This is a security risk!")
+
+    # Check if debug mode is enabled in production-like environment
+    if settings.DEBUG:
+        warnings.append("DEBUG mode is enabled. This should be disabled in production!")
+
+    # Check if CORS is too permissive (if it contains wildcards or is too broad)
+    origins = settings.cors_origins_list
+    if "*" in origins or (len(origins) == 1 and origins[0] in ["*", "http://*", "https://*"]):
+        warnings.append("CORS configuration is too permissive (allows all origins). This is a security risk!")
+
+    # Log any warnings
+    for warning in warnings:
+        logger.warning(f"weak_default_detected: {warning}")
+
+    if not warnings:
+        logger.info("no_weak_defaults_detected")
+
     yield
     logger.info("application_shutdown")
     shutdown_executor(wait=True)

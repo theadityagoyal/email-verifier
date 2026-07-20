@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 
-import { listDomains, getDomainOverview, getDashboardStats, bulkDeleteDomains, downloadDomainsExport } from '@/services/api';
+import { listDomains, getDomainOverview, getDashboardStats, getNewDomainsPerDay, bulkDeleteDomains, downloadDomainsExport } from '@/services/api';
 import { reportError } from '@/utils/errorReporter';
 import { formatChartLabelIST } from '@/utils/dateUtils';
 
@@ -165,6 +165,11 @@ export default function DomainsPage() {
     queryFn: () => getDashboardStats(7),
   });
 
+  const { data: newDomainsPerDay } = useQuery({
+    queryKey: ['domains-new-per-day', 7],
+    queryFn: () => getNewDomainsPerDay(7),
+  });
+
   const domains = domainsData?.items || [];
   const total = domainsData?.total || 0;
   const pages = domainsData?.pages || 1;
@@ -220,14 +225,14 @@ export default function DomainsPage() {
   }, [dailyRiskTrend]);
 
   const newDomainsSparkline = useMemo(() => {
-    const daily = trendStats?.daily_volume || [];
+    const daily = newDomainsPerDay?.items || [];
     return daily
       .filter((d) => d?.date)
       .map((d) => ({
         date: d.date,
-        count: (d.safe || 0) + (d.risky || 0) + (d.unsafe || 0) + (d.processing || 0),
+        count: d.count || 0,
       }));
-  }, [trendStats]);
+  }, [newDomainsPerDay]);
 
   const newDomainsPct =
     overview && overview.total_domains > 0

@@ -14,6 +14,7 @@ from typing import AsyncGenerator, Generator
 from urllib.parse import urlparse, urlunparse
 
 from sqlalchemy import create_engine
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -160,7 +161,7 @@ async def check_database_connection() -> bool:
     """
     try:
         async with AsyncSessionLocal() as session:
-            await session.execute("SELECT 1")
+            await session.execute(text("SELECT 1"))
         logger.info("Database connection successful")
         return True
     except Exception as e:

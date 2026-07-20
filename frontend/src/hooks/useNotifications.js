@@ -39,7 +39,7 @@ export function useNotifications() {
   const query = useQuery({
     queryKey: NOTIFICATIONS_QUERY_KEY,
     queryFn: () => listNotifications({ page: 1, size: 20 }),
-    refetchInterval: POLL_INTERVAL_MS,
+    refetchInterval: () => (document.visibilityState === 'visible' ? POLL_INTERVAL_MS : false),
     refetchOnWindowFocus: true,
     staleTime: 5000,
   });
@@ -62,15 +62,27 @@ export function useNotifications() {
       .forEach((n) => {
         toast(`${TOAST_ICON[n.type] || TOAST_ICON.info}  ${n.title}`, {
           id: `notification-toast-${n.id}`, // stable id -> react-hot-toast
-                                             // de-dupes automatically if this
-                                             // somehow fires twice for the
-                                             // same notification
+                                               // de-dupes automatically if this
+                                               // somehow fires twice for the
+                                               // same notification
           duration: 5000,
         });
       });
 
     items.forEach((n) => seenIdsRef.current.add(n.id));
   }, [query.data]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      // Trigger a refetch to re-evaluate the refetchInterval function
+      query.refetch();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [query]);
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: NOTIFICATIONS_QUERY_KEY });

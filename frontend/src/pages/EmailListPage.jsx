@@ -10,6 +10,8 @@ import {
   ChevronLeft, ChevronRight, Loader2
 } from 'lucide-react';
 import { listEmails, downloadEmailsExport, deleteEmail, getDashboardStats } from '@/services/api';
+import { getPageWindow } from '@/utils/pagination';
+import SortHeader from '@/components/pages/SortHeader';
 import StatusBadge from '@/components/ui/StatusBadge';
 import Button from '@/components/ui/Button';
 import { scoreColorClass } from '@/utils/scoreThresholds';
@@ -26,9 +28,9 @@ const statusOptions = [
 
 const scoreRangeOptions = [
   { value: '', label: 'All Scores' },
-  { value: '80-100', label: '80+' },
-  { value: '60-79', label: '60 - 79' },
-  { value: '0-59', label: 'Below 60' },
+  { value: '76-100', label: '76+' },
+  { value: '46-75', label: '46 - 75' },
+  { value: '0-45', label: 'Below 46' },
 ];
 
 const flaggedOptions = [
@@ -88,22 +90,6 @@ function KpiCard({ icon: Icon, iconBg, iconColor, label, value, subtitle, subtit
   );
 }
 
-function getPageNumbers(current, total) {
-  const pages = [];
-  const windowSize = 1;
-
-  pages.push(1);
-  if (current - windowSize > 2) pages.push('...');
-
-  for (let p = Math.max(2, current - windowSize); p <= Math.min(total - 1, current + windowSize); p++) {
-    pages.push(p);
-  }
-
-  if (current + windowSize < total - 1) pages.push('...');
-  if (total > 1) pages.push(total);
-
-  return pages;
-}
 
 export default function EmailListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -125,7 +111,8 @@ export default function EmailListPage() {
   // FIX (audit #7): sort is now real server state, sent as sort_by/sort_order
   // to /emails, instead of a client-side re-sort of whatever 20 rows the
   // current page happened to return.
-  const [sortConfig, setSortConfig] = useState({ key: 'created_at', direction: 'desc' });
+  const [sortBy, setSortBy] = useState('created_at');
+  const [sortOrder, setSortOrder] = useState('desc');
   const [selectedEmails, setSelectedEmails] = useState(new Set());
   const [isDeleting, setIsDeleting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -175,8 +162,8 @@ export default function EmailListPage() {
       dateFrom,
       dateTo,
       flaggedFilter,
-      sortConfig.key,
-      sortConfig.direction,
+      sortBy,
+      sortOrder,
     ],
     queryFn: () =>
       listEmails({
@@ -190,8 +177,8 @@ export default function EmailListPage() {
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
         flagged: flaggedFilter || undefined,
-        sort_by: sortConfig.key,
-        sort_order: sortConfig.direction,
+        sort_by: sortBy,
+        sort_order: sortOrder,
       }),
     placeholderData: (previousData) => previousData,
   });
@@ -305,12 +292,10 @@ export default function EmailListPage() {
 
   // FIX (audit #7): now updates real sort state that feeds the query,
   // instead of re-sorting only the currently-loaded page client-side.
-  const handleSort = (key) => {
-    if (!SORTABLE_FIELDS.has(key)) return;
-    setSortConfig((prev) => ({
-      key,
-      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc',
-    }));
+  const handleSort = (field, nextOrder) => {
+    if (!SORTABLE_FIELDS.has(field)) return;
+    setSortBy(field);
+    setSortOrder(nextOrder);
     setPage(1);
   };
 
@@ -596,17 +581,14 @@ export default function EmailListPage() {
                             aria-label="Select all emails on this page"
                           />
                         ) : col.sortable ? (
-                          <button
-                            onClick={() => handleSort(col.key)}
-                            className="flex items-center gap-1 hover:text-[var(--foreground)] transition-colors"
-                          >
-                            <span>{col.label}</span>
-                            {sortConfig.key === col.key ? (
-                              sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3 text-[var(--foreground)]" /> : <ArrowDown className="h-3 w-3 text-[var(--foreground)]" />
-                            ) : (
-                              <ArrowUpDown className="h-3 w-3 text-[var(--foreground)]/30" />
-                            )}
-                          </button>
+                          <SortHeader
+                            label={col.label}
+                            field={col.key}
+                            sortBy={sortBy}
+                            sortOrder={sortOrder}
+                            onSort={handleSort}
+                            className={`py-3.5 text-[var(--foreground)]/50 ${col.width}`}
+                          />
                         ) : (
                           col.label
                         )}
@@ -655,7 +637,7 @@ export default function EmailListPage() {
                         </a>
                       </td>
                       <td className="px-4 py-3.5">
-                        <StatusBadge status={email.status} />
+                        <StatusBadge email={email} />
                       </td>
                       <td className="px-4 py-3.5">
                         <span className={`inline-flex items-center justify-center min-w-[2.5rem] rounded-full px-2.5 py-1 font-mono text-sm font-semibold tabular-nums ${scoreColorClass(email.score)}`}>
@@ -731,7 +713,7 @@ export default function EmailListPage() {
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
 
-                {getPageNumbers(page, totalPages).map((p, idx) =>
+                {getPageWindow(page, totalPages).map((p, idx) =>
                   p === '...' ? (
                     <span key={`ellipsis-${idx}`} className="px-2 text-sm text-[var(--foreground)]/40">...</span>
                   ) : (

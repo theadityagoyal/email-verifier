@@ -4,18 +4,14 @@ const isDevelopment = () => {
   return import.meta.env.MODE === 'development'
 }
 
-const api = axios.create({
+// Single axios instance with interceptors, retry queue, and method overrides
+const apiEnhanced = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api/v1',
   timeout: 30000,
 })
 
-// FIX (audit #32): removed dead `accessToken` Authorization-header logic.
-// This is a confirmed single-tenant, no-login app — there was no login flow
-// anywhere that ever set 'accessToken' in localStorage, so this branch was
-// always a no-op and just confused anyone reading the code into thinking
-// auth was implemented. Admin-only calls use X-Admin-Token explicitly
-// (see getAdminHeaders() below) — unrelated to this.
-api.interceptors.request.use(
+// Request interceptor
+apiEnhanced.interceptors.request.use(
   (config) => {
     if (isDevelopment()) {
       console.debug(`[API Request] ${config.method.toUpperCase()} ${config.url}`, {
@@ -31,7 +27,8 @@ api.interceptors.request.use(
   }
 )
 
-api.interceptors.response.use(
+// Response interceptor
+apiEnhanced.interceptors.response.use(
   (response) => {
     if (isDevelopment()) {
       console.debug(`[API Response] ${response.config.method.toUpperCase()} ${response.config.url}`, {
@@ -76,6 +73,7 @@ api.interceptors.response.use(
   }
 )
 
+// Retry queue for GET requests (idempotent)
 const retryQueue = new Map()
 
 const getRetryKey = (config) => {
@@ -99,20 +97,6 @@ const getRetryKey = (config) => {
 
   return `${config.method}:${url.toString()}`
 }
-
-const apiEnhanced = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || '/api/v1',
-  timeout: 30000,
-})
-
-apiEnhanced.interceptors.request.use(
-  api.interceptors.request.handlers[0].fulfilled,
-  api.interceptors.request.handlers[0].rejected
-)
-apiEnhanced.interceptors.response.use(
-  api.interceptors.response.handlers[0].fulfilled,
-  api.interceptors.response.handlers[0].rejected
-)
 
 const axiosRequest = async (config) => {
   const retryKey = getRetryKey({ ...config, baseURL: apiEnhanced.defaults.baseURL })
@@ -139,25 +123,28 @@ const axiosRequest = async (config) => {
   return promise
 }
 
+// Override instance methods to use the retry queue
 apiEnhanced.get = (url, config) => axiosRequest({ ...config, method: 'get', url })
 apiEnhanced.post = (url, data, config) => axiosRequest({ ...config, method: 'post', url, data })
 apiEnhanced.put = (url, data, config) => axiosRequest({ ...config, method: 'put', url, data })
 apiEnhanced.delete = (url, config) => axiosRequest({ ...config, method: 'delete', url })
 
-const normalizeStatus = (status) => {
-  const positive = ['verified', 'trusted', 'deliverable', 'probably_valid']
-  const negative = ['invalid', 'undeliverable']
-  const caution = ['risky', 'unconfirmed', 'uncertain']
+import { getStatusBucket } from '@/utils/statusBucket';
 
-  if (positive.includes(status)) return 'verified'
-  if (negative.includes(status)) return 'invalid'
-  if (caution.includes(status)) return 'risky'
-  return status
+const normalizeStatus = (email) => {
+  // Use the same bucket logic as backend's bucket_case()
+  // Backend: disposable -> unsafe; safe + (role_based|catch_all) -> risky
+  return getStatusBucket({
+    status: email.status,
+    disposable: email.disposable,
+    role_based: email.role_based,
+    catch_all: email.catch_all,
+  });
 }
 
 const normalizeEmail = (email) => ({
   ...email,
-  normalized_status: normalizeStatus(email.status),
+  normalized_status: normalizeStatus(email),
 })
 
 const normalizeEmailList = (response) => ({
@@ -180,6 +167,8 @@ export const bulkUpload = (file) => {
   }).then((r) => r.data)
 }
 
+// ── Jobs ───────────────────────────────────────────────────────────────────
+
 export const getJobStatus = (jobId) =>
   apiEnhanced.get(`/jobs/${jobId}`).then((r) => r.data)
 
@@ -198,13 +187,16 @@ export const deleteJob = (jobId) =>
 export const cancelJob = (jobId) =>
   apiEnhanced.post(`/jobs/${jobId}/cancel`).then((r) => r.data)
 
-// ── Dashboard ─────────────────────────────────────────────────────────────
+// ── Dashboard ────────────────────────────────────────────────────────────────
 
 export const getDashboardStats = (days = 7) =>
   apiEnhanced.get('/dashboard/stats', { params: { days } }).then((r) => r.data)
 
 export const getTrends = (days = 30) =>
   apiEnhanced.get('/dashboard/trends', { params: { days } }).then((r) => r.data)
+
+export const getNewDomainsPerDay = (days = 7) =>
+  apiEnhanced.get('/dashboard/domains/new-per-day', { params: { days } }).then((r) => r.data)
 
 // ── Emails ────────────────────────────────────────────────────────────────
 // FIX (audit #7): `params` is forwarded as-is to axios, so sort_by/sort_order

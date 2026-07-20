@@ -1,4 +1,5 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { getPageWindow } from '@/utils/pagination';
 
 export default function HistoryPagination({
   page,
@@ -10,18 +11,7 @@ export default function HistoryPagination({
 }) {
   const pages = Math.max(1, Math.ceil(total / pageSize));
 
-  const pageWindow = () => {
-    if (pages <= 7) return Array.from({ length: pages }, (_, i) => i + 1);
-    const set = new Set([1, pages, page - 1, page, page + 1]);
-    const sorted = [...set].filter((p) => p >= 1 && p <= pages).sort((a, b) => a - b);
-    const result = [];
-    sorted.forEach((p, i) => {
-      if (i > 0 && p - sorted[i - 1] > 1) result.push('…');
-      result.push(p);
-    });
-    return result;
-  };
-
+  
   if (total === 0) return null;
 
   const startItem = (page - 1) * pageSize + 1;
@@ -58,7 +48,7 @@ export default function HistoryPagination({
         >
           <ChevronLeft className="h-4 w-4" />
         </button>
-        {pageWindow().map((p, i) =>
+        {getPageWindow(page, pages).map((p, i) =>
           p === '…' ? (
             <span key={`e-${i}`} className="px-2 text-sm text-[var(--foreground)]/40">…</span>
           ) : (

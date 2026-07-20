@@ -4,6 +4,7 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
+import { getPageWindow } from '@/utils/pagination';
 
 export default function DomainPagination({
   page,
@@ -15,19 +16,7 @@ export default function DomainPagination({
   size,
   sizeOptions = [10, 20, 50, 100],
 }) {
-  // Helper function to create page window (similar to original)
-  const pageWindow = (currentPage, totalPages) => {
-    if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);
-    const set = new Set([1, totalPages, currentPage - 1, currentPage, currentPage + 1]);
-    const sorted = [...set].filter(p => p >= 1 && p <= totalPages).sort((a, b) => a - b);
-    const result = [];
-    sorted.forEach((p, i) => {
-      if (i > 0 && p - sorted[i - 1] > 1) result.push('…');
-      result.push(p);
-    });
-    return result;
-  };
-
+  
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -61,7 +50,7 @@ export default function DomainPagination({
         <Button variant="outline" size="sm" onClick={() => onPageChange(Math.max(1, page - 1))} disabled={page === 1}>
           <ChevronLeft className="h-4 w-4" />
         </Button>
-        {pageWindow(page, pages).map((p, i) =>
+        {getPageWindow(page, pages).map((p, i) =>
           p === '…' ? (
             <span key={`ellipsis-${i}`} className="px-2 text-sm text-[var(--foreground)]/40">
               …

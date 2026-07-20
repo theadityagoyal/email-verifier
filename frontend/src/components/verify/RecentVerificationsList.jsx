@@ -28,7 +28,7 @@ export default function RecentVerificationsList({ items = [] }) {
                 <span className="text-sm font-mono text-[var(--foreground)] truncate">{item.email}</span>
               </div>
               <div className="flex items-center gap-3 shrink-0">
-                <StatusBadge status={item.normalized_status || item.status} showIcon={false} />
+                <StatusBadge email={item} showIcon={false} />
                 <span className={`text-sm font-semibold tabular-nums px-1.5 rounded ${scoreColorClass(item.score)}`}>
                   {item.score}
                 </span>

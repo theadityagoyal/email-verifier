@@ -14,7 +14,7 @@ from services.notification_service import async_create_notification
 from utils.logging import get_logger
 from utils.timezone import utc_now_naive
 from utils.email_utils import detect_email_column
-from utils.file_utils import read_upload_file, FileReadError, SUPPORTED_EXTENSIONS, is_supported_filename
+from utils.file_utils import read_upload_file, FileReadError, SUPPORTED_EXTENSIONS, is_supported_filename, sanitize_filename
 
 
 # Constants
@@ -58,8 +58,10 @@ async def bulk_upload(
 ):
     """Upload CSV or Excel file for bulk email verification."""
     try:
-        filename = file.filename.lower()
-        if not is_supported_filename(filename):
+        original_filename = file.filename
+        safe_filename = sanitize_filename(original_filename)
+        filename_lower = safe_filename.lower()
+        if not is_supported_filename(filename_lower):
             raise HTTPException(status_code=400, detail=f"Only {', '.join(SUPPORTED_EXTENSIONS)} files accepted.")
 
         content = await file.read()
@@ -67,7 +69,7 @@ async def bulk_upload(
             raise HTTPException(status_code=413, detail=f"File too large. Max {MAX_FILE_SIZE_MB} MB.")
 
         # Read file
-        df = _read_file(content, file.filename)
+        df = _read_file(content, safe_filename)
 
         if df.empty:
             raise HTTPException(status_code=400, detail="File is empty.")
@@ -90,14 +92,16 @@ async def bulk_upload(
             raise HTTPException(status_code=400, detail="No valid emails found in file.")
 
         job_id = str(uuid.uuid4())
-        s3_key = f"uploads/{job_id}/{file.filename}"
+
+        # Use the sanitized filename we computed earlier for filesystem operations
+        s3_key = f"uploads/{job_id}/{safe_filename}"
 
         # Upload to local storage (S3 optional)
         try:
             os.makedirs(f"{UPLOAD_BASE_DIR}/{job_id}", exist_ok=True)
-            with open(f"{UPLOAD_BASE_DIR}/{job_id}/{file.filename}", "wb") as f:
+            with open(f"{UPLOAD_BASE_DIR}/{job_id}/{safe_filename}", "wb") as f:
                 f.write(content)
-            s3_key = f"local:{job_id}/{file.filename}"
+            s3_key = f"local:{job_id}/{safe_filename}"
             logger.info("file_saved_local", path=s3_key)
         except OSError as e:
             logger.error(f"Failed to save file for job {job_id}: {str(e)}")
@@ -106,7 +110,7 @@ async def bulk_upload(
         # Save job
         job = Job(
             job_id=job_id,
-            file_name=file.filename,
+            file_name=original_filename,  # Store original for display/download
             s3_key=s3_key,
             status=JobStatus.processing,
             current_stage='uploading',
@@ -127,10 +131,10 @@ async def bulk_upload(
         await async_create_notification(
             db,
             title="Bulk Upload Started",
-            message=f'"{file.filename}" queued for verification — {total} email(s).',
+            message=f'"{original_filename}" queued for verification — {total} email(s).',
             type=NotificationType.info,
             priority=NotificationPriority.low,
-            metadata={"job_id": job_id, "file_name": file.filename, "total": total},
+            metadata={"job_id": job_id, "file_name": original_filename, "total": total},
         )
 
         # Start processing the job in background using FastAPI BackgroundTasks
@@ -333,7 +337,7 @@ async def export_job_results(job_id: str, db: AsyncSession = Depends(get_db)):
         return StreamingResponse(
             iter([output.getvalue()]),
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=verified_{job.file_name}"},
+            headers={"Content-Disposition": f"attachment; filename=verified_{sanitize_filename(job.file_name)}"},
         )
     except HTTPException:
         raise

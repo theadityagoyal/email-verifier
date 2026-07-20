@@ -130,6 +130,12 @@ export default function BulkUploadPage() {
       setFilePreview(null);
       return;
     }
+    // File size check before reading file for preview
+    if (selectedFile.size > MAX_FILE_SIZE) {
+      toast.error('File too large. Maximum size is 50 MB.');
+      setFilePreview(null);
+      return;
+    }
     let cancelled = false;
     setFilePreview({ loading: true });
     previewUploadFile(selectedFile)
@@ -444,6 +450,7 @@ export default function BulkUploadPage() {
           onRemoveFile={handleRemoveFile}
           onUpload={handleUpload}
           uploadPending={uploadMutation.isPending}
+          maxFileSizeMB={50}
         />
       </motion.div>
 

@@ -1,13 +1,15 @@
 // Single source of truth for score/risk tier boundaries used across the
 // frontend (EmailListPage, StatusBadge, VerifyEmailPage, DomainTable).
-// Mirrors backend/api/v1/endpoints/dashboard.py's RISK_HEALTHY_MAX /
-// RISK_WATCH_MAX constants for the domain risk bands. If those backend
-// values ever change, update them here too — see dashboard.py comments.
+// Mirrors backend/api/v1/endpoints/dashboard.py's bucket_case() logic:
+//   - safe:     score >= 76  (probably_valid, trusted, deliverable, verified)
+//   - risky:    score >= 46  (uncertain, unconfirmed)
+//   - unsafe:   score < 46   (invalid, undeliverable)
+// If those backend values ever change, update them here too — see dashboard.py comments.
 
-// Email quality score bands (0-100)
+// Email quality score bands (0-100) — match backend bucket_case() in dashboard.py
 export const SCORE_THRESHOLDS = {
-  SAFE_MIN: 80,   // score >= 80 -> "Safe" / success color
-  RISKY_MIN: 60,  // score >= 60 -> "Risky" / warning color
+  SAFE_MIN: 76,   // score >= 76 -> "Safe" / success color (matches probably_valid threshold)
+  RISKY_MIN: 46,  // score >= 46 -> "Risky" / warning color (matches uncertain threshold)
   // below RISKY_MIN -> "Unsafe" / error color
 };
 

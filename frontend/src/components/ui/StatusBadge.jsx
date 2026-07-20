@@ -1,30 +1,6 @@
 import { CheckCircle2, AlertTriangle, XCircle, Loader2, HelpCircle, Ban } from 'lucide-react';
+import { getStatusBucket, getBucketLabel, getBucketIcon } from '@/utils/statusBucket';
 
-const STATUS_CONFIG = {
-  verified: { label: 'Safe', bucket: 'safe' },
-  deliverable: { label: 'Safe', bucket: 'safe' },
-  trusted: { label: 'Safe', bucket: 'safe' },
-  probably_valid: { label: 'Safe', bucket: 'safe' },
-  safe: { label: 'Safe', bucket: 'safe' },
-
-  risky: { label: 'Risky', bucket: 'risky' },
-  uncertain: { label: 'Risky', bucket: 'risky' },
-  unconfirmed: { label: 'Risky', bucket: 'risky' },
-
-  invalid: { label: 'Unsafe', bucket: 'unsafe' },
-  undeliverable: { label: 'Unsafe', bucket: 'unsafe' },
-  unsafe: { label: 'Unsafe', bucket: 'unsafe' },
-
-  processing: { label: 'Processing', bucket: 'processing' },
-
-  // Cancelled (bulk jobs only — a job that was stopped via
-  // POST /jobs/{job_id}/cancel before it finished)
-  cancelled: { label: 'Cancelled', bucket: 'cancelled' },
-
-  unknown: { label: 'Unknown', bucket: 'unknown' },
-};
-
-// Fully literal class strings — safe under Tailwind's production content-scanning/purge.
 const BUCKET_CLASSES = {
   safe: 'text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-400/10 border-emerald-200 dark:border-emerald-400/20',
   risky: 'text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-400/10 border-amber-200 dark:border-amber-400/20',
@@ -43,25 +19,49 @@ const BUCKET_ICONS = {
   unknown: HelpCircle,
 };
 
-export default function StatusBadge({ status = 'unknown', className = '', showIcon = true }) {
-  const config = STATUS_CONFIG[status] || STATUS_CONFIG.unknown;
-  const colorClass = BUCKET_CLASSES[config.bucket] || BUCKET_CLASSES.unknown;
-  const Icon = BUCKET_ICONS[config.bucket] || HelpCircle;
+export default function StatusBadge({
+  status = 'unknown',
+  className = '',
+  showIcon = true,
+  // Optional full email object - if provided, uses backend bucket_case logic
+  email = null,
+  // Or pass flags directly for backward compat
+  disposable = false,
+  role_based = false,
+  catch_all = false,
+}) {
+  // If email object is provided, extract status and flags from it
+  // Otherwise use individual props (for backward compat)
+  const statusFromEmail = email ? email.status : status;
+  const flags = email ? {
+    disposable: email.disposable,
+    role_based: email.role_based,
+    catch_all: email.catch_all,
+  } : { disposable, role_based, catch_all };
+
+  const bucket = getStatusBucket({ status: statusFromEmail, ...flags });
+  const label = getBucketLabel(bucket);
+  const colorClass = BUCKET_CLASSES[bucket] || BUCKET_CLASSES.unknown;
+  const Icon = BUCKET_ICONS[bucket] || HelpCircle;
 
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors ${colorClass} ${className}`}
     >
       {showIcon && (
-        <Icon className={`h-3 w-3 ${config.bucket === 'processing' ? 'animate-spin' : ''}`} aria-hidden="true" />
+        <Icon className={`h-3 w-3 ${bucket === 'processing' ? 'animate-spin' : ''}`} aria-hidden="true" />
       )}
-      <span>{config.label}</span>
+      <span>{label}</span>
     </span>
   );
 }
 
-export function getStatusBucket(status) {
+export function getStatusBucketFromStatus(status) {
   const statusLower = (status || '').toLowerCase();
-  const config = STATUS_CONFIG[statusLower];
-  return config ? config.bucket : 'unknown';
+  if (['verified', 'deliverable', 'trusted', 'probably_valid'].includes(statusLower)) return 'safe';
+  if (['risky', 'unconfirmed', 'uncertain'].includes(statusLower)) return 'risky';
+  if (['invalid', 'undeliverable'].includes(statusLower)) return 'unsafe';
+  if (statusLower === 'processing') return 'processing';
+  if (statusLower === 'cancelled') return 'cancelled';
+  return 'unknown';
 }

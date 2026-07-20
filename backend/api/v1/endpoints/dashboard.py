@@ -359,7 +359,7 @@ async def _compute_domain_summary(db: AsyncSession, domain_map: dict, bucket_exp
         total_domains=total_domains_count,
         total_domains_trend_pct=pct_delta(total_domains_count, prev_total_domains),
         improving_count=improving_count,
-        improving_trend_pct=pct_delta(improving_count, max(len(domain_trend) - improving_count, 0)),
+        improving_trend_pct=pct_delta(improving_count, 0),
     )
 
 
@@ -505,8 +505,8 @@ async def get_trends(
                 func.count(Email.id).label("cnt"),
             )
             .where(Email.verified_at.isnot(None))
-            .group_by(cast(Email.updated_at, Date), Email.status)
-            .order_by(cast(Email.updated_at, Date))
+            .group_by(cast(Email.verified_at, Date), Email.status)
+            .order_by(cast(Email.verified_at, Date))
             .limit(days * 3)
         )
     ).all()
@@ -524,6 +524,43 @@ async def get_trends(
             pivot[key]["risky"] += r.cnt
 
     return [VerificationTrend(**v) for v in pivot.values()]
+
+
+@router.get("/dashboard/domains/new-per-day")
+async def get_new_domains_per_day(
+    days: int = Query(default=7, ge=1, le=90),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return count of domains first seen per day for the last N days."""
+    from models.models import Email
+    from sqlalchemy import cast, Date, func, select
+
+    # Use the domain aggregate subquery approach - get first_seen per domain
+    domain_subq = (
+        select(
+            Email.domain.label("domain"),
+            func.min(Email.created_at).label("first_seen"),
+        )
+        .where(Email.domain.isnot(None))
+        .group_by(Email.domain)
+        .subquery()
+    )
+
+    start_date = utc_now_naive() - timedelta(days=days)
+
+    rows = (
+        await db.execute(
+            select(
+                cast(domain_subq.c.first_seen, Date).label("date"),
+                func.count(domain_subq.c.domain).label("count"),
+            )
+            .where(domain_subq.c.first_seen >= start_date)
+            .group_by(cast(domain_subq.c.first_seen, Date))
+            .order_by(cast(domain_subq.c.first_seen, Date))
+        )
+    ).all()
+
+    return [{"date": str(r.date), "count": r.count} for r in rows]
 
 
 @router.get("/emails", response_model=PaginatedEmailsResponse)

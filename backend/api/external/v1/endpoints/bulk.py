@@ -21,7 +21,7 @@ from models.database import get_db
 from models.models import Job, Email, JobStatus, ApiKey
 from api.external.v1.dependencies import rate_limit_bulk, get_api_key
 from utils.email_utils import detect_email_column
-from utils.file_utils import read_upload_file, FileReadError, SUPPORTED_EXTENSIONS, is_supported_filename
+from utils.file_utils import read_upload_file, FileReadError, SUPPORTED_EXTENSIONS, is_supported_filename, sanitize_filename
 from utils.usage_logger import log_api_usage
 from utils.logging import get_logger
 from utils.timezone import utc_now_naive
@@ -58,8 +58,10 @@ async def external_bulk_upload(
     # any HTTPException raised along the way overrides it with the real code.
     resp_status = status.HTTP_202_ACCEPTED
     try:
-        filename = (file.filename or "").lower()
-        if not is_supported_filename(filename):
+        original_filename = file.filename or ""
+        safe_filename = sanitize_filename(original_filename)
+        filename_lower = safe_filename.lower()
+        if not is_supported_filename(filename_lower):
             raise HTTPException(
                 status_code=400,
                 detail={"code": "unsupported_format", "message": f"Only {', '.join(SUPPORTED_EXTENSIONS)} files accepted"},
@@ -72,7 +74,7 @@ async def external_bulk_upload(
                 detail={"code": "file_too_large", "message": f"File too large. Max {MAX_FILE_SIZE_MB} MB"},
             )
 
-        df = _read_file(content, filename)
+        df = _read_file(content, safe_filename)
         if df.empty:
             raise HTTPException(status_code=400, detail={"code": "empty_file", "message": "File is empty"})
 
@@ -89,18 +91,23 @@ async def external_bulk_upload(
             raise HTTPException(status_code=400, detail={"code": "no_valid_emails", "message": "No valid emails found in file"})
 
         job_id = str(uuid.uuid4())
+
+        # Sanitize filename for filesystem use (prevents path traversal)
+        s3_key = f"local:{job_id}/{safe_filename}"
+
         try:
             os.makedirs(f"{UPLOAD_BASE_DIR}/{job_id}", exist_ok=True)
-            with open(f"{UPLOAD_BASE_DIR}/{job_id}/{file.filename}", "wb") as f:
+            with open(f"{UPLOAD_BASE_DIR}/{job_id}/{safe_filename}", "wb") as f:
                 f.write(content)
-            s3_key = f"local:{job_id}/{file.filename}"
+            s3_key = f"local:{job_id}/{safe_filename}"
+            logger.info("external_bulk_save_failed", job_id=job_id, path=s3_key)
         except OSError as e:
             logger.error("external_bulk_save_failed", job_id=job_id, error=str(e), exc_info=True)
             raise HTTPException(status_code=500, detail={"code": "storage_error", "message": "Failed to save uploaded file"})
 
         job = Job(
             job_id=job_id,
-            file_name=file.filename,
+            file_name=original_filename,  # Store original for display/download
             s3_key=s3_key,
             status=JobStatus.processing,
             current_stage="uploading",
@@ -205,5 +212,5 @@ async def external_export_job_results(
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=verified_{job_id}.csv"},
+        headers={"Content-Disposition": f"attachment; filename=verified_{sanitize_filename(job.file_name)}"},
     )

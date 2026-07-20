@@ -51,6 +51,7 @@ export default function UploadZone({
   onRemoveFile,
   onUpload,
   uploadPending,
+  maxFileSizeMB,
 }) {
   const hasFile = !!selectedFile;
   const ext = hasFile ? getFileExt(selectedFile.name) : null;
@@ -88,7 +89,7 @@ export default function UploadZone({
           </p>
           <p className="text-sm text-[var(--foreground)]/50 mb-5">or click to browse</p>
           <p className="text-xs text-[var(--foreground)]/40 mb-5">
-            Max file size: 50MB &middot; Formats: .csv, .xlsx, .xls &middot; Column: email (required)
+            Max file size: {maxFileSizeMB}MB &middot; Formats: .csv, .xlsx, .xls &middot; Column: email (required)
           </p>
           <Button type="button" variant="primary" onClick={() => fileInputRef.current?.click()}>
             <FolderOpen className="h-4 w-4" />

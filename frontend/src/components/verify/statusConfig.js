@@ -231,11 +231,11 @@ export const STATUS_COLOR_CLASSES = {
 /**
  * Overall recommendation banding, derived purely from the numeric score
  * the backend already returns — same thresholds already used elsewhere
- * in this app (see utils/scoreThresholds.js: SAFE_MIN=80, RISKY_MIN=60),
+ * in this app (see utils/scoreThresholds.js: SAFE_MIN=76, RISKY_MIN=46),
  * so the Verify page stays consistent with the Email List / Domains pages.
  */
 export function resolveRecommendation(score) {
-  if (score >= 80) {
+  if (score >= 76) {
     return {
       label: 'Safe to Send',
       description: 'This email looks good and is safe to use.',
@@ -244,7 +244,7 @@ export function resolveRecommendation(score) {
       risk: 'Low',
     };
   }
-  if (score >= 60) {
+  if (score >= 46) {
     return {
       label: 'Use with Caution',
       description: 'This email has some risk factors — review before relying on it.',

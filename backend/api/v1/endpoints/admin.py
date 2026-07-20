@@ -7,7 +7,7 @@ here requires that token via the X-Admin-Token header (`require_admin`).
 """
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,13 +24,41 @@ from utils.admin_auth import create_admin_token, require_admin
 from utils.api_key import generate_api_key
 from utils.logging import get_logger
 from utils.timezone import utc_now_naive
+from utils.rate_limiter import RateLimiter
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 logger = get_logger(__name__)
 
+# Rate limiter for admin login attempts (5 attempts per minute to prevent brute force)
+admin_login_rate_limiter = RateLimiter()
+
+
+async def rate_limit_admin_login(request: Request) -> None:
+    """Rate limit for admin login endpoint - 5 attempts per minute."""
+    # Use client IP as the key for rate limiting admin login attempts
+    # In a production environment with proxies, you might want to use
+    # X-Forwarded-For or similar headers, but for simplicity we'll use client host
+    client_host = request.client.host if request.client else "unknown"
+    key = f"admin_login:{client_host}"
+
+    allowed, retry_after = admin_login_rate_limiter.check(key, 5, 60)  # 5 attempts per 60 seconds
+    if not allowed:
+        logger.warning(f"admin_login_rate_limit_exceeded", client_host=client_host)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "code": "rate_limit_exceeded",
+                "message": f"Too many login attempts. Please try again after {retry_after} seconds.",
+            },
+            headers={"Retry-After": str(retry_after)},
+        )
+
+# Rate limiter for admin login attempts (5 attempts per minute to prevent brute force)
+admin_login_rate_limiter = RateLimiter()
+
 
 @router.post("/login", response_model=AdminLoginResponse)
-async def admin_login(payload: AdminLoginRequest):
+async def admin_login(request: Request, payload: AdminLoginRequest, _: None = Depends(rate_limit_admin_login)):
     """Exchange the admin password for a 24h signed token."""
     if not settings.ADMIN_PASSWORD or payload.password != settings.ADMIN_PASSWORD:
         logger.warning("admin_login_failed")
@@ -129,6 +157,16 @@ async def activate_api_key(prefix: str, db: AsyncSession = Depends(get_db)):
     key.is_active = True
     await db.commit()
     logger.info("admin_api_key_activated", prefix=prefix)
+
+    await async_create_notification(
+        db,
+        title="API Key Activated",
+        message=f'API key "{key.name or prefix}" ({prefix}...) was activated.',
+        type=NotificationType.success,
+        priority=NotificationPriority.low,
+        metadata={"prefix": prefix, "name": key.name},
+    )
+
     return {"message": "activated", "prefix": prefix}
 
 

@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { AreaChart, Area, ResponsiveContainer } from 'recharts';
 import CircularProgress from '@/components/ui/CircularProgress';
 import StackedBarChart from '@/components/charts/StackedBarChart';
-import { getDashboardStats, listEmails, listDomains } from '@/services/api';
+import { getDashboardStats, listEmails, listDomains, getNewDomainsPerDay } from '@/services/api';
 import { APP_USER } from '@/utils/appConfig';
 
 import Button from '@/components/ui/Button';
@@ -982,9 +982,10 @@ export default function DashboardPage() {
   // Leaderboard — reuses the same /domains endpoint (and trend_delta_pct
   // field) DomainsPage/DomainTable already rely on, so the trend arrows
   // here are real, not re-derived from the coarser dashboard-stats top_domains.
+  // FIX (audit #H3): Add min_emails=5 filter to riskiest-domain leaderboards
   const { data: leaderboardData } = useQuery({
     queryKey: ['dashboard-domain-leaderboard'],
-    queryFn: () => listDomains({ page: 1, size: 5, sort_by: 'risk_percent', sort_order: 'desc' }),
+    queryFn: () => listDomains({ page: 1, size: 5, sort_by: 'risk_percent', sort_order: 'desc', min_emails: 5 }),
     refetchInterval: isTabVisible ? 15000 : false,
     refetchOnWindowFocus: true,
   });
