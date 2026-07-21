@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Email Verifier</title>
     <!--
-      FIX (audit #33): apply the saved theme class BEFORE React mounts /
+      FIX (audit #33): apply the saved theme class BEFORE React mount /
       before first paint. Previously ThemeToggle.jsx wrote to localStorage
       but nothing read it back on boot, so refreshing always flashed back
       to light mode even if the user had picked dark. This tiny inline
