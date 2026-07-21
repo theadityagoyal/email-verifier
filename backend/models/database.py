@@ -1,5 +1,5 @@
 """
-Database configuration and session management for the email verification application.
+Database configuration and session management for the email verification application
 
 This module provides:
 - Async and synchronous database engines
