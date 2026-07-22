@@ -1,6 +1,6 @@
 import uuid
 import os
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, delete
@@ -20,6 +20,34 @@ from utils.file_utils import read_upload_file, FileReadError, SUPPORTED_EXTENSIO
 # Constants
 MAX_FILE_SIZE_MB = 50
 UPLOAD_BASE_DIR = "/tmp/uploads"
+
+# ── Export filter buckets ────────────────────────────────────────────────
+# Mirrors bucket_case() in api/v1/endpoints/dashboard.py and the JS mirror
+# in frontend/src/utils/statusBucket.js — if backend bucket rules change,
+# update this too.
+EXPORT_SAFE_STATUSES = {"verified", "deliverable", "trusted", "probably_valid"}
+EXPORT_RISKY_STATUSES = {"risky", "unconfirmed", "uncertain"}
+EXPORT_UNSAFE_STATUSES = {"invalid", "undeliverable"}
+VALID_EXPORT_FILTERS = {"all", "safe", "risky", "unsafe"}
+
+
+def _email_export_bucket(e: Email) -> str:
+    """Per-row bucket classification for CSV export filtering. Same logic
+    as bucket_case() in dashboard.py, just evaluated in Python instead of SQL."""
+    status_val = e.status.value if e.status else ""
+    if e.disposable:
+        return "unsafe"
+    if status_val in EXPORT_SAFE_STATUSES and (e.role_based or e.catch_all):
+        return "risky"
+    if status_val in EXPORT_SAFE_STATUSES:
+        return "safe"
+    if status_val in EXPORT_RISKY_STATUSES:
+        return "risky"
+    if status_val in EXPORT_UNSAFE_STATUSES:
+        return "unsafe"
+    if status_val == "processing":
+        return "processing"
+    return "unsafe"
 
 
 # Import the sync processor
@@ -259,12 +287,23 @@ async def delete_job(
         raise HTTPException(status_code=500, detail=f"Failed to delete job: {str(e)}")
 
 @router.get("/jobs/{job_id}/export")
-async def export_job_results(job_id: str, db: AsyncSession = Depends(get_db)):
-    """Export original file with verification results added as new columns."""
+async def export_job_results(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    filter_status: str = Query(default="all", alias="filter", description=f"One of {sorted(VALID_EXPORT_FILTERS)}"),
+):
+    """Export original file with verification results added as new columns.
+
+    `filter` query param (all|safe|risky|unsafe) narrows the export down to
+    only emails in that bucket — e.g. ?filter=safe downloads only Safe
+    results instead of the whole job.
+    """
     try:
         job = (await db.execute(select(Job).where(Job.job_id == job_id))).scalar_one_or_none()
         if not job:
             raise HTTPException(status_code=404, detail="Job not found.")
+
+        resolved_filter = filter_status if filter_status in VALID_EXPORT_FILTERS else "all"
 
         # Load original file
         try:
@@ -297,12 +336,27 @@ async def export_job_results(job_id: str, db: AsyncSession = Depends(get_db)):
 
         # Fetch verified results from DB (only for this job)
         emails_db = (await db.execute(select(Email).where(Email.job_id == job_id))).scalars().all()
+
+        # Apply the safe/risky/unsafe filter BEFORE building the results
+        # map, so both the "merge into original file" path and the
+        # "fresh sheet" fallback path only ever see the matching rows.
+        if resolved_filter != "all":
+            emails_db = [e for e in emails_db if _email_export_bucket(e) == resolved_filter]
+
         results_map = {e.email: e for e in emails_db}
 
         if original_df is not None:
             # Add result columns to original sheet
             df = original_df.copy()
             emails_series = df[email_col].astype(str).str.strip().str.lower()
+
+            if resolved_filter != "all":
+                # Only keep rows whose email survived the bucket filter above.
+                # (This also naturally drops "not_processed" rows when a
+                # specific bucket was requested.)
+                mask = emails_series.isin(results_map.keys())
+                df = df[mask].copy()
+                emails_series = emails_series[mask]
 
             df["ev_status"] = emails_series.map(lambda e: results_map[e].status.value if e in results_map else "not_processed")
             df["ev_score"] = emails_series.map(lambda e: results_map[e].score if e in results_map else "")
@@ -313,7 +367,7 @@ async def export_job_results(job_id: str, db: AsyncSession = Depends(get_db)):
             df["ev_smtp_valid"] = emails_series.map(lambda e: "Yes" if e in results_map and results_map[e].smtp_valid else "No")
             df["ev_verified_at"] = emails_series.map(lambda e: str(results_map[e].verified_at) if e in results_map and results_map[e].verified_at else "")
         else:
-            # Fallback fresh sheet
+            # Fallback fresh sheet — emails_db is already filtered above.
             df = pd.DataFrame([{
                 "email": e.email,
                 "ev_status": e.status.value if e.status else "",
@@ -330,10 +384,12 @@ async def export_job_results(job_id: str, db: AsyncSession = Depends(get_db)):
         df.to_csv(output, index=False)
         output.seek(0)
 
+        filename_prefix = f"{resolved_filter}_" if resolved_filter != "all" else ""
+
         return StreamingResponse(
             iter([output.getvalue()]),
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=verified_{job.file_name}"},
+            headers={"Content-Disposition": f"attachment; filename={filename_prefix}verified_{job.file_name}"},
         )
     except HTTPException:
         raise

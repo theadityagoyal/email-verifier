@@ -1,15 +1,15 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Calendar, Clock, Download, RotateCcw, StopCircle, ChevronDown, Copy, Ban,
+  Calendar, Clock, RotateCcw, StopCircle, ChevronDown, Copy, Ban,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Button from '@/components/ui/Button';
 import BulkStatusBadge, { getBulkStatusMeta } from './BulkStatusBadge';
 import JobActionsMenu from './JobActionsMenu';
+import JobDownloadMenu from './JobDownloadMenu';
 import { calculateJobStats, isJobActive } from '@/utils/jobUtils';
 import { formatDateTimeIST, formatDurationShort } from '@/utils/dateUtils';
 import { getFileExt, getFileExtBadgeClass } from '@/utils/fileHelpers';
-import { exportJobResults } from '@/services/api';
 
 function StatTile({ label, value, colorClass }) {
   return (
@@ -125,11 +125,7 @@ export default function JobCard({
 
           <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
             {job.status === 'completed' && (
-              <a href={exportJobResults(job.job_id)}>
-                <Button asChild variant="outline" size="sm">
-                  <Download className="h-3.5 w-3.5" /> Download
-                </Button>
-              </a>
+              <JobDownloadMenu jobId={job.job_id} />
             )}
             {active && (
               <Button
@@ -153,14 +149,20 @@ export default function JobCard({
 
             <JobActionsMenu jobId={job.job_id} onCopyId={handleCopyId} onDelete={onDelete} />
 
-            <motion.div
-              animate={{ rotate: expanded ? 180 : 0 }}
-              transition={{ duration: 0.2 }}
-              className="text-[var(--foreground)]/40 pl-1"
-              aria-hidden="true"
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onToggleExpand(job.job_id); }}
+              className="p-1 rounded-lg text-[var(--foreground)]/40 hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+              aria-label={expanded ? 'Collapse details' : 'Expand details'}
+              aria-expanded={expanded}
             >
-              <ChevronDown className="h-4 w-4" />
-            </motion.div>
+              <motion.div
+                animate={{ rotate: expanded ? 180 : 0 }}
+                transition={{ duration: 0.2 }}
+              >
+                <ChevronDown className="h-4 w-4" />
+              </motion.div>
+            </button>
           </div>
         </div>
       </div>
@@ -210,18 +212,7 @@ export default function JobCard({
                 </div>
               </div>
             )}
-
-            {job.status === 'completed' && (
-              <div className="px-4 pb-4">
-                <a
-                  href={exportJobResults(job.job_id)}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-[var(--primary)]/10 text-[var(--primary)] rounded-lg hover:bg-[var(--primary)]/20 transition-colors text-sm font-medium"
-                >
-                  <Download className="h-4 w-4" />
-                  Download Full Results
-                </a>
-              </div>
-            )}
+            
           </motion.div>
         )}
       </AnimatePresence>

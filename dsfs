@@ -1,0 +1,234 @@
+Deployment Summary — Backend + Frontend
+BACKEND (AdonisJS 5, ~/project2/ubisense-backend)
+
+1. Deps install
+
+npm install --legacy-peer-deps
+
+Peer dependency conflict tha (eslint versions clash) — --legacy-peer-deps se force resolve kiya.
+
+2. Env setup
+
+cp .env.example .env
+
+Fir manually .env edit karke fill kiya:
+
+HOST=0.0.0.0 — sab network interfaces pe listen karega (sirf localhost nahi)
+PORT=3333 — app ka port
+NODE_ENV=production
+APP_KEY — node ace generate:key se generate kiya, encryption/session ke liye required
+ENCRYPTION_KEY — openssl rand -hex 16 se random 32-char key generate kiya
+DB_* vars — RDS MySQL connection details (host, port, user, password, db name)
+WHATSAPP_* vars — required the boot ke liye (dummy/real values daali)
+CORS_ORIGIN — frontend ka URL
+
+Kyun: Adonis env.ts schema me kuch vars "required" mark hain — inke bina app boot hi nahi hota, chahe feature use ho ya na ho.
+
+3. DB connectivity debug
+
+nc -zv <rds-endpoint> 3306
+
+Network reachability check (port open h ya nahi) — TCP level test, pehle ye confirm kiya RDS tak pahunch rahe h.
+
+mysql -h <endpoint> -u ubisense -p ubisense_db
+
+Direct MySQL client se login test — credentials aur DB naam sahi h confirm kiya.
+
+4. Migrations run — 3 bugs mile aur fix kiye
+
+node ace migration:run --force
+Bug 1: Ek migration file ka naam 1784201613392_... se start hota tha — number chhota hone se alphabetically sabse pehle chal gayi, lekin uska code messages table me column add kar raha tha jo abhi bana hi nahi tha. Fix: file rename karke bada timestamp diya taaki baad me chale.
+Bug 2: Same date-timestamp ki do files (add_quality_to_templates aur create_templates_table) — "add" alphabetically "create" se pehle aa gaya, ALTER pehle chal gaya table exist kiye bina. Fix: rename karke order theek kiya.
+Bug 3: notification_devices table me endpoint column bahut lamba tha (varchar 800) — MySQL ki unique index key length limit (3072 bytes) cross kar gaya utf8mb4 encoding (4 bytes/char) ki wajah se. Fix: length 700 kar di.
+Extra issue: Partial-created table clean karne ke liye beech me DROP TABLE bhi chalaya.
+
+Kyun explain kar raha hu: Adonis migrations filename ke alphabetical order me chalti hain, file ke andar timestamp/comment se farak nahi padta — ye purane developer ki galti thi jo naming convention follow nahi hui.
+
+5. Build
+
+node ace build --production --ignore-ts-errors
+
+Production build — TypeScript source ko compile karke build/ folder me JS output banaya. Code me kuch pehle se maujood type-errors the (unrelated bugs) — --ignore-ts-errors se unhe bypass kiya taaki build ban jaye. Ye code-level bugs baad me dev team ko fix karne chahiye.
+
+6. Production deps + run
+
+cp .env build/.env
+cd build
+npm ci --omit=dev --legacy-peer-deps
+node server.js
+
+.env ko build folder me manually copy kiya (build process khud copy nahi karta). npm ci --omit=dev sirf production dependencies install karta hai (dev tools skip). Server manually chala ke confirm kiya boot ho raha h.
+
+7. Process manager (pm2) — permanent running
+
+sudo npm install -g pm2
+pm2 start server.js --name ubisense-backend
+pm2 save
+pm2 startup
+sudo env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u ubuntu --hp /home/ubuntu
+
+Kyun: node server.js terminal band hote hi ruk jata — pm2 background me chalata rehta h aur crash pe auto-restart karta h. startup command server reboot hone pe bhi auto-start ensure karti h.
+
+FRONTEND (Angular, ~/project2/ubisense-frontend)
+
+1. Deps + build
+
+npm install
+npm run build
+
+Output: static files dist/ubisense/browser/ me — pure static HTML/JS/CSS, koi Node server nahi chahiye.
+
+2. Nginx config
+
+Naya alag config file banaya (ubichat ko disturb nahi kiya):
+
+File: /etc/nginx/sites-available/ubisense
+Port 8080 diya (80 already ubichat/default ke liye tha)
+root /var/www/ubisense-frontend — build files yahan serve honge
+try_files $uri $uri/ /index.html — Angular SPA routing ke liye zaroori (har route index.html pe fallback)
+/api/ path ko localhost:3333 (backend) pe reverse-proxy kiya
+sudo mkdir -p /var/www/ubisense-frontend
+sudo cp -r dist/ubisense/browser/* /var/www/ubisense-frontend/
+sudo ln -s /etc/nginx/sites-available/ubisense /etc/nginx/sites-enabled/ubisense
+sudo nginx -t
+sudo systemctl reload nginx
+
+nginx -t config syntax verify karta h, reload bina downtime ke naya config load karta h.
+
+3. AWS Security Group
+
+web-access-sg me port 8080 inbound rule add ki (0.0.0.0/0) — taaki bahar se http://<public-ip>:8080 access ho sake.
+
+FINAL STATE
+Backend: http://localhost:3333 (internal), pm2 se managed, auto-restart on
+Frontend: http://<public-ip>:8080, nginx se static serve, /api/ backend ko proxy
+DB: RDS MySQL, migrations complete
+Confirmed working — login page live, browser me render ho raha h
+
+
+
+
+
+
+
+PORT=3333
+HOST=0.0.0.0
+NODE_ENV=production
+APP_KEY=2Om9sD5hhxggmbyC8JIqmgPwWn-6gG_m
+
+DB_CONNECTION=mysql
+DB_HOST=ubitech-prod-ubi.cv0cmgoqam9i.ap-south-1.rds.amazonaws.com
+DB_PORT=3306
+DB_USER=ubisense
+DB_PASSWORD='F6[mk1Nk*q4OuFKD'
+DB_DATABASE=ubisense_db
+
+APP_URL=
+REDIS_HOST=redis-16220.crce217.ap-south-1-1.ec2.cloud.redislabs.com
+REDIS_PORT=16220
+REDIS_PASSWORD=yNBbJzALeBH3qFxnRinjVZfmy7MA2Wn5
+
+WHATSAPP_ACCESS_TOKEN=EAAZABThLEwPcBSKiZCVcLTUK72r315sP9Jbd6i350SjBSemGql1pgZAxBVeZBUlB7K55wdmJTuC2ZBVQR6cxwWjgk5jzZAKHpZBlYTFZBSeG4pxAiOjkKXTiyouckUKVmGHlftqsyi8G0jZBv0asdLb2HU82BOuQIHZCo14pKz2n7AmebjaIf553T579YXEZAGDWRNZCcAZDZD
+WHATSAPP_APP_ID=1760653438402807
+WHATSAPP_PHONE_NUMBER_ID=1241008075764793
+WHATSAPP_WABA_ID=1347767726880957
+WHATSAPP_WEBHOOK_VERIFY_TOKEN=ubisense_token
+WHATSAPP_APP_SECRET=9fc20b49a51d8ea4a30fad9eeac2576b
+WHATSAPP_PHONE_BUSINESS_ID=1002776965982709
+
+CORS_ORIGIN=http://localhost:63478
+ENCRYPTION_KEY=829a6e9212f5ee79c8dc119363c07791fe80d9629e89c25346ce6afa258b38dc
+LOG_LEVEL=info
+VAPID_PUBLIC_KEY=BAycYTmdAR7MLsIns2CdZY63KmZYh23aQaiXPAXOFQI6MF8VJUji5sWBcXYH-u6m-YKk1Q-QxKHCrIZHkp8kIDw
+VAPID_PRIVATE_KEY=fZJPMx_TO5KBd5mkTyrGtqIJnoJriJzX7S_WoxJYZ-U
+
+
+
+
+
+
+
+
+ubuntu@ip-172-31-8-134:~/project2/ubisense-backend$ cat .env
+NODE_ENV=production
+PORT=3333
+APP_KEY=24PDoQzK5rgAZ3VJhnpLpHYZEnp3KKh7
+HOST=0.0.0.0
+
+DB_CONNECTION=mysql
+DB_HOST=ubitech-prod-ubi.cv0cmgoqam9i.ap-south-1.rds.amazonaws.com
+DB_PORT=3306
+DB_USER=ubisense
+DB_PASSWORD='F6[mk1Nk*q4OuFKD'
+DB_DATABASE=ubisense_db
+
+REDIS_HOST=13.234.70.160
+REDIS_PORT=6379
+REDIS_PASSWORD='Adonis_ubi#123'
+
+WHATSAPP_ACCESS_TOKEN=dummy
+WHATSAPP_PHONE_NUMBER_ID=dummy
+WHATSAPP_WABA_ID=dummy
+WHATSAPP_WEBHOOK_VERIFY_TOKEN=dummy
+WHATSAPP_APP_SECRET=dummy
+# Meta App Dashboard -> Settings -> Basic -> "App ID". Required only for
+# submitting IMAGE/VIDEO/DOCUMENT template headers (Resumable Upload API).
+WHATSAPP_APP_ID=
+
+RAZORPAY_KEY_ID=
+RAZORPAY_KEY_SECRET=
+RAZORPAY_WEBHOOK_SECRET=
+
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USERNAME=
+SMTP_PASSWORD=
+MAIL_FROM_ADDRESS=noreply@yourdomain.com
+MAIL_FROM_NAME=UbiSense
+
+OTP_EXPIRY_MINUTES=5
+OTP_MAX_ATTEMPTS=5
+OTP_REQUESTS_PER_10MIN=3
+
+CORS_ORIGIN=http://localhost:4200
+ENCRYPTION_KEY=78ebba736297276cbdac0614fa1d140d
+
+SENTRY_DSN=
+LOG_LEVEL=info
+
+# Web Push (Browser Notifications). Generate your own pair with
+# `npx web-push generate-vapid-keys` — the same pair must stay stable
+# forever once devices have subscribed with it, or every existing
+# registration breaks and has to re-subscribe.
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+VAPID_SUBJECT=mailto:support@yourdomain.com
+ubuntu@ip-172-31-8-134:~/project2/ubisense-backend$
+
+
+
+
+Backend changes (code ya .env)
+
+Code change hua (.ts files):
+
+cd ~/project2/ubisense-backend
+node ace build --production --ignore-ts-errors
+cp .env build/.env
+cd build
+npm ci --omit=dev --legacy-peer-deps
+pm2 restart ubisense-backend
+
+Sirf .env change hua (code same):
+
+cp ~/project2/ubisense-backend/.env ~/project2/ubisense-backend/build/.env
+pm2 restart ubisense-backend
+Frontend changes (code ya env)
+
+Kisi bhi change ke baad (code ya environment.ts) — hamesha full rebuild:
+
+cd ~/project2/ubisense-frontend
+npm run build
+sudo cp -r dist/ubisense/browser/* /var/www/ubisense-frontend/
+
+Nginx restart/reload ki zarurat nahi — static files bas replace ho jaati h.

@@ -175,8 +175,9 @@ export const getJobStatus = (jobId) =>
 export const listJobs = () =>
   apiEnhanced.get('/jobs').then((r) => r.data)
 
-export const exportJobResults = (jobId) =>
-  `${apiEnhanced.defaults.baseURL}/jobs/${jobId}/export`
+// filter: 'all' | 'safe' | 'risky' | 'unsafe'
+export const exportJobResults = (jobId, filter = 'all') =>
+  `${apiEnhanced.defaults.baseURL}/jobs/${jobId}/export${filter && filter !== 'all' ? `?filter=${filter}` : ''}`
 
 export const deleteJob = (jobId) =>
   apiEnhanced.delete(`/jobs/${jobId}`).then((r) => r.data)
