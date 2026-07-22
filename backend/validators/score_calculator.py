@@ -4,6 +4,19 @@ from models.models import EmailStatus
 
 TRUSTED_DOMAINS = frozenset({
 
+    # ── Microsoft ─────────────────────────────────────────────────────────────
+    "outlook.com", "hotmail.com", "live.com", "msn.com",
+    "hotmail.co.uk", "hotmail.fr", "hotmail.de", "hotmail.in",
+    "hotmail.it", "hotmail.es", "hotmail.com.ar", "hotmail.com.br",
+    "live.in", "live.co.uk", "live.com.au", "live.fr",
+    "windowslive.com",
+
+    # ── Yahoo ─────────────────────────────────────────────────────────────────
+    "yahoo.com", "yahoo.co.in", "yahoo.co.uk", "yahoo.fr",
+    "yahoo.de", "yahoo.es", "yahoo.it", "yahoo.com.ar",
+    "yahoo.com.br", "yahoo.com.au", "yahoo.ca", "yahoo.jp",
+    "ymail.com", "rocketmail.com",
+
     # ── Apple ─────────────────────────────────────────────────────────────────
     "icloud.com", "me.com", "mac.com",
 
@@ -112,6 +125,36 @@ TRUSTED_DOMAINS = frozenset({
     "shell.com", "bp.com", "exxonmobil.com", "chevron.com",
     "total.com", "totalenergies.com",
 
+    # ── Your Company Domains ──────────────────────────────────────────────────
+    "ubitechsolutions.com", "ubihrm.com", "ubiattendance.com",
+    "ubipayroll.com", "ubipay.com", "ubiservices.com",
+
+    # ── HR & Attendance Apps ──────────────────────────────────────────────────
+    "greythr.com", "greytip.com",
+    "zoho.com", "zohomail.com", "zohocorp.com",
+    "darwinbox.com", "darwinbox.in",
+    "keka.com", "keka.in",
+    "bamboohr.com",
+    "successfactors.com", "sap.com",
+    "workday.com", "workdayhcm.com",
+    "adp.com", "adpvantage.com",
+    "sumhr.com", "sumtotal.com",
+    "hrone.com", "hrone.in",
+    "kredily.com", "kredily.in",
+    "factohr.com", "factohr.in",
+    "spine.in", "spinehr.com",
+    "beehive.com", "beehivehr.com",
+    "247hrm.com", "247hrm.in",
+    "peoplestrong.com", "peoplestrong.in",
+    "adrenalin.co.in", "adrenalinapp.com",
+    "qandle.com", "qandle.in",
+    "zimyo.com", "zimyo.in",
+    "empxtrack.com", "empxtrack.in",
+    "pocket-hrms.com", "pockethrms.com",
+    "timelabs.in", "timelabs.com",
+    "uknowva.com", "uknowva.in",
+    "hrmantra.com", "hrmantra.in",
+    "ascentsoftware.in", "ascentsoftware.com", "zinghr.com",
 })
 
 # Minimum score guaranteed for a trusted domain that passed syntax and isn't
