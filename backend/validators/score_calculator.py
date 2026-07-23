@@ -5,10 +5,10 @@ from models.models import EmailStatus
 TRUSTED_DOMAINS = frozenset({
 
     # ── Google ───────────────────────────────────────────────────────────────
-    "googlemail.com", "google.com",
+    "gmail.com", "googlemail.com", "google.com",
     
     # ── Microsoft ─────────────────────────────────────────────────────────────
-    "outlook.com", "hotmail.com", "live.com",
+    "outlook.com", "hotmail.com", "live.com", "msn.com",
     "hotmail.co.uk", "hotmail.fr", "hotmail.de", "hotmail.in",
     "hotmail.it", "hotmail.es", "hotmail.com.ar", "hotmail.com.br",
     "live.in", "live.co.uk", "live.com.au", "live.fr",
