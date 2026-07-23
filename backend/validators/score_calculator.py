@@ -3,9 +3,6 @@ import re
 from models.models import EmailStatus
 
 TRUSTED_DOMAINS = frozenset({
-
-    # ── Google ───────────────────────────────────────────────────────────────
-    "gmail.com", "googlemail.com", "google.com",
     
     # ── Microsoft ─────────────────────────────────────────────────────────────
     "outlook.com", "hotmail.com", "live.com", "msn.com",
@@ -127,10 +124,6 @@ TRUSTED_DOMAINS = frozenset({
     "boeing.com", "airbus.com", "lockheedmartin.com",
     "shell.com", "bp.com", "exxonmobil.com", "chevron.com",
     "total.com", "totalenergies.com",
-
-    # ── Your Company Domains ──────────────────────────────────────────────────
-    "ubitechsolutions.com", "ubihrm.com", "ubiattendance.com",
-    "ubipayroll.com", "ubipay.com", "ubiservices.com",
 
     # ── HR & Attendance Apps ──────────────────────────────────────────────────
     "greythr.com", "greytip.com",
