@@ -1,7 +1,7 @@
 """
 Database configuration and session management for the email verification application
 
-This module provides:
+This module provides: 
 - Async and synchronous database engines
 - Session factories for both async (FastAPI) and sync (Alembic/background tasks) usage
 - Database session dependency for FastAPI dependency injection
