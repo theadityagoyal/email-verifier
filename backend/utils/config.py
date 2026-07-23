@@ -42,6 +42,20 @@ class Settings(BaseSettings):
         "https://raw.githubusercontent.com/FGRibreau/mailchecker/master/list.txt",
     ]
 
+    # ── Smart verification result reuse ─────────────────────────────────────
+    # Master switch — if False, every verification always does a full
+    # DNS+SMTP check regardless of any existing DB record (old behavior).
+    RESULT_REUSE_ENABLED: bool = True
+    # Syntax + disposable checks are pure/cheap (no I/O) and are ALWAYS
+    # recomputed fresh — they have no TTL setting because caching them
+    # would save nothing and could go stale for free.
+    # DNS + MX results are the slowest-changing signal (domain existence,
+    # mail server config rarely churns) — long TTL.
+    DNS_MX_TTL_DAYS: int = 60
+    # SMTP acceptance + catch-all behavior can change more often (mailbox
+    # provisioning, greylisting, catch-all toggled) — shorter TTL.
+    SMTP_TTL_DAYS: int = 30
+
     class Config:
         env_file = ".env"
         extra = "ignore"

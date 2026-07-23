@@ -11,7 +11,7 @@ from sqlalchemy import select
 from models.database import SyncSessionLocal
 from models.models import Job, JobStatus, NotificationType, NotificationPriority
 from services.email_service import verify_email
-from services.domain_service import sync_upsert_email, sync_upsert_email_processing, sync_upsert_domain
+from services.domain_service import sync_upsert_email_processing
 from services.notification_service import sync_create_notification
 from utils.email_utils import detect_email_column
 from utils.file_utils import read_upload_file, FileReadError
@@ -37,6 +37,12 @@ CANCEL_CHECK_INTERVAL = 10
 # a real performance bottleneck. Instead, each thread creates its event loop
 # exactly once (on first use) and reuses it for every subsequent email it
 # processes.
+#
+# This is also what makes the smart-reuse locking correct across bulk
+# workers: each thread's verify_email() call is genuinely async on that
+# thread's own loop, and utils/verification_lock.py's EmailLockManager uses
+# threading.Lock (not asyncio.Lock) specifically so it works correctly
+# across these independent per-thread loops.
 _thread_local = threading.local()
 
 
@@ -71,7 +77,17 @@ def _is_cancel_requested(job_id: str) -> bool:
 
 
 def verify_single_email_sync(email: str, job_id: str | None = None):
-    """Verify a single email synchronously (for thread pool execution)."""
+    """Verify a single email synchronously (for thread pool execution).
+
+    NOTE (smart verification reuse): the actual Email/Domain row persistence
+    no longer happens here — services/email_service.verify_email() now does
+    it internally (inside its own per-email lock, see
+    utils/verification_lock.py), which is what closes the race window for
+    concurrent duplicate DNS/MX/SMTP work across overlapping bulk jobs and
+    single-verify requests for the same address. This function still owns
+    the "mark processing" pre-step (immediate UI feedback) and the job
+    counters, both of which are specific to bulk-job bookkeeping.
+    """
     db = SyncSessionLocal()
     domain = email.split('@')[-1].lower() if '@' in email else ''
     now = utc_now_naive()
@@ -89,21 +105,10 @@ def verify_single_email_sync(email: str, job_id: str | None = None):
             # Continue anyway - verification will still run
 
         loop = _get_thread_event_loop()
-        result = loop.run_until_complete(verify_email(email))
-
-        now = utc_now_naive()
-
-        # Atomic upsert — eliminates the check-then-insert race that could
-        # previously raise an unhandled IntegrityError when the same email
-        # appeared more than once across overlapping bulk jobs / concurrent
-        # single-verify requests.
-        sync_upsert_email(db, result, job_id, now)
-
-        if result.domain:
-            sync_upsert_domain(db, result.domain, result.mx_records, now)
+        result = loop.run_until_complete(verify_email(email, job_id=job_id))
 
         if job_id:
-            _update_job_counter(db, job_id, result.status)
+            _update_job_counter(db, job_id, result)
 
         db.commit()
         return result.model_dump(mode="json")
@@ -116,9 +121,18 @@ def verify_single_email_sync(email: str, job_id: str | None = None):
         db.close()
 
 
-def _update_job_counter(db, job_id: str, status) -> None:
-    """Update job counters and progress for a single email verification result."""
+def _update_job_counter(db, job_id: str, result) -> None:
+    """Update job counters, progress, and smart-reuse metrics for a single
+    email verification result.
+
+    `result` is the full EmailVerifyResponse (not just `status`) so this can
+    also read the reuse metadata (record_existed/dns_reused/smtp_reused/
+    dns_check_applicable/smtp_check_applicable) populated by
+    services/email_service.py.
+    """
     from models.models import EmailStatus  # local import to avoid unused-import churn elsewhere
+
+    status = result.status
 
     job = db.execute(
         select(Job).where(Job.job_id == job_id).with_for_update()
@@ -140,6 +154,27 @@ def _update_job_counter(db, job_id: str, status) -> None:
         job.invalid = (job.invalid or 0) + 1
     elif status in (EmailStatus.risky, EmailStatus.unconfirmed, EmailStatus.uncertain):
         job.risky = (job.risky or 0) + 1
+
+    # ── Smart verification result reuse metrics ─────────────────────────────
+    # "Fully reused" = every signal that WOULD have needed a real check
+    # (per dns_check_applicable/smtp_check_applicable) was in fact served
+    # from a fresh cached value, on a pre-existing DB row. If the email was
+    # brand new, or any applicable check had to run for real, it counts as
+    # newly_verified — matching the bulk-upload example in the spec (800
+    # direct reuse / 200 full verification).
+    dns_satisfied = (not result.dns_check_applicable) or result.dns_reused
+    smtp_satisfied = (not result.smtp_check_applicable) or result.smtp_reused
+    fully_reused = bool(result.record_existed and dns_satisfied and smtp_satisfied)
+
+    if fully_reused:
+        job.reused_results = (job.reused_results or 0) + 1
+    else:
+        job.newly_verified = (job.newly_verified or 0) + 1
+
+    if result.dns_check_applicable and result.dns_reused:
+        job.dns_checks_saved = (job.dns_checks_saved or 0) + 1
+    if result.smtp_check_applicable and result.smtp_reused:
+        job.smtp_checks_saved = (job.smtp_checks_saved or 0) + 1
 
     if job.total > 0:
         progress = (job.processed / job.total) * 100
@@ -227,16 +262,23 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email") ->
         if email_col not in df.columns:
             email_col = detect_email_column(df)
 
-        emails = (
+        # ── Mandatory bulk dedup ─────────────────────────────────────────
+        # Normalize (strip/lowercase), keep only rows that look like an
+        # email (contain "@"), then dedupe. `total_before_dedup` is the
+        # count BEFORE .unique() so duplicate_emails_removed reflects real
+        # duplicate rows within this file — not rows dropped for other
+        # reasons (blank/no "@").
+        raw_series = (
             df[email_col]
             .dropna()
             .astype(str)
             .str.strip()
             .str.lower()
-            .unique()
-            .tolist()
         )
-        emails = [e for e in emails if "@" in e]
+        with_at = raw_series[raw_series.str.contains("@")]
+        total_before_dedup = len(with_at)
+        emails = with_at.unique().tolist()
+        duplicate_emails_removed = total_before_dedup - len(emails)
 
         # Source of truth for the progress denominator. Whatever estimate the
         # upload endpoint may have stored, this guarantees job.total always
@@ -244,14 +286,24 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email") ->
         # percent staying stuck at 0 when that earlier value was
         # missing/incorrect.
         job.total = len(emails)
+        job.duplicate_emails_removed = duplicate_emails_removed
 
         job.processed = 0
         job.verified = 0
         job.invalid = 0
         job.risky = 0
+        job.reused_results = 0
+        job.newly_verified = 0
+        job.dns_checks_saved = 0
+        job.smtp_checks_saved = 0
         db.commit()
 
-        logger.info("bulk_job_processing", job_id=job_id, count=len(emails))
+        logger.info(
+            "bulk_job_processing",
+            job_id=job_id,
+            count=len(emails),
+            duplicate_emails_removed=duplicate_emails_removed,
+        )
 
         # Process emails in parallel using ThreadPoolExecutor
         try:
@@ -347,14 +399,25 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email") ->
         job.progress_percent = 100
         db.commit()
 
-        logger.info("bulk_job_completed", job_id=job_id, total=len(emails))
+        logger.info(
+            "bulk_job_completed",
+            job_id=job_id,
+            total=len(emails),
+            reused_results=job.reused_results,
+            newly_verified=job.newly_verified,
+            dns_checks_saved=job.dns_checks_saved,
+            smtp_checks_saved=job.smtp_checks_saved,
+        )
+
+        cache_hit_rate = round((job.reused_results / job.total * 100), 1) if job.total else 0.0
 
         sync_create_notification(
             db,
             title="Bulk Upload Completed",
             message=(
                 f'"{job.file_name}" finished — {job.verified} safe, '
-                f'{job.risky} risky, {job.invalid} unsafe out of {job.total}.'
+                f'{job.risky} risky, {job.invalid} unsafe out of {job.total} '
+                f'({job.reused_results} reused, {cache_hit_rate}% cache hit rate).'
             ),
             type=NotificationType.success,
             priority=NotificationPriority.medium,
@@ -365,6 +428,12 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email") ->
                 "verified": job.verified,
                 "risky": job.risky,
                 "invalid": job.invalid,
+                "duplicate_emails_removed": job.duplicate_emails_removed,
+                "reused_results": job.reused_results,
+                "newly_verified": job.newly_verified,
+                "dns_checks_saved": job.dns_checks_saved,
+                "smtp_checks_saved": job.smtp_checks_saved,
+                "cache_hit_rate": cache_hit_rate,
             },
         )
 
