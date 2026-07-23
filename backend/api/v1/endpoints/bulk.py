@@ -78,6 +78,23 @@ def _detect_email_column(df: pd.DataFrame) -> str:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+def _count_unique_and_duplicates(df: pd.DataFrame, email_col: str) -> tuple[list[str], int]:
+    """Normalize + dedupe emails in a DataFrame column.
+
+    Returns (unique_emails, duplicate_emails_removed). Shared logic between
+    this endpoint's upfront count (for the immediate upload response) and
+    tasks/bulk_processor.py's own recomputation when the background job
+    actually runs (kept as two separate computations rather than one shared
+    call across the process boundary — background task re-reads the file
+    from disk/S3 independently, same as before this change)."""
+    series = df[email_col].dropna().astype(str).str.strip().str.lower()
+    with_at = series[series.str.contains("@")]
+    total_before_dedup = len(with_at)
+    unique_emails = with_at.unique().tolist()
+    duplicate_emails_removed = total_before_dedup - len(unique_emails)
+    return unique_emails, duplicate_emails_removed
+
+
 @router.post("/bulk-upload", response_model=BulkUploadResponse, status_code=status.HTTP_202_ACCEPTED)
 async def bulk_upload(
     file: UploadFile = File(...),
@@ -103,15 +120,8 @@ async def bulk_upload(
         # Detect email column
         email_col = _detect_email_column(df)
 
-        # Count valid emails (normalise & deduplicate as worker does)
-        email_series = (
-            df[email_col]
-            .dropna()
-            .astype(str)
-            .str.strip()
-            .str.lower()
-        )
-        unique_emails = email_series[email_series.str.contains("@")].unique().tolist()
+        # Count valid emails (normalise & deduplicate — mandatory bulk dedup)
+        unique_emails, duplicate_emails_removed = _count_unique_and_duplicates(df, email_col)
         total = len(unique_emails)
 
         if total == 0:
@@ -144,6 +154,7 @@ async def bulk_upload(
             completed_at=None,
             error_details=None,
             total=total,
+            duplicate_emails_removed=duplicate_emails_removed,
             created_at=utc_now_naive(),
         )
         db.add(job)
@@ -152,13 +163,19 @@ async def bulk_upload(
         # Bulk Upload Started notification — fired here (not inside the
         # background worker) so it fires exactly once per upload, right when
         # the job is actually queued/accepted.
+        dup_note = f" ({duplicate_emails_removed} duplicate(s) skipped)" if duplicate_emails_removed else ""
         await async_create_notification(
             db,
             title="Bulk Upload Started",
-            message=f'"{file.filename}" queued for verification — {total} email(s).',
+            message=f'"{file.filename}" queued for verification — {total} email(s){dup_note}.',
             type=NotificationType.info,
             priority=NotificationPriority.low,
-            metadata={"job_id": job_id, "file_name": file.filename, "total": total},
+            metadata={
+                "job_id": job_id,
+                "file_name": file.filename,
+                "total": total,
+                "duplicate_emails_removed": duplicate_emails_removed,
+            },
         )
 
         # Start processing the job in background using FastAPI BackgroundTasks
@@ -166,7 +183,12 @@ async def bulk_upload(
         background_tasks.add_task(process_bulk_job_sync, job_id, s3_key, email_col)
         logger.info("bulk_job_dispatched", job_id=job_id)
 
-        return BulkUploadResponse(job_id=job_id, message="Job queued", total_emails=total)
+        return BulkUploadResponse(
+            job_id=job_id,
+            message="Job queued",
+            total_emails=total,
+            duplicate_emails_removed=duplicate_emails_removed,
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -197,7 +219,14 @@ async def get_job_status(job_id: str, db: AsyncSession = Depends(get_db)):
         job = (await db.execute(select(Job).where(Job.job_id == job_id))).scalar_one_or_none()
         if not job:
             raise HTTPException(status_code=404, detail="Job not found.")
-        return job
+
+        response = JobStatusResponse.model_validate(job)
+        # unique_emails/total_emails_seen/cache_hit_rate are derived, not
+        # stored columns — computed here from the stored counters.
+        response.unique_emails = job.total
+        response.total_emails_seen = job.total + (job.duplicate_emails_removed or 0)
+        response.cache_hit_rate = round((job.reused_results / job.total * 100), 1) if job.total else 0.0
+        return response
     except HTTPException:
         raise
     except Exception as e:

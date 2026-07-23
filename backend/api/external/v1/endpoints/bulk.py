@@ -45,6 +45,17 @@ def _read_file(content: bytes, filename: str) -> pd.DataFrame:
         )
 
 
+def _count_unique_and_duplicates(df: pd.DataFrame, email_col: str) -> tuple[list[str], int]:
+    """Normalize + dedupe emails (mandatory bulk dedup — see internal
+    api/v1/endpoints/bulk.py for the identical logic)."""
+    series = df[email_col].dropna().astype(str).str.strip().str.lower()
+    with_at = series[series.str.contains("@")]
+    total_before_dedup = len(with_at)
+    unique_emails = with_at.unique().tolist()
+    duplicate_emails_removed = total_before_dedup - len(unique_emails)
+    return unique_emails, duplicate_emails_removed
+
+
 @router.post("/bulk", status_code=status.HTTP_202_ACCEPTED)
 async def external_bulk_upload(
     file: UploadFile = File(...),
@@ -83,8 +94,7 @@ async def external_bulk_upload(
         except ValueError as e:
             raise HTTPException(status_code=400, detail={"code": "no_email_column", "message": str(e)})
 
-        email_series = df[email_col].dropna().astype(str).str.strip().str.lower()
-        unique_emails = email_series[email_series.str.contains("@")].unique().tolist()
+        unique_emails, duplicate_emails_removed = _count_unique_and_duplicates(df, email_col)
         total = len(unique_emails)
 
         if total == 0:
@@ -117,6 +127,7 @@ async def external_bulk_upload(
             completed_at=None,
             error_details=None,
             total=total,
+            duplicate_emails_removed=duplicate_emails_removed,
             created_at=utc_now_naive(),
         )
         db.add(job)
@@ -127,7 +138,12 @@ async def external_bulk_upload(
 
         return {
             "success": True,
-            "data": {"job_id": job_id, "status": "processing", "total_emails": total},
+            "data": {
+                "job_id": job_id,
+                "status": "processing",
+                "total_emails": total,
+                "duplicate_emails_removed": duplicate_emails_removed,
+            },
         }
     except HTTPException as he:
         resp_status = he.status_code
@@ -150,6 +166,8 @@ async def external_get_job_status(
     if not job:
         raise HTTPException(status_code=404, detail={"code": "job_not_found", "message": "Job not found"})
 
+    cache_hit_rate = round((job.reused_results / job.total * 100), 1) if job.total else 0.0
+
     return {
         "success": True,
         "data": {
@@ -166,6 +184,16 @@ async def external_get_job_status(
             "created_at": job.created_at.isoformat() if job.created_at else None,
             "completed_at": job.completed_at.isoformat() if job.completed_at else None,
             "error_message": job.error_message,
+            "metrics": {
+                "unique_emails": job.total,
+                "duplicate_emails_removed": job.duplicate_emails_removed,
+                "total_emails_seen": job.total + (job.duplicate_emails_removed or 0),
+                "reused_results": job.reused_results,
+                "newly_verified": job.newly_verified,
+                "dns_checks_saved": job.dns_checks_saved,
+                "smtp_checks_saved": job.smtp_checks_saved,
+                "cache_hit_rate": cache_hit_rate,
+            },
         },
     }
 

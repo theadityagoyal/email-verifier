@@ -73,6 +73,18 @@ class Email(Base):
     score = Column(Integer, default=0)
     verified_at = Column(DateTime, nullable=True, index=True)
     job_id = Column(String(100), nullable=True, index=True)
+
+    # ── Smart verification result reuse (TTL tracking) ─────────────────────
+    # Independently tracked from verified_at/updated_at because DNS/MX and
+    # SMTP/catch-all have different TTLs (see utils/config.py
+    # DNS_MX_TTL_DAYS / SMTP_TTL_DAYS). NULL means "never actually checked
+    # via real I/O" — e.g. a brand new row before its first full check, or
+    # a trusted-domain fast-path row that never queries DNS/SMTP at all.
+    # Syntax + disposable are NOT tracked here — they're pure/cheap
+    # (no I/O) and are always recomputed fresh on every verification.
+    dns_checked_at = Column(DateTime, nullable=True, index=True)
+    smtp_checked_at = Column(DateTime, nullable=True, index=True)
+
     __table_args__ = (
         CheckConstraint('score >= 0 AND score <= 100', name='check_score_range'),
         Index('ix_emails_domain_status', 'domain', 'status'),
@@ -136,6 +148,23 @@ class Job(Base):
     # JobStatus.cancelled itself. Already-processed emails are never
     # touched — each one commits independently as it completes.
     cancel_requested = Column(Boolean, nullable=False, default=False)
+
+    # ── Smart verification result reuse — bulk job metrics ──────────────────
+    # duplicate_emails_removed: rows in the uploaded file that normalized to
+    #   an email already seen earlier in the SAME file (deduped before `total`
+    #   is set — `total` is always the post-dedup unique count).
+    # reused_results: emails in this job whose final result came entirely
+    #   from an existing, still-fresh DB record (no DNS/SMTP I/O at all).
+    # newly_verified: emails that needed at least one real DNS or SMTP check
+    #   (brand new email, or an expired/missing TTL window).
+    # dns_checks_saved / smtp_checks_saved: count of times a real DNS or SMTP
+    #   check was skipped specifically because a fresh cached value existed.
+    duplicate_emails_removed = Column(Integer, nullable=False, default=0)
+    reused_results = Column(Integer, nullable=False, default=0)
+    newly_verified = Column(Integer, nullable=False, default=0)
+    dns_checks_saved = Column(Integer, nullable=False, default=0)
+    smtp_checks_saved = Column(Integer, nullable=False, default=0)
+
     __table_args__ = (
         CheckConstraint('progress_percent >= 0 AND progress_percent <= 100', name='check_progress_range'),
         CheckConstraint('total >= 0', name='check_total_nonnegative'),

@@ -36,9 +36,23 @@ class EmailVerifyResponse(BaseModel):
     # not yet aware of it). Populated by the verification pipeline with the
     # real DNS-resolved MX hostnames so the caller can persist them onto
     # Domain.mx_records. Left as None when the DNS lookup was skipped
-    # entirely (trusted-domain fast path), so we never overwrite a
-    # previously known-good value with a placeholder.
+    # entirely (trusted-domain fast path, or a reused/cached DNS decision),
+    # so we never overwrite a previously known-good value.
     mx_records: Optional[List[str]] = None
+
+    # ── Smart verification result reuse metadata ────────────────────────────
+    # All optional/default-safe — purely additive, existing consumers of
+    # this schema are unaffected. Powers job-level reuse metrics
+    # (dns_checks_saved, smtp_checks_saved, reused_results, newly_verified)
+    # in tasks/bulk_processor.py, and is also useful for debugging a single
+    # verify's reuse decision via the API response directly.
+    dns_checked_at: Optional[datetime] = None
+    smtp_checked_at: Optional[datetime] = None
+    record_existed: bool = False       # was there already a DB row for this email?
+    dns_reused: bool = False           # was domain_exists/mx_found reused from cache?
+    smtp_reused: bool = False          # was smtp_valid/catch_all reused from cache?
+    dns_check_applicable: bool = True  # would a real DNS check ever be needed (not trusted-domain)?
+    smtp_check_applicable: bool = True # would a real SMTP check ever be needed (not disposable/no-MX/trusted)?
 
     model_config = {"from_attributes": True}
 
@@ -86,6 +100,23 @@ class JobStatusResponse(BaseModel):
     completed_at: Optional[datetime] = None
     error_message: Optional[str] = None
 
+    # ── NEW: smart verification result reuse — bulk job metrics ────────────
+    # duplicate_emails_removed / reused_results / newly_verified /
+    # dns_checks_saved / smtp_checks_saved map 1:1 to the Job model columns
+    # (see models/models.py). unique_emails / total_emails_seen /
+    # cache_hit_rate are NOT stored columns — they're computed and filled in
+    # by the endpoint handler (api/v1/endpoints/bulk.py get_job_status)
+    # since they're trivially derivable from the stored counters and don't
+    # need their own DB column.
+    duplicate_emails_removed: int = 0
+    reused_results: int = 0
+    newly_verified: int = 0
+    dns_checks_saved: int = 0
+    smtp_checks_saved: int = 0
+    unique_emails: int = 0          # == total (post-dedup count); aliased here for API clarity
+    total_emails_seen: int = 0      # == total + duplicate_emails_removed (pre-dedup row count)
+    cache_hit_rate: float = 0.0     # == reused_results / unique_emails * 100
+
     model_config = {"from_attributes": True}
 
     @field_validator('total', 'processed', 'verified', 'invalid', 'risky')
@@ -107,6 +138,10 @@ class BulkUploadResponse(BaseModel):
     job_id: str
     message: str
     total_emails: int
+    # NEW: rows removed because they normalized to an email already seen
+    # earlier in the SAME uploaded file (dedup happens before `total_emails`
+    # is computed, so total_emails is always the post-dedup unique count).
+    duplicate_emails_removed: int = 0
 
     model_config = {"from_attributes": True}
 
