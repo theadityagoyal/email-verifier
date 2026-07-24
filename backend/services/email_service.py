@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from validators.syntax_validator import validate_syntax, is_role_based
 from validators.dns_validator import async_check_domain_exists, async_get_mx_records
-from validators.smtp_validator import async_verify_smtp, SmtpResult
+from validators.smtp_validator import async_verify_smtp, SmtpResult, SmtpOutcome
 from validators.disposable_checker import is_disposable
 from validators.score_calculator import calculate_score, determine_status, determine_sub_status, determine_confidence, determine_reason_code, TRUSTED_DOMAINS
 from schemas.schemas import EmailVerifyResponse
@@ -207,7 +207,6 @@ async def verify_email(email: str, job_id: Optional[str] = None) -> EmailVerifyR
                 # Use shorter timeout for trusted domains
                 smtp_timeout = settings.SMTP_TIMEOUT_TRUSTED if is_trusted else settings.SMTP_TIMEOUT
                 smtp_result: SmtpResult = await async_verify_smtp(email, mx_records_for_smtp, timeout=smtp_timeout)
-                from validators.smtp_validator import SmtpOutcome
 
                 smtp_outcome = smtp_result.outcome.value
                 smtp_response_code = smtp_result.smtp_code

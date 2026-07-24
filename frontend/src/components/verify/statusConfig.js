@@ -218,7 +218,7 @@ export function resolveAllChecks(result) {
 // Maps backend sub_status strings to display labels and colors
 export const SUB_STATUS_LABELS = Object.freeze({
   mailbox_confirmed: { label: 'Mailbox Confirmed', color: 'success', summary: 'The mail server confirmed this address exists.' },
-  smtp_skipped_trusted: { label: 'Trusted Domain (SMTP Skipped)', color: 'success', summary: 'Known major provider — SMTP probe skipped for speed.' },
+  smtp_skipped_trusted: { label: 'Trusted Domain (Legacy — Not Re-verified)', color: 'success', summary: 'Historical record from before SMTP verification was required for trusted domains.' },
   smtp_ambiguous_trusted: { label: 'Trusted Domain — Inconclusive', color: 'warning', summary: 'Trusted provider; SMTP timed out or deferred — cannot confirm but not rejected.' },
   catch_all_masked: { label: 'Catch-All Domain', color: 'warning', summary: 'Domain accepts all addresses — cannot confirm this specific mailbox.' },
   greylisted_unconfirmed: { label: 'Greylisted', color: 'warning', summary: 'Mail server temporarily deferred — try again later.' },
