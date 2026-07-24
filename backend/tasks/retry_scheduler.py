@@ -151,7 +151,7 @@ async def _persist_final_result(
     domain_exists = True
     mx_found = True
     disposable = is_disposable(domain)
-    role = is_role_based(email.split("@")[0])
+    role = is_role_based(email)
 
     # Phase 5: SPF/DMARC presence lookups
     spf_record = await async_get_spf_record(domain)
