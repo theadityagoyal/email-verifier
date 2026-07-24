@@ -457,6 +457,7 @@ def determine_sub_status(
     score: int,
     domain: str = "",
     smtp_outcome: str | None = None,
+    role_based: bool = False,
 ) -> SubStatus:
     """
     Determine granular sub-status from verification signals.
@@ -464,6 +465,7 @@ def determine_sub_status(
     Args:
         ... (same as determine_status)
         smtp_outcome: Raw SmtpOutcome value from smtp_validator (VALID, INVALID, CATCH_ALL, GREYLISTED, RATE_LIMITED, TEMP_FAILURE, TIMEOUT, BLOCKED, UNKNOWN)
+        role_based: Pre-computed role-based check result (True if username is role-based like admin@, support@, etc.)
 
     Returns:
         Sub-status string for frontend display and programmatic use.
@@ -487,7 +489,7 @@ def determine_sub_status(
         return "disposable_domain"
 
     # 5. Role-based address
-    if is_role_based(domain.split("@")[0] if "@" in domain else domain):
+    if role_based:
         return "role_based_address"
 
     # 6. SMTP outcome-based sub-statuses (Phase 1 enum)
@@ -532,6 +534,7 @@ def determine_confidence(
     score: int,
     domain: str = "",
     smtp_outcome: str | None = None,
+    role_based: bool = False,
 ) -> Confidence:
     """
     Determine confidence bucket: High / Medium / Low.
@@ -544,7 +547,7 @@ def determine_confidence(
     """
     sub = determine_sub_status(
         syntax_valid, domain_exists, mx_found, smtp_valid, disposable, catch_all,
-        score, domain, smtp_outcome
+        score, domain, smtp_outcome, role_based
     )
 
     high_confidence = {"mailbox_confirmed", "smtp_skipped_trusted"}
@@ -567,6 +570,7 @@ def determine_reason_code(
     score: int,
     domain: str = "",
     smtp_outcome: str | None = None,
+    role_based: bool = False,
 ) -> ReasonCode:
     """
     Determine machine-readable reason code for programmatic handling.
@@ -576,6 +580,6 @@ def determine_reason_code(
     """
     sub = determine_sub_status(
         syntax_valid, domain_exists, mx_found, smtp_valid, disposable, catch_all,
-        score, domain, smtp_outcome
+        score, domain, smtp_outcome, role_based
     )
     return sub.upper()  # e.g., MAILBOX_CONFIRMED, CATCH_ALL_MASKED

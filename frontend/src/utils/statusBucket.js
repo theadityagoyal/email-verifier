@@ -72,7 +72,7 @@ let moduleConfig = { ...EMBEDDED_DEFAULTS, loaded: false };
  */
 export async function loadConfig() {
   try {
-    const base = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
+    const base = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
     const res = await fetch(`${base}/api/v1/config/status-mapping`, {
       credentials: "include",
     });

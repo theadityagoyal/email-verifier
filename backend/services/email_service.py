@@ -354,6 +354,7 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
                 score=score,
                 domain=domain or "",
                 smtp_outcome=smtp_outcome,
+                role_based=role,
             )
             confidence = determine_confidence(
                 syntax_valid=syntactic_valid,
@@ -365,6 +366,7 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
                 score=score,
                 domain=domain or "",
                 smtp_outcome=smtp_outcome,
+                role_based=role,
             )
             reason_code = determine_reason_code(
                 syntax_valid=syntactic_valid,
@@ -376,6 +378,7 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
                 score=score,
                 domain=domain or "",
                 smtp_outcome=smtp_outcome,
+                role_based=role,
             )
 
             logger.info("verify_done", email=email, status=status, score=score,

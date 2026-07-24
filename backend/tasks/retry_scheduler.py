@@ -28,7 +28,7 @@ because they are enqueued from verify_email() itself.
 import asyncio
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 from sqlalchemy import select, update
@@ -197,6 +197,7 @@ async def _persist_final_result(
         score=score,
         domain=domain,
         smtp_outcome=outcome.value,
+        role_based=role,
     )
     confidence = determine_confidence(
         syntax_valid=syntax_valid,
@@ -208,6 +209,7 @@ async def _persist_final_result(
         score=score,
         domain=domain,
         smtp_outcome=outcome.value,
+        role_based=role,
     )
     reason_code = determine_reason_code(
         syntax_valid=syntax_valid,
@@ -219,6 +221,7 @@ async def _persist_final_result(
         score=score,
         domain=domain,
         smtp_outcome=outcome.value,
+        role_based=role,
     )
 
     from schemas.schemas import EmailVerifyResponse
