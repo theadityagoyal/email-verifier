@@ -1,6 +1,7 @@
 import math
 import re
 from models.models import EmailStatus
+from validators.syntax_validator import is_role_based
 
 TRUSTED_DOMAINS = frozenset({
     
@@ -154,13 +155,13 @@ TRUSTED_DOMAINS = frozenset({
 })
 
 # Minimum score guaranteed for a trusted domain that passed syntax and isn't
-# disposable — keeps it inside the "Safe" bucket (probably_valid/trusted/
-# deliverable, i.e. score > 75) regardless of how harshly the username
-# pattern heuristics penalize it. Reputation bonuses alone weren't enough:
-# a known-good domain like gmail.com could still get dragged into "risky"
-# (uncertain, score<=65) purely from a random-looking local part, which
-# makes no sense for a domain we already trust.
-TRUSTED_DOMAIN_SCORE_FLOOR = 76
+# disposable — keeps it inside the "Risky" bucket (score > 60) even with harsh
+# username penalties. Changed from 76 to 60 in Phase 3: trusted domains now
+# go through real SMTP, so the score reflects the actual SMTP result.
+# Ambiguous outcomes (timeout/greylist/blocked) use base_score=90 (not 80),
+# so even with max penalty (-30): 90 + 10 - 30 = 70 (still above floor).
+# Only real INVALID (550 mailbox not found) uses the penalized path (base=80).
+TRUSTED_DOMAIN_SCORE_FLOOR = 60
 
 # ── Keyboard walk patterns ────────────────────────────────────────────────────
 KEYBOARD_WALKS = [
@@ -312,11 +313,11 @@ def calculate_score(
     catch_all: bool,
     domain: str = "",
     username: str = "",
+    smtp_ambiguous_trusted: bool = False,
 ) -> tuple[int, dict]:
     """
     Returns (final_score, username_analysis)
     """
-
     # Username quality pehle analyze karo
     username_analysis = analyze_username_quality(username) if username else {
         "score": 100, "penalty": 0, "flags": [], "verdict": "clean"
@@ -333,25 +334,28 @@ def calculate_score(
         return 0, username_analysis
 
     # Calculate base score based on validation results
-    base_score = 0
-
-    # Domain nahi = 40
-    if not domain_exists:
-        base_score = 40
-    # Domain hai but MX nahi = 60
-    elif not mx_found:
-        base_score = 60
-    # MX hai + Catch-All = 70
-    elif catch_all:
-        base_score = 70
-    # MX hai + SMTP fail = 80
-    elif not smtp_valid:
-        base_score = 80
-    # MX hai + SMTP pass = 100
-    else:
-        base_score = 100
-
     is_trusted = domain.lower() in TRUSTED_DOMAINS
+
+    # Phase 3: Trusted domain with ambiguous SMTP outcome (timeout/greylist/blocked)
+    # uses base_score=90 (not 80) to avoid penalizing for inconclusive results.
+    if is_trusted and smtp_ambiguous_trusted:
+        base_score = 90
+    else:
+        # Domain nahi = 40
+        if not domain_exists:
+            base_score = 40
+        # Domain hai but MX nahi = 60
+        elif not mx_found:
+            base_score = 60
+        # MX hai + Catch-All = 70
+        elif catch_all:
+            base_score = 70
+        # MX hai + SMTP fail = 80
+        elif not smtp_valid:
+            base_score = 80
+        # MX hai + SMTP pass = 100
+        else:
+            base_score = 100
 
     # Apply trusted domain bonus (+10, max 100)
     trusted_bonus = 10 if is_trusted else 0
@@ -359,7 +363,7 @@ def calculate_score(
 
     # Apply username quality penalty. Trusted domains get a score floor so
     # reputation bonus + username penalty can never drag a known-good
-    # domain into the risky/unsafe bucket (see TRUSTED_DOMAIN_SCORE_FLOOR).
+    # domain into the unsafe bucket (see TRUSTED_DOMAIN_SCORE_FLOOR).
     if is_trusted:
         final_score = max(TRUSTED_DOMAIN_SCORE_FLOOR, score_with_trusted_bonus - penalty)
     else:
@@ -392,3 +396,164 @@ def determine_status(
     if score <= 92:
         return EmailStatus.trusted
     return EmailStatus.deliverable
+
+
+# ── Phase 2: Sub-status, Confidence, Reason Codes ────────────────────────────────
+# These provide granular "why" signals that the frontend can render without
+# needing to re-implement scoring logic. They're derived from the same inputs
+# as determine_status() so they're always consistent.
+
+SubStatus = str
+Confidence = str  # "High" | "Medium" | "Low"
+ReasonCode = str  # machine-readable code for programmatic handling
+
+# Sub-status values:
+#   mailbox_confirmed           — SMTP 250, not catch-all, normal mailbox
+#   smtp_skipped_trusted        — Trusted domain fast-path (SMTP never probed)
+#   catch_all_masked            — SMTP 250 but catch-all detected (can't confirm mailbox)
+#   greylisted_unconfirmed      — SMTP 450/451/452 (temporary deferral)
+#   dns_timeout_assumed         — DNS/MX lookup timed out, assumed valid for scoring
+#   syntax_invalid              — Failed syntax validation
+#   domain_not_found            — Domain does not exist in DNS
+#   no_mx_records               — Domain exists but no MX records
+#   disposable_domain           — Known disposable email provider
+#   role_based_address          — Generic/role address (admin@, support@, etc.)
+#   smtp_rejected               — SMTP permanent failure (550, mailbox not found)
+#   smtp_blocked                — SMTP 550 with blocked/blacklist indication
+#   smtp_rate_limited           — SMTP 421 (too many connections)
+#   smtp_temp_failure           — Other 4xx temporary failure
+#   unknown_error               — Unexpected/unclassified error
+
+
+def determine_sub_status(
+    syntax_valid: bool,
+    domain_exists: bool,
+    mx_found: bool,
+    smtp_valid: bool,
+    disposable: bool,
+    catch_all: bool,
+    score: int,
+    domain: str = "",
+    smtp_outcome: str | None = None,
+) -> SubStatus:
+    """
+    Determine granular sub-status from verification signals.
+
+    Args:
+        ... (same as determine_status)
+        smtp_outcome: Raw SmtpOutcome value from smtp_validator (VALID, INVALID, CATCH_ALL, GREYLISTED, RATE_LIMITED, TEMP_FAILURE, TIMEOUT, BLOCKED, UNKNOWN)
+
+    Returns:
+        Sub-status string for frontend display and programmatic use.
+    """
+    is_trusted = domain.lower() in TRUSTED_DOMAINS
+
+    # 1. Syntax failure
+    if not syntax_valid:
+        return "syntax_invalid"
+
+    # 2. Domain doesn't exist
+    if not domain_exists:
+        return "domain_not_found"
+
+    # 3. No MX records
+    if not mx_found:
+        return "no_mx_records"
+
+    # 4. Disposable domain
+    if disposable:
+        return "disposable_domain"
+
+    # 5. Role-based address
+    if is_role_based(domain.split("@")[0] if "@" in domain else domain):
+        return "role_based_address"
+
+    # 6. SMTP outcome-based sub-statuses (Phase 1 enum)
+    # Trusted domains now go through real SMTP — ambiguous outcomes get their own sub-status
+    if smtp_outcome:
+        # Trusted domain with ambiguous (non-conclusive) outcome
+        if is_trusted and smtp_outcome in ("timeout", "greylisted", "temp_failure", "blocked"):
+            return "smtp_ambiguous_trusted"
+
+        if smtp_outcome == "greylisted":
+            return "greylisted_unconfirmed"
+        if smtp_outcome == "rate_limited":
+            return "smtp_rate_limited"
+        if smtp_outcome == "temp_failure":
+            return "smtp_temp_failure"
+        if smtp_outcome == "timeout":
+            return "dns_timeout_assumed"
+        if smtp_outcome == "blocked":
+            return "smtp_blocked"
+        if smtp_outcome == "catch_all":
+            return "catch_all_masked"
+        if smtp_outcome == "invalid":
+            return "smtp_rejected"
+        if smtp_outcome == "valid":
+            return "mailbox_confirmed"
+
+    # Fallback based on boolean flags (backward compat if smtp_outcome missing)
+    if catch_all:
+        return "catch_all_masked"
+    if smtp_valid:
+        return "mailbox_confirmed"
+    return "smtp_rejected"
+
+
+def determine_confidence(
+    syntax_valid: bool,
+    domain_exists: bool,
+    mx_found: bool,
+    smtp_valid: bool,
+    disposable: bool,
+    catch_all: bool,
+    score: int,
+    domain: str = "",
+    smtp_outcome: str | None = None,
+) -> Confidence:
+    """
+    Determine confidence bucket: High / Medium / Low.
+
+    High: mailbox_confirmed, smtp_skipped_trusted (known good domains)
+    Medium: catch_all_masked, role_based_address, smtp_ambiguous_trusted
+    Low: everything else (syntax_invalid, domain_not_found, no_mx_records, disposable_domain,
+          smtp_rejected, smtp_blocked, smtp_rate_limited, smtp_temp_failure,
+          greylisted_unconfirmed, dns_timeout_assumed, unknown_error)
+    """
+    sub = determine_sub_status(
+        syntax_valid, domain_exists, mx_found, smtp_valid, disposable, catch_all,
+        score, domain, smtp_outcome
+    )
+
+    high_confidence = {"mailbox_confirmed", "smtp_skipped_trusted"}
+    medium_confidence = {"catch_all_masked", "role_based_address", "smtp_ambiguous_trusted"}
+
+    if sub in high_confidence:
+        return "High"
+    if sub in medium_confidence:
+        return "Medium"
+    return "Low"
+
+
+def determine_reason_code(
+    syntax_valid: bool,
+    domain_exists: bool,
+    mx_found: bool,
+    smtp_valid: bool,
+    disposable: bool,
+    catch_all: bool,
+    score: int,
+    domain: str = "",
+    smtp_outcome: str | None = None,
+) -> ReasonCode:
+    """
+    Determine machine-readable reason code for programmatic handling.
+
+    Maps 1:1 to sub_status for now, but can diverge if frontend needs
+    different grouping than display labels.
+    """
+    sub = determine_sub_status(
+        syntax_valid, domain_exists, mx_found, smtp_valid, disposable, catch_all,
+        score, domain, smtp_outcome
+    )
+    return sub.upper()  # e.g., MAILBOX_CONFIRMED, CATCH_ALL_MASKED

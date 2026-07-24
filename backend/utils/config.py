@@ -29,6 +29,7 @@ class Settings(BaseSettings):
 
     # SMTP
     SMTP_TIMEOUT: int = 3
+    SMTP_TIMEOUT_TRUSTED: int = 2
     SMTP_RETRIES: int = 2
     SMTP_MAX_WORKERS: int = 20
     SMTP_MAX_MX_TO_TRY: int = 2

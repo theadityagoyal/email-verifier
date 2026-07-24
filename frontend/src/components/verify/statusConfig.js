@@ -110,6 +110,7 @@ const DESCRIPTIONS = {
     verified: 'The mail server accepted the address during a live check.',
     issue: 'The mail server did not accept this address during a live check.',
     not_applicable: 'Skipped — no mail server was available to check against.',
+    couldnt_verify: 'The mail server temporarily deferred or did not respond — we could not confirm if this address exists.',
   },
   disposable: {
     verified: 'Not a temporary or throwaway email provider.',
@@ -144,8 +145,19 @@ export function resolveCheckStatus(checkKey, result) {
   const na = () => ({ ...STATUS.NOT_APPLICABLE, description: DESCRIPTIONS[checkKey]?.not_applicable });
   const pass = () => ({ ...STATUS.VERIFIED, description: DESCRIPTIONS[checkKey]?.verified });
   const fail = () => ({ ...STATUS.ISSUE, description: DESCRIPTIONS[checkKey]?.issue });
+  const couldntVerify = () => ({ ...STATUS.COULDNT_VERIFY, description: DESCRIPTIONS[checkKey]?.couldnt_verify || "We couldn't confirm this with the mail server." });
 
   let resolved;
+
+  // Phase 2: sub_status values that indicate "couldn't verify" for SMTP
+  const couldntVerifySubStatuses = new Set([
+    'greylisted_unconfirmed',
+    'dns_timeout_assumed',
+    'smtp_rate_limited',
+    'smtp_temp_failure',
+    'unknown_error',
+  ]);
+  const isCouldntVerify = result?.sub_status && couldntVerifySubStatuses.has(result.sub_status);
 
   switch (checkKey) {
     case 'syntax':
@@ -159,8 +171,10 @@ export function resolveCheckStatus(checkKey, result) {
       break;
     case 'smtp':
       resolved =
-        !result.syntax_valid || !result.mx_found || result.disposable
+        !result.syntax_valid || !result.mx_found || result.disposable || result.sub_status === 'smtp_skipped_trusted'
           ? na()
+          : isCouldntVerify
+          ? couldntVerify()
           : result.smtp_valid
           ? pass()
           : fail();
@@ -199,6 +213,47 @@ export function resolveCheckStatus(checkKey, result) {
 export function resolveAllChecks(result) {
   return CHECK_DEFS.map((def) => resolveCheckStatus(def.key, result));
 }
+
+// ── Sub-status label/color mapping (Phase 2) ──────────────────────────────────
+// Maps backend sub_status strings to display labels and colors
+export const SUB_STATUS_LABELS = Object.freeze({
+  mailbox_confirmed: { label: 'Mailbox Confirmed', color: 'success', summary: 'The mail server confirmed this address exists.' },
+  smtp_skipped_trusted: { label: 'Trusted Domain (SMTP Skipped)', color: 'success', summary: 'Known major provider — SMTP probe skipped for speed.' },
+  smtp_ambiguous_trusted: { label: 'Trusted Domain — Inconclusive', color: 'warning', summary: 'Trusted provider; SMTP timed out or deferred — cannot confirm but not rejected.' },
+  catch_all_masked: { label: 'Catch-All Domain', color: 'warning', summary: 'Domain accepts all addresses — cannot confirm this specific mailbox.' },
+  greylisted_unconfirmed: { label: 'Greylisted', color: 'warning', summary: 'Mail server temporarily deferred — try again later.' },
+  dns_timeout_assumed: { label: 'DNS Timeout', color: 'warning', summary: 'DNS lookup timed out — result assumed valid for scoring.' },
+  syntax_invalid: { label: 'Invalid Syntax', color: 'error', summary: 'Email format is invalid.' },
+  domain_not_found: { label: 'Domain Not Found', color: 'error', summary: 'Domain does not exist in DNS.' },
+  no_mx_records: { label: 'No MX Records', color: 'error', summary: 'Domain has no mail servers configured.' },
+  disposable_domain: { label: 'Disposable Domain', color: 'error', summary: 'Known temporary/throwaway email provider.' },
+  role_based_address: { label: 'Role-Based Address', color: 'warning', summary: 'Generic inbox (admin@, support@, etc.) — not a personal mailbox.' },
+  smtp_rejected: { label: 'SMTP Rejected', color: 'error', summary: 'Mail server rejected the address (mailbox not found).' },
+  smtp_blocked: { label: 'Blocked by Server', color: 'error', summary: 'Server indicated address is blocked or blacklisted.' },
+  smtp_rate_limited: { label: 'Rate Limited', color: 'warning', summary: 'Too many connection attempts — server temporarily unavailable.' },
+  smtp_temp_failure: { label: 'Temporary Failure', color: 'warning', summary: 'Server returned a temporary error — may succeed if retried.' },
+  unknown_error: { label: 'Unknown Error', color: 'error', summary: 'An unexpected error occurred during verification.' },
+});
+
+/** Get human-readable label, color, and summary for a sub_status value. */
+export function getSubStatusInfo(subStatus) {
+  if (!subStatus) return { label: 'Unknown', color: 'neutral', summary: '' };
+  return SUB_STATUS_LABELS[subStatus] || { label: subStatus.replace(/_/g, ' '), color: 'neutral', summary: '' };
+}
+
+/** Map confidence string to color. */
+export const CONFIDENCE_COLORS = Object.freeze({
+  High: 'success',
+  Medium: 'warning',
+  Low: 'error',
+});
+
+/** Map confidence to human-readable description. */
+export const CONFIDENCE_LABELS = Object.freeze({
+  High: { label: 'High Confidence', color: 'success', description: 'Strong signal from mail server or trusted domain.' },
+  Medium: { label: 'Medium Confidence', color: 'warning', description: 'Some uncertainty — catch-all, greylisting, or role address.' },
+  Low: { label: 'Low Confidence', color: 'error', description: 'Weak or negative signals — likely undeliverable.' },
+});
 
 // ── Colour class helpers (literal strings — safe for Tailwind's scanner) ────
 export const STATUS_COLOR_CLASSES = {

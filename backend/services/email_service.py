@@ -6,9 +6,9 @@ from sqlalchemy import select
 
 from validators.syntax_validator import validate_syntax, is_role_based
 from validators.dns_validator import async_check_domain_exists, async_get_mx_records
-from validators.smtp_validator import async_verify_smtp
+from validators.smtp_validator import async_verify_smtp, SmtpResult
 from validators.disposable_checker import is_disposable
-from validators.score_calculator import calculate_score, determine_status, TRUSTED_DOMAINS
+from validators.score_calculator import calculate_score, determine_status, determine_sub_status, determine_confidence, determine_reason_code, TRUSTED_DOMAINS
 from schemas.schemas import EmailVerifyResponse
 from models.database import AsyncSessionLocal
 from models.models import Email as EmailModel, Domain as DomainModel
@@ -16,6 +16,8 @@ from services.domain_service import async_upsert_email, async_upsert_domain
 from utils.config import settings
 from utils.logging import get_logger
 from utils.timezone import utc_now_naive
+
+SMTP_TIMEOUT_TRUSTED = settings.SMTP_TIMEOUT_TRUSTED
 from utils.verification_lock import email_lock_manager
 
 logger = get_logger(__name__)
@@ -41,15 +43,17 @@ async def _fetch_existing_email(email: str) -> Optional[EmailModel]:
 
 async def _fetch_domain_mx_records(domain: str) -> List[str]:
     """
-    Read cached MX hostnames for a domain from the `domains` table (this is
-    the ONLY place MX hostnames are cached — the `emails` table only stores
-    the domain_exists/mx_found booleans, not the raw hostname list). Used
-    when DNS is being reused (fresh) but SMTP still needs a real connection —
-    we need real MX hostnames to connect to, even though we skipped the DNS
+    Read cached MX hostnames for a domain from the `domains` table
+    (this is the ONLY place MX hostnames are cached — the `emails` table
+    only stores the domain_exists/mx_found booleans, not the raw hostname list).
+    Used when DNS is being reused (fresh) but SMTP still needs a real connection
+    — we need real MX hostnames to connect to, even though we skipped the DNS
     lookup itself.
     """
     async with AsyncSessionLocal() as session:
-        result = await session.execute(select(DomainModel.mx_records).where(DomainModel.domain == domain))
+        result = await session.execute(
+            select(DomainModel.mx_records).where(DomainModel.domain == domain)
+        )
         row = result.scalar_one_or_none()
         return row or []
 
@@ -154,19 +158,12 @@ async def verify_email(email: str, job_id: Optional[str] = None) -> EmailVerifyR
             # dns_check_applicable: would we EVER need a real DNS lookup for
             # this email (i.e. it's not on the trusted fast path, which
             # never touches DNS regardless of reuse settings)?
-            dns_check_applicable = not is_trusted
+            dns_check_applicable = True
             dns_reused = False
             dns_checked_at = existing.dns_checked_at if existing else None
             persist_mx_records: Optional[List[str]] = None
 
-            if is_trusted:
-                # Existing trusted-domain fast path — independent of the
-                # reuse/TTL system, unchanged from prior behavior.
-                domain_exists = True
-                mx_found = True
-                mx_records_for_smtp = [f"mx.{domain}"]
-                logger.info("trusted_domain_skip", email=email, domain=domain)
-            elif dns_fresh:
+            if dns_fresh:
                 domain_exists = bool(existing.domain_exists)
                 mx_found = bool(existing.mx_found)
                 mx_records_for_smtp = await _fetch_domain_mx_records(domain) if mx_found else []
@@ -185,24 +182,54 @@ async def verify_email(email: str, job_id: Optional[str] = None) -> EmailVerifyR
                 logger.info("mx_checked", email=email, mx_records=mx_records_for_smtp, mx_found=mx_found)
 
             # 6. SMTP verification
-            smtp_check_applicable = (not is_trusted) and (not disposable) and mx_found
+            # Trusted domains still go through real SMTP but with a faster timeout.
+            # Other domains follow the original logic.
+            smtp_check_applicable = (not disposable) and mx_found
             smtp_reused = False
             smtp_checked_at = existing.smtp_checked_at if existing else None
+            smtp_outcome: Optional[str] = None
+            smtp_response_code: Optional[int] = None
+            smtp_ambiguous_trusted = False  # Phase 3: true if trusted domain + ambiguous SMTP outcome
 
             if not smtp_check_applicable:
                 smtp_valid = False
                 catch_all = False
-                # Not applicable (trusted / disposable / no MX) — leave
-                # smtp_checked_at untouched, same as before this feature.
+                # Not applicable (disposable / no MX) — leave
+                # smtp_checked_at untouched.
             elif smtp_fresh:
                 smtp_valid = bool(existing.smtp_valid)
                 catch_all = bool(existing.catch_all)
+                smtp_outcome = existing.smtp_outcome
+                smtp_response_code = existing.smtp_response_code
                 smtp_reused = True
                 logger.info("smtp_reused", email=email, checked_at=str(existing.smtp_checked_at))
             else:
-                smtp_valid, catch_all = await async_verify_smtp(email, mx_records_for_smtp)
+                # Use shorter timeout for trusted domains
+                smtp_timeout = settings.SMTP_TIMEOUT_TRUSTED if is_trusted else settings.SMTP_TIMEOUT
+                smtp_result: SmtpResult = await async_verify_smtp(email, mx_records_for_smtp, timeout=smtp_timeout)
+                from validators.smtp_validator import SmtpOutcome
+
+                smtp_outcome = smtp_result.outcome.value
+                smtp_response_code = smtp_result.smtp_code
                 smtp_checked_at = now
-                logger.info("smtp_checked", email=email, smtp_valid=smtp_valid, catch_all=catch_all)
+
+                # Phase 3: Handle ambiguous outcomes for trusted domains
+                # (TIMEOUT, GREYLISTED, TEMP_FAILURE, BLOCKED) — treat as "ambiguous" not "invalid"
+                ambiguous_outcomes = {SmtpOutcome.TIMEOUT, SmtpOutcome.GREYLISTED, SmtpOutcome.TEMP_FAILURE, SmtpOutcome.BLOCKED}
+
+                if is_trusted and smtp_result.outcome in ambiguous_outcomes:
+                    # Ambiguous result for trusted domain — don't penalize, treat as couldn't verify
+                    smtp_valid = True  # Keep base_score path available for scoring
+                    catch_all = False
+                    smtp_ambiguous_trusted = True
+                    logger.info("smtp_ambiguous_trusted", email=email, outcome=smtp_outcome, code=smtp_response_code)
+                else:
+                    # Normal logic: VALID or CATCH_ALL = valid
+                    smtp_valid = smtp_result.outcome in (SmtpOutcome.VALID, SmtpOutcome.CATCH_ALL)
+                    catch_all = smtp_result.catch_all_outcome
+
+                logger.info("smtp_checked", email=email, smtp_valid=smtp_valid, catch_all=catch_all,
+                            smtp_outcome=smtp_outcome, smtp_code=smtp_response_code, ambiguous=smtp_ambiguous_trusted)
 
             # 7. Score & status determination
             username = email.split("@")[0]
@@ -215,6 +242,7 @@ async def verify_email(email: str, job_id: Optional[str] = None) -> EmailVerifyR
                 catch_all=catch_all,
                 domain=domain or "",
                 username=username,
+                smtp_ambiguous_trusted=smtp_ambiguous_trusted,
             )
 
             status = determine_status(
@@ -228,8 +256,44 @@ async def verify_email(email: str, job_id: Optional[str] = None) -> EmailVerifyR
                 domain=domain or "",
             )
 
+            # Phase 2: Sub-status, confidence, reason code
+            sub_status = determine_sub_status(
+                syntax_valid=syntactic_valid,
+                domain_exists=domain_exists,
+                mx_found=mx_found,
+                smtp_valid=smtp_valid,
+                disposable=disposable,
+                catch_all=catch_all,
+                score=score,
+                domain=domain or "",
+                smtp_outcome=smtp_outcome,
+            )
+            confidence = determine_confidence(
+                syntax_valid=syntactic_valid,
+                domain_exists=domain_exists,
+                mx_found=mx_found,
+                smtp_valid=smtp_valid,
+                disposable=disposable,
+                catch_all=catch_all,
+                score=score,
+                domain=domain or "",
+                smtp_outcome=smtp_outcome,
+            )
+            reason_code = determine_reason_code(
+                syntax_valid=syntactic_valid,
+                domain_exists=domain_exists,
+                mx_found=mx_found,
+                smtp_valid=smtp_valid,
+                disposable=disposable,
+                catch_all=catch_all,
+                score=score,
+                domain=domain or "",
+                smtp_outcome=smtp_outcome,
+            )
+
             logger.info("verify_done", email=email, status=status, score=score,
-                        dns_reused=dns_reused, smtp_reused=smtp_reused, record_existed=record_existed)
+                        dns_reused=dns_reused, smtp_reused=smtp_reused, record_existed=record_existed,
+                        sub_status=sub_status, confidence=confidence, reason_code=reason_code)
 
             response = _build_response(
                 email=email,
@@ -253,6 +317,11 @@ async def verify_email(email: str, job_id: Optional[str] = None) -> EmailVerifyR
                 smtp_reused=smtp_reused,
                 dns_check_applicable=dns_check_applicable,
                 smtp_check_applicable=smtp_check_applicable,
+                smtp_outcome=smtp_outcome,
+                smtp_response_code=smtp_response_code,
+                sub_status=sub_status,
+                confidence=confidence,
+                reason_code=reason_code,
             )
 
             # Persist BEFORE releasing the lock — this is what actually
@@ -297,6 +366,11 @@ def _build_response(
     smtp_reused: bool = False,
     dns_check_applicable: bool = True,
     smtp_check_applicable: bool = True,
+    smtp_outcome: Optional[str] = None,
+    smtp_response_code: Optional[int] = None,
+    sub_status: Optional[str] = None,
+    confidence: Optional[str] = None,
+    reason_code: Optional[str] = None,
 ) -> EmailVerifyResponse:
     """Build a successful verification response."""
     from models.models import EmailStatus
@@ -329,6 +403,11 @@ def _build_response(
         smtp_reused=smtp_reused,
         dns_check_applicable=dns_check_applicable,
         smtp_check_applicable=smtp_check_applicable,
+        smtp_outcome=smtp_outcome,
+        smtp_response_code=smtp_response_code,
+        sub_status=sub_status,
+        confidence=confidence,
+        reason_code=reason_code,
     )
 
 
@@ -361,6 +440,11 @@ def _build_invalid_response(
         smtp_reused=False,
         dns_check_applicable=False,
         smtp_check_applicable=False,
+        smtp_outcome=None,
+        smtp_response_code=None,
+        sub_status=None,
+        confidence=None,
+        reason_code=None,
     )
 
 
@@ -392,4 +476,9 @@ def _build_error_response(
         smtp_reused=False,
         dns_check_applicable=False,
         smtp_check_applicable=False,
+        smtp_outcome=None,
+        smtp_response_code=None,
+        sub_status=None,
+        confidence=None,
+        reason_code=None,
     )

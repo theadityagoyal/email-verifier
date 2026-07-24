@@ -4,17 +4,14 @@ import asyncio
 import random
 import string
 from typing import Tuple, List, Optional
+from dataclasses import dataclass
+from enum import Enum
 from utils.config import settings
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# These fields are always defined on Settings (utils/config.py) with real
-# defaults, so we read them directly rather than via getattr(..., fallback)
-# — the old getattr fallbacks silently disagreed with config.py's actual
-# defaults (e.g. SMTP_TIMEOUT fallback=10 vs config default=3,
-# SMTP_MAX_MX_TO_TRY fallback=3 vs config default=2) and were dead code
-# that could never trigger, just confusing to read.
+# ── Settings ──
 SENDER_EMAIL = settings.SMTP_SENDER_EMAIL
 HELO_DOMAIN = settings.SMTP_HELO_DOMAIN
 SMTP_TIMEOUT = settings.SMTP_TIMEOUT
@@ -22,15 +19,52 @@ SMTP_RETRIES = settings.SMTP_RETRIES
 SMTP_MAX_MX_TO_TRY = settings.SMTP_MAX_MX_TO_TRY
 
 
+class SmtpOutcome(str, Enum):
+    """
+    Raw SMTP transaction outcome.
+
+    IMPORTANT: Derived bools for backward compat:
+      - smtp_valid = outcome in (VALID, CATCH_ALL)
+      - catch_all = catch_all_outcome (True only for CATCH_ALL)
+
+    BLOCKED is a best-effort heuristic (550 + "blocked"/"blacklist" in response text).
+    It MUST NOT be used for scoring decisions — treat same as INVALID for scoring.
+    """
+    VALID = "valid"              # 250 on target RCPT, 5xx on random probe
+    INVALID = "invalid"          # 5xx on target RCPT (mailbox not found, etc.)
+    CATCH_ALL = "catch_all"      # 250 on target RCPT AND 250 on random probe
+    GREYLISTED = "greylisted"    # 450/451/452 on target RCPT
+    RATE_LIMITED = "rate_limited"  # 421 (service not available, too many connections)
+    TEMP_FAILURE = "temp_failure"  # Other 4xx (transient server error)
+    TIMEOUT = "timeout"          # Socket/connection timeout
+    BLOCKED = "blocked"          # 550 with "blocked"/"blacklist" in text (heuristic)
+    UNKNOWN = "unknown"          # Unexpected error / unrecognized code
+
+
+@dataclass(frozen=True)
+class SmtpResult:
+    """
+    Structured result of an SMTP check.
+
+    Fields:
+        outcome: Classified SmtpOutcome enum
+        smtp_code: Raw 3-digit SMTP reply code (0 if no code available)
+        raw_response: Full SMTP response text (for debugging)
+        catch_all_outcome: Random probe also accepted (True only for CATCH_ALL)
+    """
+    outcome: SmtpOutcome
+    smtp_code: int
+    raw_response: str
+    catch_all_outcome: bool
+
+
 def _is_permanent_error(smtp_code: int) -> bool:
     """Determine if an SMTP status code indicates a permanent failure."""
-    # 5xx errors are permanent (except 551 which might be temporary in some cases, but we treat as permanent)
     return 500 <= smtp_code < 600
 
 
 def _is_temporary_error(smtp_code: int) -> bool:
     """Determine if an SMTP status code indicates a temporary failure."""
-    # 4xx errors are temporary
     return 400 <= smtp_code < 500
 
 
@@ -41,118 +75,231 @@ def _random_email(domain: str) -> str:
     return f"{local}@{domain}"
 
 
-def _smtp_check(email: str, mx_host: str, timeout: int) -> tuple[bool, bool]:
+def _classify_outcome(
+    target_code: int,
+    target_text: str,
+    catch_all_code: Optional[int] = None,
+    catch_all_text: str = "",
+) -> SmtpResult:
+    """
+    Classify raw SMTP response codes into SmtpOutcome.
+
+    Args:
+        target_code: SMTP code for the target email RCPT
+        target_text: SMTP response text for target email
+        catch_all_code: SMTP code for random probe RCPT (None if not sent)
+        catch_all_text: SMTP response text for random probe
+
+    Returns:
+        SmtpResult with outcome, code, raw_response, and catch_all flag
+    """
+    catch_all = False
+
+    # Catch-all logic: both target and random probe accepted
+    if target_code == 250 and catch_all_code == 250:
+        return SmtpResult(
+            outcome=SmtpOutcome.CATCH_ALL,
+            smtp_code=250,
+            raw_response=f"{target_text} | probe: {catch_all_text}",
+            catch_all_outcome=True,
+        )
+
+    # Target accepted, probe rejected/not sent → VALID
+    if target_code == 250:
+        return SmtpResult(
+            outcome=SmtpOutcome.VALID,
+            smtp_code=250,
+            raw_response=target_text,
+            catch_all_outcome=False,
+        )
+
+    # Greylisting (typical 450/451/452)
+    if target_code in (450, 451, 452):
+        return SmtpResult(
+            outcome=SmtpOutcome.GREYLISTED,
+            smtp_code=target_code,
+            raw_response=target_text,
+            catch_all_outcome=False,
+        )
+
+    # Rate limiting / service unavailable
+    if target_code == 421:
+        return SmtpResult(
+            outcome=SmtpOutcome.RATE_LIMITED,
+            smtp_code=421,
+            raw_response=target_text,
+            catch_all_outcome=False,
+        )
+
+    # Other 4xx = temporary failure
+    if _is_temporary_error(target_code):
+        return SmtpResult(
+            outcome=SmtpOutcome.TEMP_FAILURE,
+            smtp_code=target_code,
+            raw_response=target_text,
+            catch_all_outcome=False,
+        )
+
+    # 5xx permanent failures
+    if _is_permanent_error(target_code):
+        # Heuristic: 550 with "blocked"/"blacklist" in text
+        text_lower = (target_text or "").lower()
+        if target_code == 550 and ("blocked" in text_lower or "blacklist" in text_lower):
+            return SmtpResult(
+                outcome=SmtpOutcome.BLOCKED,
+                smtp_code=550,
+                raw_response=target_text,
+                catch_all_outcome=False,
+            )
+        return SmtpResult(
+            outcome=SmtpOutcome.INVALID,
+            smtp_code=target_code,
+            raw_response=target_text,
+            catch_all_outcome=False,
+        )
+
+    return SmtpResult(
+        outcome=SmtpOutcome.UNKNOWN,
+        smtp_code=target_code,
+        raw_response=target_text,
+        catch_all_outcome=False,
+    )
+
+
+def _smtp_check(
+    email: str,
+    mx_host: str,
+    timeout: int,
+) -> SmtpResult:
     """
     Perform SMTP check on a single MX host.
 
     Returns:
-        tuple: (smtp_valid, catch_all) where:
-            smtp_valid: True if the email address was accepted by the server
-            catch_all: True if a random email at the domain was accepted (indicating catch-all)
+        SmtpResult with outcome, smtp_code, raw_response, catch_all_outcome
 
     Raises:
-        Exception: For temporary errors that should be retried (e.g., connection issues, 4xx responses)
+        Exception: For temporary errors that should trigger retry (connection issues, 4xx)
     """
+    domain = email.split("@")[1]
     try:
         with smtplib.SMTP(timeout=timeout) as server:
             server.connect(mx_host, 25)
-            # Set socket timeout for subsequent operations
             server.sock.settimeout(timeout)
             server.helo(HELO_DOMAIN)
             server.mail(SENDER_EMAIL)
-            code, _ = server.rcpt(email)
-            smtp_valid = (code == 250)
 
-            # Catch-all probe: send a random email to the same domain
-            code2, _ = server.rcpt(_random_email(email.split("@")[1]))
-            catch_all = (code2 == 250)
+            # Target email
+            target_code, target_msg = server.rcpt(email)
+            target_text = target_msg.decode() if isinstance(target_msg, bytes) else str(target_msg)
 
-            return smtp_valid, catch_all
+            # Catch-all probe
+            probe_email = _random_email(domain)
+            catch_all_code, catch_all_msg = server.rcpt(probe_email)
+            catch_all_text = catch_all_msg.decode() if isinstance(catch_all_msg, bytes) else str(catch_all_msg)
+
+            return _classify_outcome(
+                target_code=target_code,
+                target_text=target_text,
+                catch_all_code=catch_all_code,
+                catch_all_text=catch_all_text,
+            )
+
     except (socket.timeout, smtplib.SMTPConnectError,
             smtplib.SMTPServerDisconnected, ConnectionRefusedError) as e:
-        # Connection-related errors are temporary - retry with next attempt or next MX
         logger.debug("smtp_connection_error", mx=mx_host, error=str(e))
         raise  # Re-raise to trigger retry
     except smtplib.SMTPRecipientsRefused as e:
-        # Recipient refused - permanent error (e.g., mailbox does not exist)
-        logger.debug("smtp_recipient_refused", mx=mx_host, error=str(e))
-        return False, False
+        # Recipient refused - permanent error
+        # Extract first recipient's error (there's only one in our case)
+        for recip, (code, msg) in e.recipients.items():
+            text = msg.decode() if isinstance(msg, bytes) else str(msg)
+            logger.debug("smtp_recipient_refused", mx=mx_host, code=code, text=text)
+            return _classify_outcome(target_code=code, target_text=text)
     except smtplib.SMTPServerError as e:
-        # Server error (4xx or 5xx)
         smtp_code = getattr(e, 'smtp_code', 0)
+        smtp_msg = getattr(e, 'smtp_error', b'')
+        text = smtp_msg.decode() if isinstance(smtp_msg, bytes) else str(smtp_msg)
         if _is_permanent_error(smtp_code):
-            logger.debug("smtp_permanent_error", mx=mx_host, code=smtp_code, error=str(e))
-            return False, False
+            logger.debug("smtp_permanent_error", mx=mx_host, code=smtp_code, text=text)
+            return _classify_outcome(target_code=smtp_code, target_text=text)
         else:
-            # 4xx errors are temporary - retry
-            logger.debug("smtp_temporary_error", mx=mx_host, code=smtp_code, error=str(e))
+            logger.debug("smtp_temporary_error", mx=mx_host, code=smtp_code, text=text)
             raise  # Re-raise to trigger retry
     except Exception as exc:
-        # Any other exception: treat as permanent to avoid infinite retries
         logger.debug("smtp_error", mx=mx_host, error=str(exc))
-        return False, False
+        # Treat unknown exceptions as permanent to avoid infinite retries
+        return SmtpResult(
+            outcome=SmtpOutcome.UNKNOWN,
+            smtp_code=0,
+            raw_response=str(exc),
+            catch_all_outcome=False,
+        )
 
 
-def verify_smtp(email: str, mx_records: list[str]) -> tuple[bool, bool]:
+def verify_smtp(email: str, mx_records: List[str], timeout: Optional[int] = None) -> SmtpResult:
     """
     Verify an email address via SMTP using the provided MX records.
 
     Args:
         email: The email address to verify
         mx_records: List of MX hostnames sorted by priority (lowest first)
+        timeout: Optional timeout override in seconds (uses global SMTP_TIMEOUT if not provided)
 
     Returns:
-        tuple: (smtp_valid, catch_all) where:
-            smtp_valid: True if the email address was accepted by the server
-            catch_all: True if a random email at the domain was accepted (indicating catch-all)
+        SmtpResult with outcome, code, response, and catch_all flag
     """
     if not mx_records:
-        return False, False
+        return SmtpResult(
+            outcome=SmtpOutcome.UNKNOWN,
+            smtp_code=0,
+            raw_response="No MX records provided",
+            catch_all_outcome=False,
+        )
 
-    # Try up to SMTP_MAX_MX_TO_TRY MX records in order of priority
+    effective_timeout = timeout if timeout is not None else SMTP_TIMEOUT
+    last_exception = None
     for mx in mx_records[:SMTP_MAX_MX_TO_TRY]:
-        last_exception = None
-        for attempt in range(SMTP_RETRIES + 1):  # +1 for initial attempt
+        for attempt in range(SMTP_RETRIES + 1):
             try:
-                result = _smtp_check(email, mx, SMTP_TIMEOUT)
-                if result[0]:  # If SMTP check succeeded, return immediately
+                result = _smtp_check(email, mx, effective_timeout)
+                # If we got a permanent result (not UNKNOWN), return it
+                if result.outcome != SmtpOutcome.UNKNOWN:
                     return result
-                # If we get here, the SMTP check returned (False, False) which means
-                # a permanent error (e.g., mailbox does not exist). No point retrying.
+                # UNKNOWN from exception path - don't retry, try next MX
                 break
             except Exception as e:
-                # Temporary error (e.g., connection issue, 4xx response) - retry
                 last_exception = e
-                # If this is the last attempt, don't retry
                 if attempt == SMTP_RETRIES:
                     logger.debug("smtp_final_attempt_failed",
-                                mx=mx, attempt=attempt+1, error=str(e))
+                                mx=mx, attempt=attempt + 1, error=str(e))
                     break
-                # Otherwise, log and retry
                 logger.debug("smtp_retry_attempt",
-                            mx=mx, attempt=attempt+1, error=str(e))
+                            mx=mx, attempt=attempt + 1, error=str(e))
                 continue
 
-        # If we exhausted retries for this MX and had an exception, continue to next MX
         if last_exception:
             logger.debug("smtp_moving_to_next_mx", mx=mx, error=str(last_exception))
             continue
 
-    # If all MX records failed
-    return False, False
+    # All MX exhausted
+    return SmtpResult(
+        outcome=SmtpOutcome.UNKNOWN,
+        smtp_code=0,
+        raw_response="All MX records exhausted",
+        catch_all_outcome=False,
+    )
 
 
-async def async_verify_smtp(email: str, mx_records: list[str]) -> tuple[bool, bool]:
+async def async_verify_smtp(email: str, mx_records: List[str], timeout: Optional[int] = None) -> SmtpResult:
     """
-    Asynchronously verify an email address via SMTP using the provided MX records.
+    Asynchronously verify an email address via SMTP.
 
     Args:
         email: The email address to verify
-        mx_records: List of MX hostnames sorted by priority (lowest first)
+        mx_records: List of MX hostnames sorted by priority
+        timeout: Optional timeout override in seconds
 
     Returns:
-        tuple: (smtp_valid, catch_all) where:
-            smtp_valid: True if the email address was accepted by the server
-            catch_all: True if a random email at the domain was accepted (indicating catch-all)
+        SmtpResult with outcome, code, response, and catch_all flag
     """
-    return await asyncio.to_thread(verify_smtp, email, mx_records)
+    return await asyncio.to_thread(verify_smtp, email, mx_records, timeout)

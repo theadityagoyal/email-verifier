@@ -74,16 +74,18 @@ class Email(Base):
     verified_at = Column(DateTime, nullable=True, index=True)
     job_id = Column(String(100), nullable=True, index=True)
 
-    # ── Smart verification result reuse (TTL tracking) ─────────────────────
-    # Independently tracked from verified_at/updated_at because DNS/MX and
-    # SMTP/catch-all have different TTLs (see utils/config.py
-    # DNS_MX_TTL_DAYS / SMTP_TTL_DAYS). NULL means "never actually checked
-    # via real I/O" — e.g. a brand new row before its first full check, or
-    # a trusted-domain fast-path row that never queries DNS/SMTP at all.
-    # Syntax + disposable are NOT tracked here — they're pure/cheap
-    # (no I/O) and are always recomputed fresh on every verification.
+    # ── Smart verification result reuse (TTL tracking) ──
     dns_checked_at = Column(DateTime, nullable=True, index=True)
     smtp_checked_at = Column(DateTime, nullable=True, index=True)
+
+    # ── Phase 1: SMTP outcome enum ──
+    smtp_outcome = Column(String(30), nullable=True)       # VALID, INVALID, CATCH_ALL, GREYLISTED, ...
+    smtp_response_code = Column(Integer, nullable=True)    # raw 3-digit SMTP code
+
+    # ── Phase 2: Status/confidence split + reason codes ──
+    sub_status = Column(String(50), nullable=True)         # mailbox_confirmed, catch_all_masked, ...
+    confidence = Column(String(10), nullable=True)         # High, Medium, Low
+    reason_code = Column(String(50), nullable=True)        # MACHINE-readable code
 
     __table_args__ = (
         CheckConstraint('score >= 0 AND score <= 100', name='check_score_range'),

@@ -32,29 +32,30 @@ class EmailVerifyResponse(BaseModel):
     username_quality: Optional[str] = None
     username_flags: Optional[list[str]] = None
     verified_at: Optional[datetime]
-    # New, optional (backward compatible — defaults to None for any caller
-    # not yet aware of it). Populated by the verification pipeline with the
-    # real DNS-resolved MX hostnames so the caller can persist them onto
-    # Domain.mx_records. Left as None when the DNS lookup was skipped
-    # entirely (trusted-domain fast path, or a reused/cached DNS decision),
-    # so we never overwrite a previously known-good value.
+
+    # New: MX records from real DNS lookup (None when skipped/reused)
     mx_records: Optional[List[str]] = None
 
-    # ── Smart verification result reuse metadata ────────────────────────────
-    # All optional/default-safe — purely additive, existing consumers of
-    # this schema are unaffected. Powers job-level reuse metrics
-    # (dns_checks_saved, smtp_checks_saved, reused_results, newly_verified)
-    # in tasks/bulk_processor.py, and is also useful for debugging a single
-    # verify's reuse decision via the API response directly.
+    # ── Smart verification result reuse metadata ──
     dns_checked_at: Optional[datetime] = None
     smtp_checked_at: Optional[datetime] = None
-    record_existed: bool = False       # was there already a DB row for this email?
-    dns_reused: bool = False           # was domain_exists/mx_found reused from cache?
-    smtp_reused: bool = False          # was smtp_valid/catch_all reused from cache?
-    dns_check_applicable: bool = True  # would a real DNS check ever be needed (not trusted-domain)?
-    smtp_check_applicable: bool = True # would a real SMTP check ever be needed (not disposable/no-MX/trusted)?
+    record_existed: bool = False
+    dns_reused: bool = False
+    smtp_reused: bool = False
+    dns_check_applicable: bool = True
+    smtp_check_applicable: bool = True
+
+    # ── Phase 1: SMTP outcome enum ──
+    smtp_outcome: Optional[str] = None       # VALID, INVALID, CATCH_ALL, GREYLISTED, ...
+    smtp_response_code: Optional[int] = None # raw 3-digit SMTP code
+
+    # ── Phase 2: Status/confidence split + reason codes ──
+    sub_status: Optional[str] = None         # mailbox_confirmed, catch_all_masked, greylisted_unconfirmed, ...
+    confidence: Optional[str] = None         # High, Medium, Low
+    reason_code: Optional[str] = None        # MACHINE-readable code
 
     model_config = {"from_attributes": True}
+
 
 
 class JobStatusResponse(BaseModel):

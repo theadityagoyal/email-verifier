@@ -66,11 +66,15 @@ _EMAIL_UPSERT_SQL = text("""
     INSERT INTO emails
         (email, domain, status, syntax_valid, domain_exists, mx_found, smtp_valid,
          disposable, role_based, catch_all, score, job_id, verified_at,
-         dns_checked_at, smtp_checked_at, created_at, updated_at)
+         dns_checked_at, smtp_checked_at, smtp_outcome, smtp_response_code,
+         sub_status, confidence, reason_code,
+         created_at, updated_at)
     VALUES
         (:email, :domain, :status, :syntax_valid, :domain_exists, :mx_found, :smtp_valid,
          :disposable, :role_based, :catch_all, :score, :job_id, :verified_at,
-         :dns_checked_at, :smtp_checked_at, :now, :now)
+         :dns_checked_at, :smtp_checked_at, :smtp_outcome, :smtp_response_code,
+         :sub_status, :confidence, :reason_code,
+         :now, :now)
     ON DUPLICATE KEY UPDATE
         domain = VALUES(domain),
         status = VALUES(status),
@@ -86,8 +90,40 @@ _EMAIL_UPSERT_SQL = text("""
         verified_at = VALUES(verified_at),
         dns_checked_at = COALESCE(VALUES(dns_checked_at), dns_checked_at),
         smtp_checked_at = COALESCE(VALUES(smtp_checked_at), smtp_checked_at),
+        smtp_outcome = VALUES(smtp_outcome),
+        smtp_response_code = VALUES(smtp_response_code),
+        sub_status = VALUES(sub_status),
+        confidence = VALUES(confidence),
+        reason_code = VALUES(reason_code),
         updated_at = VALUES(updated_at)
 """)
+
+
+def _email_params(result: EmailVerifyResponse, job_id: Optional[str], now: datetime) -> dict:
+    return {
+        "email": result.email,
+        "domain": result.domain,
+        "status": result.status.value,
+        "syntax_valid": result.syntax_valid,
+        "domain_exists": result.domain_exists,
+        "mx_found": result.mx_found,
+        "smtp_valid": result.smtp_valid,
+        "disposable": result.disposable,
+        "role_based": result.role_based,
+        "catch_all": result.catch_all,
+        "score": result.score,
+        "job_id": job_id,
+        "verified_at": result.verified_at.replace(tzinfo=None) if result.verified_at else None,
+        "dns_checked_at": result.dns_checked_at.replace(tzinfo=None) if result.dns_checked_at else None,
+        "smtp_checked_at": result.smtp_checked_at.replace(tzinfo=None) if result.smtp_checked_at else None,
+        "smtp_outcome": result.smtp_outcome,
+        "smtp_response_code": result.smtp_response_code,
+        "sub_status": result.sub_status,
+        "confidence": result.confidence,
+        "reason_code": result.reason_code,
+        "now": now,
+    }
+
 
 # ── "Mark processing" pre-step upsert ───────────────────────────────────────
 # BUGFIX: does NOT touch domain_exists/mx_found/smtp_valid/disposable/
@@ -125,27 +161,6 @@ _DOMAIN_UPSERT_SQL = text("""
         total_emails = total_emails + 1,
         updated_at = VALUES(updated_at)
 """)
-
-
-def _email_params(result: EmailVerifyResponse, job_id: Optional[str], now: datetime) -> dict:
-    return {
-        "email": result.email,
-        "domain": result.domain,
-        "status": result.status.value,
-        "syntax_valid": result.syntax_valid,
-        "domain_exists": result.domain_exists,
-        "mx_found": result.mx_found,
-        "smtp_valid": result.smtp_valid,
-        "disposable": result.disposable,
-        "role_based": result.role_based,
-        "catch_all": result.catch_all,
-        "score": result.score,
-        "job_id": job_id,
-        "verified_at": result.verified_at.replace(tzinfo=None) if result.verified_at else None,
-        "dns_checked_at": result.dns_checked_at.replace(tzinfo=None) if result.dns_checked_at else None,
-        "smtp_checked_at": result.smtp_checked_at.replace(tzinfo=None) if result.smtp_checked_at else None,
-        "now": now,
-    }
 
 
 def _email_params_processing(email: str, domain: str, job_id: Optional[str], now: datetime) -> dict:
