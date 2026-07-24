@@ -11,12 +11,12 @@ import {
   X,
   Settings,
   ChevronDown,
-  HelpCircle,
   KeyRound,
   LogOut,
 } from 'lucide-react';
 import ThemeToggle from '@/components/layout/ThemeToggle';
 import NotificationBell from '@/components/notifications/NotificationBell';
+import HelpMenu from '@/components/layout/HelpMenu';
 import { APP_USER, APP_INFO } from '@/utils/appConfig';
 
 const baseNavItems = [
@@ -267,13 +267,7 @@ export default function Layout() {
               </button>
 
               <div className="ml-auto flex items-center gap-1.5">
-                <button
-                  className="rounded-lg p-2 hover:bg-[var(--card-hover)] transition-all duration-200 cursor-pointer text-[var(--foreground)]/60 hover:text-[var(--foreground)] hover:scale-105 active:scale-95"
-                  aria-label="Help"
-                  title="Help & documentation"
-                >
-                  <HelpCircle size={20} />
-                </button>
+                <HelpMenu />
 
                 {/* Live notification bell — see components/notifications/.
                     Replaces the old inline "coming soon" placeholder. */}

@@ -170,7 +170,7 @@ export default function VerifyEmailPage() {
     : null;
 
   return (
-    <div id="verify-report" className="max-w-[85%] mx-auto px-4 sm:px-6 space-y-6">
+    <div id="verify-report" className="space-y-6">
       {/* Print-only stylesheet for "Download PDF Report" — only #verify-report
           content is visible when printing, everything else (nav, sidebar,
           quick actions) is hidden. */}
@@ -183,8 +183,8 @@ export default function VerifyEmailPage() {
         }
       `}</style>
 
-      <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="text-center">
-        <div className="flex items-center justify-center gap-3 mb-2">
+      <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
+        <div className="flex items-center gap-3 mb-2">
           <div className="p-2.5 rounded-xl bg-[var(--primary)]/10 text-[var(--primary)]">
             <Sparkles className="h-6 w-6" />
           </div>
@@ -411,7 +411,7 @@ export default function VerifyEmailPage() {
               <div className="p-2 rounded-full bg-success/10 mb-2">
                 <Loader2 className="h-5 w-5 text-success" />
               </div>
-              <p className="text-xl font-bold text-[var(--foreground)]">{avgSeconds ? `${avgSeconds}s` : '<2s'}</p>
+              <p className="text-xl font-bold text-[var(--foreground)]">{avgSeconds ? `${avgSeconds}s` : '—'}</p>
               <p className="text-xs text-[var(--foreground)]/50 text-center">Avg Check Time</p>
             </div>
             <div className="card col-span-2 flex items-center justify-between px-4">

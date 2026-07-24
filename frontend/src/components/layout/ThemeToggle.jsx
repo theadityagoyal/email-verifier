@@ -26,36 +26,21 @@ export default function ThemeToggle() {
     setIsDark((prev) => {
       const next = !prev;
       document.documentElement.classList.toggle('dark', next);
-      // Persist the theme preference
       localStorage.setItem('theme', next ? 'dark' : 'light');
       return next;
     });
-  };
-
-  const gradientStyle = {
-    background: `linear-gradient(to right, ${theme.primary}1A, ${theme.secondary}1A)`,
   };
 
   return (
     <button
       onClick={toggleTheme}
       aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-      className="group relative flex h-11 w-11 items-center justify-center rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-sm transition-all duration-300 cursor-pointer hover:-translate-y-0.5 hover:shadow-lg hover:border-indigo-300 dark:hover:border-indigo-500"
+      className="rounded-lg p-2 text-[var(--foreground)]/60 hover:bg-[var(--muted)] hover:text-[var(--foreground)] transition-colors duration-200 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
     >
-      <div
-        className="absolute inset-0 rounded-2xl opacity-0 transition-opacity duration-300 group-hover:opacity-100"
-        style={gradientStyle}
-      />
       {isDark ? (
-        <Sun
-          className="relative h-5 w-5 transition-transform duration-300 group-hover:rotate-180"
-          style={{ color: theme.warning }}
-        />
+        <Sun className="h-5 w-5" style={{ color: theme.warning }} aria-hidden="true" />
       ) : (
-        <Moon
-          className="relative h-5 w-5 transition-transform duration-300 group-hover:-rotate-12"
-          style={{ color: theme.foreground }}
-        />
+        <Moon className="h-5 w-5" style={{ color: theme.foreground }} aria-hidden="true" />
       )}
     </button>
   );

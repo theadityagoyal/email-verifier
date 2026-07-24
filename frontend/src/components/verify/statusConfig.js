@@ -31,6 +31,11 @@
  * cases apart without a backend-provided reason, so today both render as
  * "Issue Found". This will be resolved the moment the backend exposes a
  * reason/code field — only this file will need to change.
+ *
+ * NOTE: SUB_STATUS_LABELS now lives in utils/verificationReason.js (single
+ * source of truth shared with EmailListPage's Reason column) — re-exported
+ * here so existing imports of { SUB_STATUS_LABELS } from this file keep
+ * working unchanged.
  */
 import {
   CheckCircle2,
@@ -44,6 +49,9 @@ import {
   UserCog,
   Target,
 } from 'lucide-react';
+import { SUB_STATUS_LABELS } from '@/utils/verificationReason';
+
+export { SUB_STATUS_LABELS };
 
 // ── Status definitions (the "what does this state mean" layer) ─────────────
 export const STATUS = Object.freeze({
@@ -213,27 +221,6 @@ export function resolveCheckStatus(checkKey, result) {
 export function resolveAllChecks(result) {
   return CHECK_DEFS.map((def) => resolveCheckStatus(def.key, result));
 }
-
-// ── Sub-status label/color mapping (Phase 2) ──────────────────────────────────
-// Maps backend sub_status strings to display labels and colors
-export const SUB_STATUS_LABELS = Object.freeze({
-  mailbox_confirmed: { label: 'Mailbox Confirmed', color: 'success', summary: 'The mail server confirmed this address exists.' },
-  smtp_skipped_trusted: { label: 'Trusted Domain (Legacy — Not Re-verified)', color: 'success', summary: 'Historical record from before SMTP verification was required for trusted domains.' },
-  smtp_ambiguous_trusted: { label: 'Trusted Domain — Inconclusive', color: 'warning', summary: 'Trusted provider; SMTP timed out or deferred — cannot confirm but not rejected.' },
-  catch_all_masked: { label: 'Catch-All Domain', color: 'warning', summary: 'Domain accepts all addresses — cannot confirm this specific mailbox.' },
-  greylisted_unconfirmed: { label: 'Greylisted', color: 'warning', summary: 'Mail server temporarily deferred — try again later.' },
-  dns_timeout_assumed: { label: 'DNS Timeout', color: 'warning', summary: 'DNS lookup timed out — result assumed valid for scoring.' },
-  syntax_invalid: { label: 'Invalid Syntax', color: 'error', summary: 'Email format is invalid.' },
-  domain_not_found: { label: 'Domain Not Found', color: 'error', summary: 'Domain does not exist in DNS.' },
-  no_mx_records: { label: 'No MX Records', color: 'error', summary: 'Domain has no mail servers configured.' },
-  disposable_domain: { label: 'Disposable Domain', color: 'error', summary: 'Known temporary/throwaway email provider.' },
-  role_based_address: { label: 'Role-Based Address', color: 'warning', summary: 'Generic inbox (admin@, support@, etc.) — not a personal mailbox.' },
-  smtp_rejected: { label: 'SMTP Rejected', color: 'error', summary: 'Mail server rejected the address (mailbox not found).' },
-  smtp_blocked: { label: 'Blocked by Server', color: 'error', summary: 'Server indicated address is blocked or blacklisted.' },
-  smtp_rate_limited: { label: 'Rate Limited', color: 'warning', summary: 'Too many connection attempts — server temporarily unavailable.' },
-  smtp_temp_failure: { label: 'Temporary Failure', color: 'warning', summary: 'Server returned a temporary error — may succeed if retried.' },
-  unknown_error: { label: 'Unknown Error', color: 'error', summary: 'An unexpected error occurred during verification.' },
-});
 
 /** Get human-readable label, color, and summary for a sub_status value. */
 export function getSubStatusInfo(subStatus) {

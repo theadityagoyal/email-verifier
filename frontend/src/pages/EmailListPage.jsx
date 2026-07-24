@@ -13,10 +13,17 @@ import { getPageWindow } from '@/utils/pagination';
 import { listEmails, downloadEmailsExport, deleteEmail, getDashboardStats } from '@/services/api';
 import StatusBadge from '@/components/ui/StatusBadge';
 import Button from '@/components/ui/Button';
+import Tooltip from '@/components/ui/Tooltip';
 import { scoreColorClass } from '@/utils/scoreThresholds';
 import { formatDateTimeIST } from '@/utils/dateUtils';
 import { reportError } from '@/utils/errorReporter';
 import { useIsTabVisible } from '@/hooks/useIsTabVisible';
+// FIX (explainability): shared reason logic + shared per-check resolver,
+// so Email List's "Reason" column and "Checks" tooltips always agree with
+// what the Verify Email page shows for the exact same email — no duplicate
+// business logic, single source of truth.
+import { getVerificationReason } from '@/utils/verificationReason';
+import { resolveCheckStatus, CHECK_DEFS } from '@/components/verify/statusConfig';
 
 const statusOptions = [
   { value: '', label: 'All Statuses' },
@@ -58,30 +65,51 @@ const SORTABLE_FIELDS = new Set(['email', 'domain', 'status', 'score', 'verified
 // tab.
 const LIST_REFETCH_INTERVAL_MS = 10000;
 
-const CHECK_DEFS = [
-  { key: 'syntax_valid', icon: Check, tone: 'positive', label: 'Syntax' },
-  { key: 'domain_exists', icon: Globe, tone: 'positive', label: 'Domain' },
-  { key: 'mx_found', icon: Mail, tone: 'positive', label: 'MX' },
-  { key: 'smtp_valid', icon: Shield, tone: 'positive', label: 'SMTP' },
-  { key: 'disposable', icon: AlertTriangle, tone: 'warning', label: 'Disposable' },
-  { key: 'role_based', icon: Info, tone: 'info', label: 'Role' },
-  { key: 'catch_all', icon: AlertCircle, tone: 'warning', label: 'Catch-all' },
-];
-
-const CHECK_TONE_COLORS = {
-  positive: 'text-emerald-600',
-  warning: 'text-amber-500',
-  info: 'text-blue-500',
+// FIX (explainability): per-check color now derives from the SAME status
+// object resolveCheckStatus() returns (verified/issue/couldnt_verify/
+// not_applicable) instead of a separate hand-picked "tone" per field —
+// keeps the Checks column visually consistent with the Verify page's
+// CheckCard states.
+const CHECK_STATUS_COLOR = {
+  verified: 'text-emerald-600',
+  issue: 'text-red-500',
+  couldnt_verify: 'text-amber-500',
+  not_applicable: 'text-[var(--foreground)]/25',
 };
 
+// FIX (explainability #2): previously only rendered an icon for checks that
+// were `true` (email[key] ? <Icon/> : null) — failed/skipped checks showed
+// NOTHING, and even the ones that did render had no real explanation beyond
+// a bare field name in `title`. Now every check always renders (using the
+// same resolveCheckStatus() the Verify page uses), colored by its resolved
+// state, with a full tooltip — so hovering any icon here tells you exactly
+// what it means, same as the Verify Email page's per-check explanations.
 function ChecksCell({ email }) {
   return (
     <div className="flex items-center gap-1.5">
-      {CHECK_DEFS.map(({ key, icon: Icon, tone, label }) =>
-        email[key] ? (
-          <Icon key={key} title={label} className={`h-4 w-4 ${CHECK_TONE_COLORS[tone]}`} />
-        ) : null
-      )}
+      {CHECK_DEFS.map((def) => {
+        const resolved = resolveCheckStatus(def.key, email);
+        if (!resolved) return null;
+        const Icon = def.icon;
+        const colorClass = CHECK_STATUS_COLOR[resolved.status] || CHECK_STATUS_COLOR.not_applicable;
+
+        const tooltipContent = (
+          <div className="space-y-1">
+            <p className="font-semibold text-[var(--foreground)]">{resolved.title}</p>
+            <p className="text-xs font-medium text-[var(--foreground)]/70 capitalize">{resolved.label}</p>
+            <p className="text-xs text-[var(--foreground)]/60">{resolved.description}</p>
+          </div>
+        );
+
+        return (
+          <Tooltip key={def.key} content={tooltipContent}>
+            <Icon
+              className={`h-4 w-4 shrink-0 ${colorClass}`}
+              aria-label={`${resolved.title}: ${resolved.label}`}
+            />
+          </Tooltip>
+        );
+      })}
     </div>
   );
 }
@@ -325,11 +353,16 @@ export default function EmailListPage() {
     setPage(1);
   };
 
+  // FIX (explainability): new "Reason" column, positioned between Overall
+  // Status and Score per spec. Non-sortable — reason_code isn't in the
+  // backend's SORTABLE_EMAIL_FIELDS whitelist, so this stays display-only
+  // (same treatment as the existing non-sortable "Checks" column).
   const columns = [
     { key: 'select', label: '', width: 'w-12', sortable: false },
     { key: 'email', label: 'Email', width: 'min-w-[240px]', sortable: true },
     { key: 'domain', label: 'Domain', width: 'min-w-[140px]', sortable: true },
     { key: 'status', label: 'Overall Status', width: 'w-36', sortable: true },
+    { key: 'reason', label: 'Reason', width: 'min-w-[200px]', sortable: false },
     { key: 'score', label: 'Score', width: 'w-24', sortable: true },
     { key: 'checks', label: 'Checks', width: 'w-36', sortable: false },
     { key: 'verified_at', label: 'Verified', width: 'w-36', sortable: true },
@@ -622,7 +655,13 @@ export default function EmailListPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--muted)]">
-                  {emails.map((email, rowIndex) => (
+                  {emails.map((email, rowIndex) => {
+                    // FIX (explainability): computed once per row, used for
+                    // both the short (truncated) label and the full-text
+                    // hover tooltip — same object, no duplicate derivation.
+                    const reason = getVerificationReason(email);
+
+                    return (
                     <motion.tr
                       key={email.email}
                       initial={{ opacity: 0, x: -20 }}
@@ -663,6 +702,14 @@ export default function EmailListPage() {
                       </td>
                       <td className="px-4 py-3.5">
                         <StatusBadge status={email.status} />
+                      </td>
+                      <td className="px-4 py-3.5 max-w-[220px]">
+                        <span
+                          className="block truncate text-sm text-[var(--foreground)]/70"
+                          title={reason.fullReason}
+                        >
+                          {reason.shortReason}
+                        </span>
                       </td>
                       <td className="px-4 py-3.5">
                         <span className={`inline-flex items-center justify-center min-w-[2.5rem] rounded-full px-2.5 py-1 font-mono text-sm font-semibold tabular-nums ${scoreColorClass(email.score)}`}>
@@ -706,7 +753,8 @@ export default function EmailListPage() {
                         </div>
                       </td>
                     </motion.tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
