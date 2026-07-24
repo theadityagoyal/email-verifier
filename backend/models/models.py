@@ -250,3 +250,49 @@ class Notification(Base):
         Index('ix_notifications_created_at', 'created_at'),
         Index('ix_notifications_is_read', 'is_read'),
     )
+
+
+class SmtpRetryQueue(Base):
+    """
+    Delayed retry queue for greylisted (450/451/452) SMTP outcomes.
+
+    Flow:
+      1) verify_email() gets GREYLISTED outcome → inserts row with
+         attempt=1, next_retry_at=now+INITIAL_DELAY, status='pending'
+      2) Background poller (retry_scheduler.py) picks up rows where
+         status='pending' AND next_retry_at <= now
+      3) For each row, retries SMTP against stored mx_host first,
+         then falls back to mx_records on connection error
+      4) If still GREYLISTED and attempt < max_attempts:
+            attempt += 1
+            next_retry_at = now + min(INITIAL_DELAY * MULTIPLIER^(attempt-1), MAX_DELAY)
+         else if final outcome (VALID/INVALID/CATCH_ALL/other):
+            upsert final result to emails table, mark queue row 'completed'
+         else (max attempts exhausted):
+            upsert final greylisted_unconfirmed to emails, mark queue 'failed'
+
+    The queue is completely decoupled from Job — retries fire for ANY
+    verification source (single API, external API, bulk upload) because
+    they're enqueued from verify_email() itself.
+    """
+    __tablename__ = "smtp_retry_queue"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    email = Column(String(255), nullable=False, index=True)
+    domain = Column(String(255), nullable=False)
+    mx_host = Column(String(255), nullable=False)       # specific MX used on initial attempt
+    mx_records = Column(JSON, nullable=False)           # full list for fallback on retry
+    attempt = Column(Integer, nullable=False, default=1)
+    max_attempts = Column(Integer, nullable=False, default=4)
+    next_retry_at = Column(DateTime, nullable=False, index=True)
+    last_outcome = Column(String(30), nullable=False)   # always 'GREYLISTED' on insert
+    last_smtp_code = Column(Integer, nullable=True)
+    last_response = Column(Text, nullable=True)
+    job_id = Column(String(100), nullable=True, index=True)
+    status = Column(String(20), nullable=False, default='pending')  # pending, completed, failed
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    __table_args__ = (
+        Index('idx_retry_pending', 'status', 'next_retry_at'),
+    )

@@ -15,6 +15,9 @@ from models.database import check_database_connection
 configure_logging()
 logger = get_logger(__name__)
 
+# Import retry scheduler functions
+from tasks.retry_scheduler import start_retry_scheduler, stop_retry_scheduler
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -57,9 +60,13 @@ async def lifespan(app: FastAPI):
     if not warnings:
         logger.info("no_weak_defaults_detected")
 
+    # Start greylist retry scheduler (Phase 4)
+    start_retry_scheduler()
+
     yield
     logger.info("application_shutdown")
     shutdown_executor(wait=True)
+    stop_retry_scheduler(wait=True)
 
 
 app = FastAPI(

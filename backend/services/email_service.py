@@ -11,7 +11,7 @@ from validators.disposable_checker import is_disposable
 from validators.score_calculator import calculate_score, determine_status, determine_sub_status, determine_confidence, determine_reason_code, TRUSTED_DOMAINS
 from schemas.schemas import EmailVerifyResponse
 from models.database import AsyncSessionLocal
-from models.models import Email as EmailModel, Domain as DomainModel
+from models.models import Email as EmailModel, Domain as DomainModel, SmtpRetryQueue
 from services.domain_service import async_upsert_email, async_upsert_domain
 from utils.config import settings
 from utils.logging import get_logger
@@ -82,6 +82,68 @@ async def _persist_result(response: EmailVerifyResponse, job_id: Optional[str], 
         except Exception as exc:
             await session.rollback()
             logger.error("verification_persist_failed", email=response.email, error=str(exc), exc_info=True)
+
+
+async def _enqueue_greylist_retry(
+    email: str,
+    mx_records: List[str],
+    attempt: int,
+    job_id: Optional[str] = None,
+) -> bool:
+    """
+    Insert a row into smtp_retry_queue for a greylisted email.
+
+    Called only when:
+      - SMTP_RETRY_ENABLED is True
+      - SMTP outcome is GREYLISTED
+      - Not a trusted-domain ambiguous outcome (those don't retry)
+
+    Args:
+        email: The email address that was greylisted
+        mx_records: List of MX hostnames (we'll use the first one for retry)
+        attempt: Attempt number (1 = first retry after initial check)
+        job_id: Optional original job ID for traceability
+
+    Returns:
+        True if enqueued, False if skipped (e.g., no MX records)
+    """
+    if not mx_records:
+        logger.warning("greylist_retry_skipped_no_mx", email=email)
+        return False
+
+    # Use the first MX record for retry (same as normal verification)
+    mx_host = mx_records[0]
+    domain = email.split("@")[1].lower()
+
+    # Calculate next retry time with exponential backoff
+    initial_delay = settings.SMTP_RETRY_INITIAL_DELAY
+    multiplier = settings.SMTP_RETRY_MULTIPLIER
+    max_delay = settings.SMTP_RETRY_MAX_DELAY
+    delay = min(initial_delay * (multiplier ** (attempt - 1)), max_delay)
+
+    now = utc_now_naive()
+    next_retry_at = now + timedelta(seconds=delay)
+
+    async with AsyncSessionLocal() as session:
+        try:
+            queue_entry = SmtpRetryQueue(
+                email=email,
+                domain=domain,
+                mx_host=mx_host,
+                attempt=attempt,
+                max_attempts=settings.SMTP_RETRY_MAX_ATTEMPTS,
+                next_retry_at=next_retry_at,
+                last_outcome=SmtpOutcome.GREYLISTED.value,
+                job_id=job_id,
+                status="pending",
+            )
+            session.add(queue_entry)
+            await session.commit()
+            return True
+        except Exception as exc:
+            await session.rollback()
+            logger.error("greylist_enqueue_failed", email=email, error=str(exc), exc_info=True)
+            return False
 
 
 async def verify_email(email: str, job_id: Optional[str] = None) -> EmailVerifyResponse:
@@ -229,6 +291,18 @@ async def verify_email(email: str, job_id: Optional[str] = None) -> EmailVerifyR
 
                 logger.info("smtp_checked", email=email, smtp_valid=smtp_valid, catch_all=catch_all,
                             smtp_outcome=smtp_outcome, smtp_code=smtp_response_code, ambiguous=smtp_ambiguous_trusted)
+
+            # Phase 4: Enqueue for delayed retry if greylisted (and not a trusted-domain ambiguous)
+            greylist_enqueued = False
+            if settings.SMTP_RETRY_ENABLED and smtp_outcome == SmtpOutcome.GREYLISTED and not smtp_ambiguous_trusted:
+                greylist_enqueued = await _enqueue_greylist_retry(
+                    email=email,
+                    mx_records=mx_records_for_smtp,
+                    attempt=1,
+                    job_id=job_id,
+                )
+                if greylist_enqueued:
+                    logger.info("greylist_retry_enqueued", email=email, attempt=1)
 
             # 7. Score & status determination
             username = email.split("@")[0]

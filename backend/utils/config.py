@@ -36,6 +36,18 @@ class Settings(BaseSettings):
     SMTP_SENDER_EMAIL: str = "verify@emailchecker.com"
     SMTP_HELO_DOMAIN: str = "emailchecker.com"
 
+    # ── SMTP Greylisting Retry Queue (Phase 4) ─────────────────────────────────
+    # Master switch for the delayed retry scheduler
+    SMTP_RETRY_ENABLED: bool = True
+    # Initial delay before first retry (seconds) — 5 min
+    SMTP_RETRY_INITIAL_DELAY: int = 300
+    # Maximum total attempts (1 initial + N retries) — 4 total
+    SMTP_RETRY_MAX_ATTEMPTS: int = 4
+    # Exponential backoff multiplier — 5m → 15m → 45m → capped at 1h
+    SMTP_RETRY_MULTIPLIER: float = 3.0
+    # Cap on delay between retries (seconds) — 1 hour
+    SMTP_RETRY_MAX_DELAY: int = 3600
+
     # Disposable email checker
     DISPOSABLE_CACHE_TTL: int = 86400  # 24 hours
     DISPOSABLE_SOURCES: List[str] = [
