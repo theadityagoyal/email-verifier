@@ -314,8 +314,8 @@ def calculate_score(
     domain: str = "",
     username: str = "",
     smtp_ambiguous_trusted: bool = False,
-    spf_valid: bool = False,      # Phase 5: SPF record exists
-    dmarc_valid: bool = False,    # Phase 5: DMARC record exists
+    spf_valid: bool | None = None,      # Phase 5: SPF record exists (None = unknown/not checked)
+    dmarc_valid: bool | None = None,    # Phase 5: DMARC record exists (None = unknown/not checked)
 ) -> tuple[int, dict]:
     """
     Returns (final_score, username_analysis)
@@ -323,7 +323,7 @@ def calculate_score(
     Scoring order (additive, each step clamped):
       1. base_score from validation chain (40..100)
       2. + trusted_bonus (+10 if trusted domain), clamp 100
-      3. + spf_dmarc_delta (SPF +2, DMARC +2; absent −2 each; range −4..+4), clamp 100
+      3. + spf_dmarc_delta (SPF +2, DMARC +2; absent −2 each; unknown = 0; range −4..+4), clamp 100
       4. − username_penalty (0..30), clamp 100
       5. clamp to floor (60 for trusted, 0 otherwise)
     """
@@ -371,8 +371,15 @@ def calculate_score(
     score_with_trusted = min(100, base_score + trusted_bonus)
 
     # Step 2: SPF/DMARC minor signal (−4..+4), then clamp to 100
-    # SPF present → +2, absent → −2; DMARC present → +2, absent → −2
-    spf_dmarc_delta = (2 if spf_valid else -2) + (2 if dmarc_valid else -2)
+    # Three-way logic: True=+2, False=−2, None/unknown=0
+    def _delta(v: bool | None) -> int:
+        if v is True:
+            return 2
+        if v is False:
+            return -2
+        return 0  # None = unknown, no impact
+
+    spf_dmarc_delta = _delta(spf_valid) + _delta(dmarc_valid)
     score_with_spf_dmarc = min(100, score_with_trusted + spf_dmarc_delta)
 
     # Step 3: username quality penalty (0..30), then clamp to 100 (should already be ≤100)
