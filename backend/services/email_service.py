@@ -130,6 +130,7 @@ async def _enqueue_greylist_retry(
                 email=email,
                 domain=domain,
                 mx_host=mx_host,
+                mx_records=mx_records,
                 attempt=attempt,
                 max_attempts=settings.SMTP_RETRY_MAX_ATTEMPTS,
                 next_retry_at=next_retry_at,
