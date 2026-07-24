@@ -5,7 +5,7 @@ from typing import Optional, List
 from sqlalchemy import select
 
 from validators.syntax_validator import validate_syntax, is_role_based
-from validators.dns_validator import async_check_domain_exists, async_get_mx_records
+from validators.dns_validator import async_check_domain_exists, async_get_mx_records, async_get_spf_record, async_get_dmarc_record
 from validators.smtp_validator import async_verify_smtp, SmtpResult, SmtpOutcome
 from validators.disposable_checker import is_disposable
 from validators.score_calculator import calculate_score, determine_status, determine_sub_status, determine_confidence, determine_reason_code, TRUSTED_DOMAINS
@@ -147,7 +147,7 @@ async def _enqueue_greylist_retry(
             return False
 
 
-async def verify_email(email: str, job_id: Optional[str] = None) -> EmailVerifyResponse:
+async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bool = False) -> EmailVerifyResponse:
     """
     Full async email verification pipeline with smart result reuse:
       syntax → [lock] → existing-record lookup → domain DNS/MX (reused or
@@ -163,13 +163,14 @@ async def verify_email(email: str, job_id: Optional[str] = None) -> EmailVerifyR
         email: The email address to verify
         job_id: Optional bulk job this verification belongs to (stamped onto
             the persisted Email row, same as before)
+        force_fresh: If True, bypass TTL cache and force fresh DNS/SMTP checks
 
     Returns:
         EmailVerifyResponse: Verification results, including reuse metadata
         (record_existed, dns_reused, smtp_reused, dns_check_applicable,
         smtp_check_applicable) used by callers for job-level metrics.
     """
-    logger.info("verify_start", email=email)
+    logger.info("verify_start", email=email, force_fresh=force_fresh)
 
     try:
         # 1. Syntax validation (always fresh, no I/O, no lock needed)
@@ -181,7 +182,7 @@ async def verify_email(email: str, job_id: Optional[str] = None) -> EmailVerifyR
             return response
 
         email = normalized  # use normalised form from here on
-        reuse_enabled = settings.RESULT_REUSE_ENABLED
+        reuse_enabled = settings.RESULT_REUSE_ENABLED and not force_fresh
 
         lock_entry = None
         if reuse_enabled:
@@ -235,6 +236,9 @@ async def verify_email(email: str, job_id: Optional[str] = None) -> EmailVerifyR
                             checked_at=str(existing.dns_checked_at))
                 # dns_checked_at intentionally left as the existing value —
                 # we did not recheck, so its "freshness clock" must not reset.
+                # DNS was fresh (reused) - SPF/DMARC not checked in this run, use existing or None
+                spf_valid = bool(existing.spf_valid) if existing and existing.spf_valid is not None else None
+                dmarc_valid = bool(existing.dmarc_valid) if existing and existing.dmarc_valid is not None else None
             else:
                 domain_exists = await async_check_domain_exists(domain)
                 logger.info("domain_checked", email=email, domain_exists=domain_exists)
@@ -243,6 +247,13 @@ async def verify_email(email: str, job_id: Optional[str] = None) -> EmailVerifyR
                 persist_mx_records = mx_records_for_smtp  # real DNS result, safe to cache on Domain
                 dns_checked_at = now
                 logger.info("mx_checked", email=email, mx_records=mx_records_for_smtp, mx_found=mx_found)
+
+                # Phase 5: SPF/DMARC presence lookups (cheap, same DNS batch)
+                spf_record = await async_get_spf_record(domain) if domain_exists else None
+                dmarc_record = await async_get_dmarc_record(domain) if domain_exists else None
+                spf_valid = spf_record is not None
+                dmarc_valid = dmarc_record is not None
+                logger.debug("spf_dmarc_checked", email=email, spf_valid=spf_valid, dmarc_valid=dmarc_valid)
 
             # 6. SMTP verification
             # Trusted domains still go through real SMTP but with a faster timeout.
@@ -317,6 +328,8 @@ async def verify_email(email: str, job_id: Optional[str] = None) -> EmailVerifyR
                 domain=domain or "",
                 username=username,
                 smtp_ambiguous_trusted=smtp_ambiguous_trusted,
+                spf_valid=spf_valid,
+                dmarc_valid=dmarc_valid,
             )
 
             status = determine_status(
@@ -396,6 +409,8 @@ async def verify_email(email: str, job_id: Optional[str] = None) -> EmailVerifyR
                 sub_status=sub_status,
                 confidence=confidence,
                 reason_code=reason_code,
+                spf_valid=spf_valid,
+                dmarc_valid=dmarc_valid,
             )
 
             # Persist BEFORE releasing the lock — this is what actually
@@ -445,6 +460,8 @@ def _build_response(
     sub_status: Optional[str] = None,
     confidence: Optional[str] = None,
     reason_code: Optional[str] = None,
+    spf_valid: Optional[bool] = None,
+    dmarc_valid: Optional[bool] = None,
 ) -> EmailVerifyResponse:
     """Build a successful verification response."""
     from models.models import EmailStatus
@@ -482,6 +499,8 @@ def _build_response(
         sub_status=sub_status,
         confidence=confidence,
         reason_code=reason_code,
+        spf_valid=spf_valid,
+        dmarc_valid=dmarc_valid,
     )
 
 
@@ -519,6 +538,8 @@ def _build_invalid_response(
         sub_status=None,
         confidence=None,
         reason_code=None,
+        spf_valid=None,
+        dmarc_valid=None,
     )
 
 
@@ -555,4 +576,6 @@ def _build_error_response(
         sub_status=None,
         confidence=None,
         reason_code=None,
+        spf_valid=None,
+        dmarc_valid=None,
     )

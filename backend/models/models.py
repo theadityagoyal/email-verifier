@@ -87,6 +87,10 @@ class Email(Base):
     confidence = Column(String(10), nullable=True)         # High, Medium, Low
     reason_code = Column(String(50), nullable=True)        # MACHINE-readable code
 
+    # ── Phase 5: SPF/DMARC presence signals ──
+    spf_valid = Column(Boolean, nullable=True)             # SPF record exists (presence only)
+    dmarc_valid = Column(Boolean, nullable=True)           # DMARC record exists (presence only)
+
     __table_args__ = (
         CheckConstraint('score >= 0 AND score <= 100', name='check_score_range'),
         Index('ix_emails_domain_status', 'domain', 'status'),
@@ -166,6 +170,10 @@ class Job(Base):
     newly_verified = Column(Integer, nullable=False, default=0)
     dns_checks_saved = Column(Integer, nullable=False, default=0)
     smtp_checks_saved = Column(Integer, nullable=False, default=0)
+
+    # Phase 6: force_fresh flag for bulk jobs — when True, bypass TTL cache
+    # and force fresh DNS/SMTP checks for all emails in this job.
+    force_fresh = Column(Boolean, nullable=False, default=False)
 
     __table_args__ = (
         CheckConstraint('progress_percent >= 0 AND progress_percent <= 100', name='check_progress_range'),

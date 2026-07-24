@@ -59,11 +59,16 @@ def _count_unique_and_duplicates(df: pd.DataFrame, email_col: str) -> tuple[list
 @router.post("/bulk", status_code=status.HTTP_202_ACCEPTED)
 async def external_bulk_upload(
     file: UploadFile = File(...),
+    force_fresh: bool = False,
     db: AsyncSession = Depends(get_db),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     api_key: ApiKey = Depends(rate_limit_bulk),
 ):
-    """Upload a CSV/Excel file for bulk email verification. Returns a job_id to poll."""
+    """Upload a CSV/Excel file for bulk email verification. Returns a job_id to poll.
+
+    Args:
+        force_fresh: If true, bypass TTL cache and force fresh DNS/SMTP checks for all emails
+    """
     # Tracks the actual HTTP status returned, for usage logging in `finally`
     # below. Starts at 202 (the endpoint's declared success status_code);
     # any HTTPException raised along the way overrides it with the real code.
@@ -128,12 +133,13 @@ async def external_bulk_upload(
             error_details=None,
             total=total,
             duplicate_emails_removed=duplicate_emails_removed,
+            force_fresh=force_fresh,
             created_at=utc_now_naive(),
         )
         db.add(job)
         await db.commit()
 
-        background_tasks.add_task(process_bulk_job_sync, job_id, s3_key, email_col)
+        background_tasks.add_task(process_bulk_job_sync, job_id, s3_key, email_col, force_fresh)
         logger.info("external_bulk_job_dispatched", job_id=job_id, api_key_id=api_key.id, total=total)
 
         return {

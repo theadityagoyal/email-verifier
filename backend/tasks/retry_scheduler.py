@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models.database import AsyncSessionLocal
 from models.models import SmtpRetryQueue
 from validators.smtp_validator import async_verify_smtp, SmtpOutcome, SmtpResult
+from validators.dns_validator import async_get_spf_record, async_get_dmarc_record
 from validators.score_calculator import (
     calculate_score,
     determine_status,
@@ -152,6 +153,12 @@ async def _persist_final_result(
     disposable = is_disposable(domain)
     role = is_role_based(email.split("@")[0])
 
+    # Phase 5: SPF/DMARC presence lookups
+    spf_record = await async_get_spf_record(domain)
+    dmarc_record = await async_get_dmarc_record(domain)
+    spf_valid = spf_record is not None
+    dmarc_valid = dmarc_record is not None
+
     # Score using the same logic (no smtp_ambiguous_trusted on retry —
     # retries only happen for non-trusted greylisted initially)
     username = email.split("@")[0]
@@ -164,6 +171,8 @@ async def _persist_final_result(
         catch_all=catch_all,
         domain=domain,
         username=username,
+        spf_valid=spf_valid,
+        dmarc_valid=dmarc_valid,
         smtp_ambiguous_trusted=False,  # retries don't have "trusted ambiguous" concept
     )
 
@@ -241,6 +250,8 @@ async def _persist_final_result(
         sub_status=sub_status,
         confidence=confidence,
         reason_code=reason_code,
+        spf_valid=spf_valid,
+        dmarc_valid=dmarc_valid,
     )
 
     # Persist via shared upsert (same path as verify_email)

@@ -76,7 +76,7 @@ def _is_cancel_requested(job_id: str) -> bool:
         db.close()
 
 
-def verify_single_email_sync(email: str, job_id: str | None = None):
+def verify_single_email_sync(email: str, job_id: str | None = None, force_fresh: bool = False):
     """Verify a single email synchronously (for thread pool execution).
 
     NOTE (smart verification reuse): the actual Email/Domain row persistence
@@ -87,6 +87,9 @@ def verify_single_email_sync(email: str, job_id: str | None = None):
     single-verify requests for the same address. This function still owns
     the "mark processing" pre-step (immediate UI feedback) and the job
     counters, both of which are specific to bulk-job bookkeeping.
+
+    Args:
+        force_fresh: If True, bypass TTL cache and force fresh DNS/SMTP checks
     """
     db = SyncSessionLocal()
     domain = email.split('@')[-1].lower() if '@' in email else ''
@@ -105,7 +108,7 @@ def verify_single_email_sync(email: str, job_id: str | None = None):
             # Continue anyway - verification will still run
 
         loop = _get_thread_event_loop()
-        result = loop.run_until_complete(verify_email(email, job_id=job_id))
+        result = loop.run_until_complete(verify_email(email, job_id=job_id, force_fresh=force_fresh))
 
         if job_id:
             _update_job_counter(db, job_id, result)
@@ -217,7 +220,7 @@ def _update_job_counter(db, job_id: str, result) -> None:
             job.current_stage = 'completed'
 
 
-def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email") -> None:
+def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email", force_fresh: bool = False) -> None:
     """
     Process bulk job using ThreadPoolExecutor (synchronous, no Celery).
     This runs in a background thread pool worker thread from BackgroundTasks.
@@ -226,6 +229,7 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email") ->
         job_id: The unique identifier for the job
         s3_key: The S3 key (or local path indicator) of the file to process
         email_col: The column name containing email addresses (default: "email")
+        force_fresh: If True, bypass TTL cache and force fresh DNS/SMTP checks
     """
     logger.info("process_bulk_job_sync_started", job_id=job_id)
     db = SyncSessionLocal()
@@ -314,7 +318,7 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email") ->
 
         from concurrent.futures import as_completed
 
-        futures = {executor.submit(verify_single_email_sync, email, job_id): email for email in emails}
+        futures = {executor.submit(verify_single_email_sync, email, job_id, force_fresh=job.force_fresh): email for email in emails}
 
         # ── Cooperative cancellation ─────────────────────────────────────
         # `cancelled` short-circuits repeat DB checks once we've already

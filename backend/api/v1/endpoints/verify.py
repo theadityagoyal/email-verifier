@@ -33,7 +33,7 @@ async def _mark_processing(email: str, domain: str, now) -> None:
 
 
 @router.post("", response_model=EmailVerifyResponse, status_code=status.HTTP_200_OK)
-async def verify_email_endpoint(payload: EmailVerifyRequest):
+async def verify_email_endpoint(payload: EmailVerifyRequest, force_fresh: bool = False):
     """
     Verify a single email address through the full validation pipeline.
     Checks: syntax, domain DNS, MX records, SMTP, disposable, role-based, catch-all.
@@ -44,12 +44,15 @@ async def verify_email_endpoint(payload: EmailVerifyRequest):
     the race window where two overlapping requests for the same address
     could otherwise both run a full (duplicate) DNS/SMTP check. This
     endpoint no longer calls a separate _save_result step.
+
+    Args:
+        force_fresh: If true, bypass TTL cache and force fresh DNS/SMTP checks
     """
     email = payload.email
     domain = _extract_domain(email)
     now = utc_now_naive()
 
-    logger.info(f"Starting email verification for: {email}")
+    logger.info(f"Starting email verification for: {email}", force_fresh=force_fresh)
 
     # Validate email is not empty after stripping (additional validation beyond schema)
     if not email or not email.strip():
@@ -64,7 +67,7 @@ async def verify_email_endpoint(payload: EmailVerifyRequest):
 
     # Step 2: Run verification. Persists its own result internally.
     try:
-        result = await verify_email(email)
+        result = await verify_email(email, force_fresh=force_fresh)
     except Exception as e:
         logger.error(f"Verification service failed for {email}: {str(e)}", exc_info=True)
         raise HTTPException(

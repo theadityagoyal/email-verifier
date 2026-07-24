@@ -41,6 +41,7 @@ async def _mark_processing(email: str, domain: str, now) -> None:
 @router.post("")
 async def external_verify_email(
     payload: EmailVerifyRequest,
+    force_fresh: bool = False,
     db: AsyncSession = Depends(get_db),
     api_key: ApiKey = Depends(rate_limit_verify),
 ):
@@ -49,6 +50,9 @@ async def external_verify_email(
 
     Request body:  {"email": "someone@example.com"}
     Response:      {"success": true, "data": {...verification result...}}
+
+    Args:
+        force_fresh: If true, bypass TTL cache and force fresh DNS/SMTP checks
 
     NOTE (smart verification reuse): actual persistence of the Email/Domain
     rows now happens INSIDE services.email_service.verify_email() itself
@@ -78,7 +82,7 @@ async def external_verify_email(
 
         # Step 2: Run verification (persists its own result internally)
         try:
-            result = await verify_email(email)
+            result = await verify_email(email, force_fresh=force_fresh)
         except Exception as e:
             logger.error("external_verify_failed", email=email, api_key_id=api_key.id, error=str(e), exc_info=True)
             resp_status = 500

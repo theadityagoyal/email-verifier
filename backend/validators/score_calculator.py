@@ -314,9 +314,18 @@ def calculate_score(
     domain: str = "",
     username: str = "",
     smtp_ambiguous_trusted: bool = False,
+    spf_valid: bool = False,      # Phase 5: SPF record exists
+    dmarc_valid: bool = False,    # Phase 5: DMARC record exists
 ) -> tuple[int, dict]:
     """
     Returns (final_score, username_analysis)
+
+    Scoring order (additive, each step clamped):
+      1. base_score from validation chain (40..100)
+      2. + trusted_bonus (+10 if trusted domain), clamp 100
+      3. + spf_dmarc_delta (SPF +2, DMARC +2; absent −2 each; range −4..+4), clamp 100
+      4. − username_penalty (0..30), clamp 100
+      5. clamp to floor (60 for trusted, 0 otherwise)
     """
     # Username quality pehle analyze karo
     username_analysis = analyze_username_quality(username) if username else {
@@ -357,17 +366,23 @@ def calculate_score(
         else:
             base_score = 100
 
-    # Apply trusted domain bonus (+10, max 100)
+    # Step 1: trusted domain bonus (+10, max 100)
     trusted_bonus = 10 if is_trusted else 0
-    score_with_trusted_bonus = min(100, base_score + trusted_bonus)
+    score_with_trusted = min(100, base_score + trusted_bonus)
 
-    # Apply username quality penalty. Trusted domains get a score floor so
-    # reputation bonus + username penalty can never drag a known-good
-    # domain into the unsafe bucket (see TRUSTED_DOMAIN_SCORE_FLOOR).
+    # Step 2: SPF/DMARC minor signal (−4..+4), then clamp to 100
+    # SPF present → +2, absent → −2; DMARC present → +2, absent → −2
+    spf_dmarc_delta = (2 if spf_valid else -2) + (2 if dmarc_valid else -2)
+    score_with_spf_dmarc = min(100, score_with_trusted + spf_dmarc_delta)
+
+    # Step 3: username quality penalty (0..30), then clamp to 100 (should already be ≤100)
+    score_after_penalty = min(100, score_with_spf_dmarc - penalty)
+
+    # Step 4: floor clamp (trusted floor = 60, else 0)
     if is_trusted:
-        final_score = max(TRUSTED_DOMAIN_SCORE_FLOOR, score_with_trusted_bonus - penalty)
+        final_score = max(TRUSTED_DOMAIN_SCORE_FLOOR, score_after_penalty)
     else:
-        final_score = max(0, score_with_trusted_bonus - penalty)
+        final_score = max(0, score_after_penalty)
 
     return final_score, username_analysis
 

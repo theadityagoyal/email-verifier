@@ -68,12 +68,14 @@ _EMAIL_UPSERT_SQL = text("""
          disposable, role_based, catch_all, score, job_id, verified_at,
          dns_checked_at, smtp_checked_at, smtp_outcome, smtp_response_code,
          sub_status, confidence, reason_code,
+         spf_valid, dmarc_valid,
          created_at, updated_at)
     VALUES
         (:email, :domain, :status, :syntax_valid, :domain_exists, :mx_found, :smtp_valid,
          :disposable, :role_based, :catch_all, :score, :job_id, :verified_at,
          :dns_checked_at, :smtp_checked_at, :smtp_outcome, :smtp_response_code,
          :sub_status, :confidence, :reason_code,
+         :spf_valid, :dmarc_valid,
          :now, :now)
     ON DUPLICATE KEY UPDATE
         domain = VALUES(domain),
@@ -95,6 +97,8 @@ _EMAIL_UPSERT_SQL = text("""
         sub_status = VALUES(sub_status),
         confidence = VALUES(confidence),
         reason_code = VALUES(reason_code),
+        spf_valid = VALUES(spf_valid),
+        dmarc_valid = VALUES(dmarc_valid),
         updated_at = VALUES(updated_at)
 """)
 
@@ -121,6 +125,8 @@ def _email_params(result: EmailVerifyResponse, job_id: Optional[str], now: datet
         "sub_status": result.sub_status,
         "confidence": result.confidence,
         "reason_code": result.reason_code,
+        "spf_valid": result.spf_valid,
+        "dmarc_valid": result.dmarc_valid,
         "now": now,
     }
 

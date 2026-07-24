@@ -8,6 +8,7 @@ from models.models import EmailStatus, JobStatus, NotificationType, Notification
 
 class EmailVerifyRequest(BaseModel):
     email: str
+    force_fresh: bool = False
 
     @field_validator("email")
     @classmethod
@@ -53,6 +54,10 @@ class EmailVerifyResponse(BaseModel):
     sub_status: Optional[str] = None         # mailbox_confirmed, catch_all_masked, greylisted_unconfirmed, ...
     confidence: Optional[str] = None         # High, Medium, Low
     reason_code: Optional[str] = None        # MACHINE-readable code
+
+    # ── Phase 5: SPF/DMARC presence signals ──
+    spf_valid: Optional[bool] = None         # SPF record exists
+    dmarc_valid: Optional[bool] = None       # DMARC record exists
 
     model_config = {"from_attributes": True}
 

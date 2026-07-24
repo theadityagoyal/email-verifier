@@ -98,10 +98,15 @@ def _count_unique_and_duplicates(df: pd.DataFrame, email_col: str) -> tuple[list
 @router.post("/bulk-upload", response_model=BulkUploadResponse, status_code=status.HTTP_202_ACCEPTED)
 async def bulk_upload(
     file: UploadFile = File(...),
+    force_fresh: bool = False,
     db: AsyncSession = Depends(get_db),
     background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
-    """Upload CSV or Excel file for bulk email verification."""
+    """Upload CSV or Excel file for bulk email verification.
+
+    Args:
+        force_fresh: If true, bypass TTL cache and force fresh DNS/SMTP checks for all emails
+    """
     try:
         filename = file.filename.lower()
         if not is_supported_filename(filename):
@@ -155,6 +160,7 @@ async def bulk_upload(
             error_details=None,
             total=total,
             duplicate_emails_removed=duplicate_emails_removed,
+            force_fresh=force_fresh,
             created_at=utc_now_naive(),
         )
         db.add(job)
@@ -179,8 +185,8 @@ async def bulk_upload(
         )
 
         # Start processing the job in background using FastAPI BackgroundTasks
-        logger.info("about_to_dispatch_bulk_job", job_id=job_id, email_col=email_col)
-        background_tasks.add_task(process_bulk_job_sync, job_id, s3_key, email_col)
+        logger.info("about_to_dispatch_bulk_job", job_id=job_id, email_col=email_col, force_fresh=force_fresh)
+        background_tasks.add_task(process_bulk_job_sync, job_id, s3_key, email_col, force_fresh)
         logger.info("bulk_job_dispatched", job_id=job_id)
 
         return BulkUploadResponse(
