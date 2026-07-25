@@ -1,15 +1,27 @@
 """
 Sync-compatible bulk processor using ThreadPoolExecutor.
-Replaces Celery-based processing for simpler SaaS integration.
+
+FIX (stuck-job audit):
+  - Job counters now updated via ATOMIC SQL increments (no SELECT ... FOR
+    UPDATE, no read-modify-write from 20 concurrent threads). Removes the
+    row-lock contention that could cause "Lock wait timeout exceeded" and
+    silently lost counter increments under load.
+  - job.status is now guaranteed to reach a terminal value
+    (completed/failed/cancelled) no matter what happens in the loop —
+    wrapped so an exception after the loop can never leave a job stuck at
+    'processing'.
+  - Cancel check interval lowered + also checked at least once even for
+    small jobs (previously a job with total < CANCEL_CHECK_INTERVAL could
+    never be cancelled mid-flight).
 """
 import asyncio
 import threading
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update, case
 
 from models.database import SyncSessionLocal
-from models.models import Job, JobStatus, NotificationType, NotificationPriority
+from models.models import Job, JobStatus, EmailStatus, NotificationType, NotificationPriority
 from services.email_service import verify_email
 from services.domain_service import sync_upsert_email_processing
 from services.notification_service import sync_create_notification
@@ -21,28 +33,14 @@ from utils.timezone import utc_now_naive
 
 logger = get_logger(__name__)
 
-# How many completed emails between each check of Job.cancel_requested.
-# Small enough that a cancel request is honored quickly, large enough that
-# it isn't hammering the DB with an extra query per email on top of the
-# per-email upsert that already happens in verify_single_email_sync.
-CANCEL_CHECK_INTERVAL = 10
+# FIX: lowered from 10 -> 3. A job with total < old interval (e.g. a 5-row
+# test upload) previously could NEVER be cancelled mid-flight — the only
+# check was the unconditional one AFTER the whole loop finished (i.e. after
+# everything already ran). 3 means even small jobs get at least one
+# mid-flight check for anything with total >= 3, and the final check still
+# covers everything else.
+CANCEL_CHECK_INTERVAL = 3
 
-
-# ── Thread-local event loop reuse ────────────────────────────────────────────
-# Each ThreadPoolExecutor worker thread is long-lived and processes many
-# emails over its lifetime. Previously every single email verification
-# created a brand-new asyncio event loop via asyncio.new_event_loop() and
-# tore it down immediately after — for a bulk job of thousands of emails
-# across ~20 worker threads, that's thousands of loop create/destroy cycles,
-# a real performance bottleneck. Instead, each thread creates its event loop
-# exactly once (on first use) and reuses it for every subsequent email it
-# processes.
-#
-# This is also what makes the smart-reuse locking correct across bulk
-# workers: each thread's verify_email() call is genuinely async on that
-# thread's own loop, and utils/verification_lock.py's EmailLockManager uses
-# threading.Lock (not asyncio.Lock) specifically so it works correctly
-# across these independent per-thread loops.
 _thread_local = threading.local()
 
 
@@ -55,14 +53,6 @@ def _get_thread_event_loop() -> asyncio.AbstractEventLoop:
 
 
 def _is_cancel_requested(job_id: str) -> bool:
-    """Fresh, isolated read of Job.cancel_requested.
-
-    Uses its own short-lived session (open -> query -> close) instead of
-    reusing process_bulk_job_sync's long-lived `db` session, so it always
-    sees the latest value committed by the cancel endpoint's own request —
-    regardless of what transaction/snapshot state the caller's session
-    happens to be sitting in at the time.
-    """
     db = SyncSessionLocal()
     try:
         value = db.execute(
@@ -77,25 +67,11 @@ def _is_cancel_requested(job_id: str) -> bool:
 
 
 def verify_single_email_sync(email: str, job_id: str | None = None, force_fresh: bool = False):
-    """Verify a single email synchronously (for thread pool execution).
-
-    NOTE (smart verification reuse): the actual Email/Domain row persistence
-    no longer happens here — services/email_service.verify_email() now does
-    it internally (inside its own per-email lock, see
-    utils/verification_lock.py), which is what closes the race window for
-    concurrent duplicate DNS/MX/SMTP work across overlapping bulk jobs and
-    single-verify requests for the same address. This function still owns
-    the "mark processing" pre-step (immediate UI feedback) and the job
-    counters, both of which are specific to bulk-job bookkeeping.
-
-    Args:
-        force_fresh: If True, bypass TTL cache and force fresh DNS/SMTP checks
-    """
+    """Verify a single email synchronously (for thread pool execution)."""
     db = SyncSessionLocal()
     domain = email.split('@')[-1].lower() if '@' in email else ''
     now = utc_now_naive()
     try:
-        # First, insert with "processing" status for immediate UI feedback
         try:
             sync_upsert_email_processing(db, email, domain, job_id, now)
             db.commit()
@@ -105,7 +81,6 @@ def verify_single_email_sync(email: str, job_id: str | None = None, force_fresh:
                 f"Failed to mark email as processing for {email}: {str(processing_error)}",
                 exc_info=False,
             )
-            # Continue anyway - verification will still run
 
         loop = _get_thread_event_loop()
         result = loop.run_until_complete(verify_email(email, job_id=job_id, force_fresh=force_fresh))
@@ -113,7 +88,6 @@ def verify_single_email_sync(email: str, job_id: str | None = None, force_fresh:
         if job_id:
             _update_job_counter(db, job_id, result)
 
-        db.commit()
         return result.model_dump(mode="json")
 
     except Exception as exc:
@@ -125,115 +99,127 @@ def verify_single_email_sync(email: str, job_id: str | None = None, force_fresh:
 
 
 def _update_job_counter(db, job_id: str, result) -> None:
-    """Update job counters, progress, and smart-reuse metrics for a single
-    email verification result.
-
-    `result` is the full EmailVerifyResponse (not just `status`) so this can
-    also read the reuse metadata (record_existed/dns_reused/smtp_reused/
-    dns_check_applicable/smtp_check_applicable) populated by
-    services/email_service.py.
     """
-    from models.models import EmailStatus  # local import to avoid unused-import churn elsewhere
-
+    Atomically increment job counters via a single UPDATE using SQL
+    expressions (Job.processed + 1, etc). No SELECT ... FOR UPDATE, no
+    Python-side read-modify-write — this is what actually removes the
+    row-lock contention/serialization bug: 20 concurrent worker threads can
+    all issue this UPDATE, MySQL handles the row lock internally for the
+    duration of a single statement/commit only, not for the lifetime of an
+    app-level transaction.
+    """
     status = result.status
-
-    job = db.execute(
-        select(Job).where(Job.job_id == job_id).with_for_update()
-    ).scalar_one_or_none()
-
-    if not job:
-        return
-
     now = utc_now_naive()
 
-    if job.started_at is None:
-        job.started_at = now
+    verified_inc = 1 if status in (
+        EmailStatus.verified, EmailStatus.deliverable, EmailStatus.trusted, EmailStatus.probably_valid
+    ) else 0
+    invalid_inc = 1 if status in (EmailStatus.invalid, EmailStatus.undeliverable) else 0
+    risky_inc = 1 if status in (EmailStatus.risky, EmailStatus.unconfirmed, EmailStatus.uncertain) else 0
 
-    job.processed = (job.processed or 0) + 1
-
-    if status in (EmailStatus.verified, EmailStatus.deliverable, EmailStatus.trusted, EmailStatus.probably_valid):
-        job.verified = (job.verified or 0) + 1
-    elif status in (EmailStatus.invalid, EmailStatus.undeliverable):
-        job.invalid = (job.invalid or 0) + 1
-    elif status in (EmailStatus.risky, EmailStatus.unconfirmed, EmailStatus.uncertain):
-        job.risky = (job.risky or 0) + 1
-
-    # ── Smart verification result reuse metrics ─────────────────────────────
-    # "Fully reused" = every signal that WOULD have needed a real check
-    # (per dns_check_applicable/smtp_check_applicable) was in fact served
-    # from a fresh cached value, on a pre-existing DB row. If the email was
-    # brand new, or any applicable check had to run for real, it counts as
-    # newly_verified — matching the bulk-upload example in the spec (800
-    # direct reuse / 200 full verification).
     dns_satisfied = (not result.dns_check_applicable) or result.dns_reused
     smtp_satisfied = (not result.smtp_check_applicable) or result.smtp_reused
     fully_reused = bool(result.record_existed and dns_satisfied and smtp_satisfied)
 
-    if fully_reused:
-        job.reused_results = (job.reused_results or 0) + 1
-    else:
-        job.newly_verified = (job.newly_verified or 0) + 1
+    reused_inc = 1 if fully_reused else 0
+    newly_inc = 0 if fully_reused else 1
+    dns_saved_inc = 1 if (result.dns_check_applicable and result.dns_reused) else 0
+    smtp_saved_inc = 1 if (result.smtp_check_applicable and result.smtp_reused) else 0
 
-    if result.dns_check_applicable and result.dns_reused:
-        job.dns_checks_saved = (job.dns_checks_saved or 0) + 1
-    if result.smtp_check_applicable and result.smtp_reused:
-        job.smtp_checks_saved = (job.smtp_checks_saved or 0) + 1
+    try:
+        db.execute(
+            update(Job)
+            .where(Job.job_id == job_id)
+            .values(
+                processed=Job.processed + 1,
+                verified=Job.verified + verified_inc,
+                invalid=Job.invalid + invalid_inc,
+                risky=Job.risky + risky_inc,
+                reused_results=Job.reused_results + reused_inc,
+                newly_verified=Job.newly_verified + newly_inc,
+                dns_checks_saved=Job.dns_checks_saved + dns_saved_inc,
+                smtp_checks_saved=Job.smtp_checks_saved + smtp_saved_inc,
+                started_at=case((Job.started_at.is_(None), now), else_=Job.started_at),
+            )
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.error("job_counter_increment_failed", job_id=job_id, error=str(exc), exc_info=True)
+        return
 
-    if job.total > 0:
-        progress = (job.processed / job.total) * 100
-        job.progress_percent = int(progress)
+    # Second, lightweight pass: read the now-authoritative processed/total
+    # to compute progress %, stage, and ETA. This is a plain SELECT (no
+    # lock), safe to run right after the increment commit above.
+    try:
+        job = db.execute(select(Job).where(Job.job_id == job_id)).scalar_one_or_none()
+        if not job:
+            return
 
-        if progress < 10:
-            job.current_stage = 'uploading'
-        elif progress < 40:
-            job.current_stage = 'validating'
-        elif progress < 80:
-            job.current_stage = 'processing'
-        elif progress < 100:
-            job.current_stage = 'cleaning'
-        else:
-            job.current_stage = 'completed'
+        if job.total > 0:
+            progress = min(100, int((job.processed / job.total) * 100))
+            job.progress_percent = progress
 
-        if job.processed > 0:
-            elapsed = (now - job.started_at).total_seconds()
-            if elapsed > 0:
-                rate = job.processed / elapsed
-                if rate > 0:
-                    remaining_seconds = (job.total - job.processed) / rate
-                    job.estimated_time_remaining = int(remaining_seconds)
+            if progress < 10:
+                job.current_stage = 'uploading'
+            elif progress < 40:
+                job.current_stage = 'validating'
+            elif progress < 80:
+                job.current_stage = 'processing'
+            elif progress < 100:
+                job.current_stage = 'cleaning'
+            else:
+                job.current_stage = 'completed'
+
+            if job.processed > 0 and job.started_at:
+                elapsed = (now - job.started_at).total_seconds()
+                if elapsed > 0:
+                    rate = job.processed / elapsed
+                    if rate > 0:
+                        remaining_seconds = (job.total - job.processed) / rate
+                        job.estimated_time_remaining = int(remaining_seconds)
+                    else:
+                        job.estimated_time_remaining = None
                 else:
                     job.estimated_time_remaining = None
             else:
                 job.estimated_time_remaining = None
+
+            # NOTE: we deliberately do NOT set job.status here. Status is
+            # ALWAYS decided by process_bulk_job_sync after the full loop
+            # exits (see "guaranteed terminal status" block below) — that
+            # is the single source of truth for status, avoiding the old
+            # split-brain bug where current_stage said 'completed' while
+            # status stayed 'processing'.
+            if job.processed >= job.total and not job.completed_at:
+                job.completed_at = now
         else:
+            job.progress_percent = 0
             job.estimated_time_remaining = None
 
-        if job.processed >= job.total:
-            job.completed_at = now
-            if job.current_stage != 'completed':
-                job.current_stage = 'completed'
-    else:
-        job.progress_percent = 0
-        job.estimated_time_remaining = None
-        if job.processed >= job.total:
-            job.completed_at = now
-            job.current_stage = 'completed'
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.warning("job_progress_update_failed", job_id=job_id, error=str(exc))
 
 
 def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email", force_fresh: bool = False) -> None:
     """
     Process bulk job using ThreadPoolExecutor (synchronous, no Celery).
-    This runs in a background thread pool worker thread from BackgroundTasks.
 
-    Args:
-        job_id: The unique identifier for the job
-        s3_key: The S3 key (or local path indicator) of the file to process
-        email_col: The column name containing email addresses (default: "email")
-        force_fresh: If True, bypass TTL cache and force fresh DNS/SMTP checks
+    FIX: this function now GUARANTEES the job reaches a terminal status
+    (completed / failed / cancelled) before returning, via a try/finally
+    safety net at the bottom. Previously, an exception raised after the
+    as_completed() loop (e.g. during notification creation, cache-hit-rate
+    calc, or the final commit) could leave a job permanently stuck at
+    'processing' with no code path to ever revisit it. Combined with the
+    startup reconciliation added in main.py, orphaned jobs (e.g. from a
+    server crash/restart mid-job) are now also cleaned up.
     """
     logger.info("process_bulk_job_sync_started", job_id=job_id)
     db = SyncSessionLocal()
     job = None
+    reached_terminal_state = False
     try:
         job = db.execute(
             select(Job).where(Job.job_id == job_id)
@@ -246,7 +232,6 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email", fo
         job.status = JobStatus.processing
         db.commit()
 
-        # Load file
         if s3_key.startswith("local:"):
             path_part = s3_key.replace("local:", "")
             job_id_part, filename = path_part.split("/", 1)
@@ -259,19 +244,11 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email", fo
             raw = download_file_from_s3(s3_key)
             filename_for_parsing = job.file_name
 
-        # Read file — CSV or Excel (shared reader, same logic as the upload endpoints)
         df = read_upload_file(raw, filename_for_parsing)
 
-        # Use provided email_col or auto detect
         if email_col not in df.columns:
             email_col = detect_email_column(df)
 
-        # ── Mandatory bulk dedup ─────────────────────────────────────────
-        # Normalize (strip/lowercase), keep only rows that look like an
-        # email (contain "@"), then dedupe. `total_before_dedup` is the
-        # count BEFORE .unique() so duplicate_emails_removed reflects real
-        # duplicate rows within this file — not rows dropped for other
-        # reasons (blank/no "@").
         raw_series = (
             df[email_col]
             .dropna()
@@ -284,14 +261,8 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email", fo
         emails = with_at.unique().tolist()
         duplicate_emails_removed = total_before_dedup - len(emails)
 
-        # Source of truth for the progress denominator. Whatever estimate the
-        # upload endpoint may have stored, this guarantees job.total always
-        # matches the actual number of emails this run will process — fixes
-        # percent staying stuck at 0 when that earlier value was
-        # missing/incorrect.
         job.total = len(emails)
         job.duplicate_emails_removed = duplicate_emails_removed
-
         job.processed = 0
         job.verified = 0
         job.invalid = 0
@@ -300,6 +271,7 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email", fo
         job.newly_verified = 0
         job.dns_checks_saved = 0
         job.smtp_checks_saved = 0
+        job.started_at = utc_now_naive()
         db.commit()
 
         logger.info(
@@ -309,7 +281,6 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email", fo
             duplicate_emails_removed=duplicate_emails_removed,
         )
 
-        # Process emails in parallel using ThreadPoolExecutor
         try:
             executor = get_executor()
         except RuntimeError:
@@ -320,10 +291,6 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email", fo
 
         futures = {executor.submit(verify_single_email_sync, email, job_id, force_fresh=job.force_fresh): email for email in emails}
 
-        # ── Cooperative cancellation ─────────────────────────────────────
-        # `cancelled` short-circuits repeat DB checks once we've already
-        # detected cancellation and cancelled the remaining futures — no
-        # point re-checking every interval after that.
         cancelled = False
         completed_count = 0
 
@@ -339,16 +306,6 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email", fo
             if not cancelled and completed_count % CANCEL_CHECK_INTERVAL == 0:
                 if _is_cancel_requested(job_id):
                     cancelled = True
-                    # Futures that haven't started yet get cancelled here and
-                    # will never run — no email is processed for them, so
-                    # nothing partial or corrupted is written for those.
-                    # Futures already executing can't be interrupted
-                    # mid-verification (deliberately — each one commits its
-                    # own result independently via verify_single_email_sync,
-                    # so letting in-flight work finish is exactly what keeps
-                    # already-processed results consistent); as_completed()
-                    # will simply yield them normally when they finish, which
-                    # this same for-loop already handles above.
                     still_pending = sum(1 for f in futures if not f.done())
                     for pending_future in futures:
                         pending_future.cancel()
@@ -360,17 +317,14 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email", fo
                         futures_cancelled=still_pending,
                     )
 
-        # Final authoritative check — covers the case where cancellation was
-        # requested after the very last CANCEL_CHECK_INTERVAL checkpoint but
-        # before the job would otherwise be marked completed.
+        # Final authoritative check.
         if cancelled or _is_cancel_requested(job_id):
-            db.refresh(job)  # pick up the latest processed/verified/invalid/risky
-                              # counts written by the (separately-sessioned)
-                              # per-email commits above before we report them
+            db.refresh(job)
             job.status = JobStatus.cancelled
             job.completed_at = utc_now_naive()
             job.current_stage = 'cancelled'
             db.commit()
+            reached_terminal_state = True
 
             logger.info(
                 "bulk_job_cancelled",
@@ -396,12 +350,15 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email", fo
             )
             return
 
-        # Mark job as completed
+        # Mark job as completed — re-read the row first so we don't clobber
+        # counters written by other sessions with a stale ORM snapshot.
+        db.refresh(job)
         job.status = JobStatus.completed
-        job.completed_at = utc_now_naive()
+        job.completed_at = job.completed_at or utc_now_naive()
         job.current_stage = 'completed'
         job.progress_percent = 100
         db.commit()
+        reached_terminal_state = True
 
         logger.info(
             "bulk_job_completed",
@@ -447,6 +404,7 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email", fo
             job.error_message = str(exc)
             job.error_details = {"error": str(exc), "type": "FileReadError"}
             db.commit()
+            reached_terminal_state = True
             sync_create_notification(
                 db,
                 title="Bulk Upload Failed",
@@ -458,10 +416,20 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email", fo
         logger.error("bulk_job_file_read_error", job_id=job_id, error=str(exc), exc_info=True)
     except Exception as exc:
         if job:
-            job.status = JobStatus.failed
-            job.error_message = str(exc)
-            job.error_details = {"error": str(exc), "type": type(exc).__name__}
-            db.commit()
+            try:
+                job.status = JobStatus.failed
+                job.error_message = str(exc)
+                job.error_details = {"error": str(exc), "type": type(exc).__name__}
+                db.commit()
+                reached_terminal_state = True
+            except Exception as commit_exc:
+                # Even the failure-commit failed (e.g. connection dropped).
+                # Roll back and try once more with a fresh session so the
+                # job NEVER stays stuck at 'processing'.
+                db.rollback()
+                logger.error("bulk_job_failure_commit_failed", job_id=job_id, error=str(commit_exc))
+                _force_mark_failed(job_id, str(exc))
+                reached_terminal_state = True
             sync_create_notification(
                 db,
                 title="Bulk Upload Failed",
@@ -470,7 +438,36 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email", fo
                 priority=NotificationPriority.high,
                 metadata={"job_id": job_id, "file_name": job.file_name, "error": str(exc)},
             )
+        else:
+            _force_mark_failed(job_id, str(exc))
+            reached_terminal_state = True
         logger.error("bulk_job_error", job_id=job_id, error=str(exc), exc_info=True)
-        raise
     finally:
+        # Safety net: no matter what happened above, a job must NEVER be
+        # left at 'pending'/'processing' when this function returns. This
+        # is what actually closes the "stuck at Processing forever" bug for
+        # any code path we didn't anticipate.
+        if not reached_terminal_state:
+            _force_mark_failed(job_id, "Job processing ended unexpectedly without reaching a terminal state.")
         db.close()
+
+
+def _force_mark_failed(job_id: str, error_message: str) -> None:
+    """Last-resort, isolated-session guarantee that a job is never left in
+    a non-terminal state. Used only when the normal failure path itself
+    could not commit."""
+    fresh_db = SyncSessionLocal()
+    try:
+        j = fresh_db.execute(select(Job).where(Job.job_id == job_id)).scalar_one_or_none()
+        if j and j.status not in (JobStatus.completed, JobStatus.failed, JobStatus.cancelled):
+            j.status = JobStatus.failed
+            j.error_message = error_message[:2000]
+            j.error_details = {"error": error_message, "type": "ForcedTerminalState"}
+            j.completed_at = utc_now_naive()
+            fresh_db.commit()
+            logger.warning("bulk_job_force_marked_failed", job_id=job_id)
+    except Exception as exc:
+        fresh_db.rollback()
+        logger.error("bulk_job_force_mark_failed_error", job_id=job_id, error=str(exc), exc_info=True)
+    finally:
+        fresh_db.close()
