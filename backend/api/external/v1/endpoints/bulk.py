@@ -115,7 +115,7 @@ async def external_bulk_upload(
             with open(f"{UPLOAD_BASE_DIR}/{job_id}/{safe_filename}", "wb") as f:
                 f.write(content)
             s3_key = f"local:{job_id}/{safe_filename}"
-            logger.info("external_bulk_save_failed", job_id=job_id, path=s3_key)
+            logger.info("external_bulk_save_success", job_id=job_id, path=s3_key)
         except OSError as e:
             logger.error("external_bulk_save_failed", job_id=job_id, error=str(e), exc_info=True)
             raise HTTPException(status_code=500, detail={"code": "storage_error", "message": "Failed to save uploaded file"})

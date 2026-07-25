@@ -50,7 +50,7 @@ export default function HistoryPagination({
         </button>
         {getPageWindow(page, pages).map((p, i) =>
           p === '...' ? (
-            <span key={`e-${i}`} className="px-2 text-sm text-[var(--foreground)]/40">…</span>
+            <span key={`e-${i}`} className="px-2 text-sm text-[var(--foreground)]/40">...</span>
           ) : (
             <button
               key={p}

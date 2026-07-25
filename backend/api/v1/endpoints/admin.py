@@ -43,7 +43,7 @@ async def rate_limit_admin_login(request: Request) -> None:
 
     allowed, retry_after = admin_login_rate_limiter.check(key, 5, 60)  # 5 attempts per 60 seconds
     if not allowed:
-        logger.warning(f"admin_login_rate_limit_exceeded", client_host=client_host)
+        logger.warning("admin_login_rate_limit_exceeded", client_host=client_host)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail={
@@ -52,9 +52,6 @@ async def rate_limit_admin_login(request: Request) -> None:
             },
             headers={"Retry-After": str(retry_after)},
         )
-
-# Rate limiter for admin login attempts (5 attempts per minute to prevent brute force)
-admin_login_rate_limiter = RateLimiter()
 
 
 @router.post("/login", response_model=AdminLoginResponse)

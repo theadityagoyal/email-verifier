@@ -35,6 +35,23 @@ correct fix given the current single-shared-engine, multi-event-loop
 architecture (see bulk_processor.py's thread-local loop reuse). The sync
 engine is untouched — SyncSessionLocal/sync psycopg-style connections have
 no event-loop affinity, so pooling there is fine and unaffected.
+
+FIX (2026-07-25): SyncSessionLocal now uses expire_on_commit=False.
+
+Root cause of "Lost connection to MySQL server during query" crashing
+whole bulk jobs: tasks/bulk_processor.py used to keep ONE sync session
+open for the entire duration of a bulk job (10s of minutes for large
+files), mostly idle between commits. MySQL/network killed that idle
+connection. With the default expire_on_commit=True, SQLAlchemy expires
+every ORM attribute after commit() — so the NEXT attribute access
+(e.g. `job.status`, `job.force_fresh`) silently fires an implicit
+SELECT on that now-dead connection, which crashes with "Lost connection"
+and marks the whole job failed even though every email had already
+verified successfully.
+
+expire_on_commit=False stops that implicit re-SELECT. Combined with the
+bulk_processor.py rewrite (short-lived sessions per DB touchpoint +
+retry-on-disconnect), this closes the bug.
 """
 
 import logging
@@ -90,8 +107,12 @@ async_engine: AsyncEngine = create_async_engine(
 )
 
 # Sync Engine (Alembic / Background Tasks)
-# Unaffected by the fix above — sync DB-API connections have no event-loop
-# affinity, so normal pooling here is safe and unchanged.
+# Unaffected by the NullPool fix above — sync DB-API connections have no
+# event-loop affinity, so normal pooling here is safe and unchanged.
+# pool_pre_ping=True already pings a connection before handing it out, so
+# checked-out connections from THIS pool are fine — the crash was never
+# about pool checkout, it was about ONE long-held session going idle for
+# too long across a whole bulk job (see module docstring FIX note above).
 sync_engine = create_engine(
     settings.DATABASE_URL,
     pool_pre_ping=True,
@@ -111,10 +132,15 @@ AsyncSessionLocal = async_sessionmaker(
     autocommit=False,
 )
 
+# FIX (2026-07-25): expire_on_commit=False — see module docstring FIX note.
+# Was previously left at SQLAlchemy's default (True), which is what caused
+# implicit re-SELECTs on stale/dead connections after commit() during long
+# bulk jobs.
 SyncSessionLocal = sessionmaker(
     bind=sync_engine,
     autoflush=False,
     autocommit=False,
+    expire_on_commit=False,
 )
 
 

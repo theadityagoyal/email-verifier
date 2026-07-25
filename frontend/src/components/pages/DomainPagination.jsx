@@ -53,7 +53,7 @@ export default function DomainPagination({
         {getPageWindow(page, pages).map((p, i) =>
           p === '...' ? (
             <span key={`ellipsis-${i}`} className="px-2 text-sm text-[var(--foreground)]/40">
-              …
+              ...
             </span>
           ) : (
             <button

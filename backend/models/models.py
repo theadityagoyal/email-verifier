@@ -111,7 +111,6 @@ class Domain(Base):
     # NOTE: The following columns are legacy and unused; aggregates are computed
     #       dynamically from the emails table for dashboards.
     total_emails = Column(Integer, default=0)
-    total_emails = Column(Integer, default=0)
     verified_count = Column(Integer, default=0)
     invalid_count = Column(Integer, default=0)
     risky_count = Column(Integer, default=0)
