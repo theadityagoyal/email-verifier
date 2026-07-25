@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   Mail, Search, Loader2, X as XIcon, Sparkles, CheckCircle, Globe, ExternalLink,
-  Zap,
+  Zap, Clock,
 } from 'lucide-react';
 import { verifyEmail, listEmails, getDashboardStats } from '@/services/api';
 import { reportError } from '@/utils/errorReporter';
@@ -427,12 +427,14 @@ export default function VerifyEmailPage() {
               <div className="p-2 rounded-full bg-primary/10 mb-2">
                 <CheckCircle className="h-5 w-5 text-primary" />
               </div>
-              <p className="text-xl font-bold text-[var(--foreground)]">{CHECK_DEFS.length}</p>
+              <p className="text-xl font-bold text-[var(--foreground)]">
+                {statsData?.total_emails != null ? statsData.total_emails.toLocaleString() : '—'}
+              </p>
               <p className="text-xs text-[var(--foreground)]/50 text-center">Checks Performed</p>
             </div>
             <div className="card flex flex-col items-center justify-center py-5">
               <div className="p-2 rounded-full bg-success/10 mb-2">
-                <Loader2 className="h-5 w-5 text-success" />
+                <Clock className="h-5 w-5 text-success" />
               </div>
               <p className="text-xl font-bold text-[var(--foreground)]">{avgSeconds ? `${avgSeconds}s` : '—'}</p>
               <p className="text-xs text-[var(--foreground)]/50 text-center">Avg Check Time</p>

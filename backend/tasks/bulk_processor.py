@@ -32,9 +32,10 @@ Fix, two parts:
 import asyncio
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update, case
 from sqlalchemy.exc import OperationalError, DBAPIError
 
 from models.database import SyncSessionLocal
@@ -51,7 +52,32 @@ from utils.timezone import utc_now_naive
 logger = get_logger(__name__)
 
 # How many completed emails between each check of Job.cancel_requested.
+# This is a CEILING, not a fixed value — see _cancel_check_interval_for()
+# below, which scales it down for small jobs. A fixed interval of 10 means
+# a job with e.g. 5 emails never hits a mid-flight cancel checkpoint before
+# `as_completed` finishes on its own — Cancel silently does nothing on it.
 CANCEL_CHECK_INTERVAL = 10
+
+
+def _cancel_check_interval_for(total: int) -> int:
+    """Scale the cancel-check interval down for small jobs so Cancel is
+    actually observed mid-flight, while keeping large jobs at the original
+    (DB-load-friendly) interval of CANCEL_CHECK_INTERVAL."""
+    if total <= 0:
+        return CANCEL_CHECK_INTERVAL
+    return max(1, min(CANCEL_CHECK_INTERVAL, total // 4 or 1))
+
+
+# Max asyncio.to_thread() workers per bulk-worker event loop. Without this,
+# each of the SMTP_MAX_WORKERS (default 20) thread-local event loops lazily
+# creates its OWN default ThreadPoolExecutor the first time asyncio.to_thread
+# is called on it (the DNS/SMTP validators use to_thread internally) —
+# Python's default sizing for that is min(32, os.cpu_count() + 4) threads,
+# PER LOOP. 20 loops x up to 32 threads each = up to 640 OS threads possible
+# under load, which is a real resource-exhaustion / crash risk on a large
+# bulk job. Bounding it here caps the worst case at
+# SMTP_MAX_WORKERS x THREAD_LOOP_IO_WORKERS instead.
+THREAD_LOOP_IO_WORKERS = 4
 
 # ── DB retry-on-disconnect config ────────────────────────────────────────
 MAX_DB_RETRIES = 3
@@ -116,6 +142,15 @@ def _get_thread_event_loop() -> asyncio.AbstractEventLoop:
     loop = getattr(_thread_local, "loop", None)
     if loop is None or loop.is_closed():
         loop = asyncio.new_event_loop()
+        # Bound this loop's own to_thread()/run_in_executor() pool instead
+        # of letting asyncio lazily create its default-sized one (up to 32
+        # threads) — see THREAD_LOOP_IO_WORKERS comment above.
+        loop.set_default_executor(
+            ThreadPoolExecutor(
+                max_workers=THREAD_LOOP_IO_WORKERS,
+                thread_name_prefix=f"bulk-io-{threading.get_ident()}",
+            )
+        )
         _thread_local.loop = loop
     return loop
 
@@ -194,85 +229,146 @@ def verify_single_email_sync(email: str, job_id: str | None = None, force_fresh:
 
 def _update_job_counter(db, job_id: str, result) -> None:
     """Update job counters, progress, and smart-reuse metrics for a single
-    email verification result. Caller owns commit()."""
+    email verification result. Caller owns commit().
+
+    NOTE on locking strategy: this used to SELECT ... FOR UPDATE the Job row,
+    mutate it in Python, then let the caller commit — the row lock held
+    across up to SMTP_MAX_WORKERS (20) concurrent threads all fighting over
+    the SAME row for the SAME job. Under load that serializes hard and can
+    hit "Lock wait timeout exceeded" — which is a genuine SQL error, not a
+    "lost connection", so _run_with_retry's _is_transient_disconnect() check
+    does NOT retry it. It propagates up to verify_single_email_sync's
+    except-Exception, which by design only logs and swallows it (to avoid
+    crashing the whole job over one counter update) — but that means the
+    increment for THIS email is silently lost, and job.processed then never
+    reaches job.total, leaving the job stuck showing "Processing" forever
+    even though every email was actually verified.
+
+    Fix: do the counter increments as a single atomic UPDATE using
+    column-level arithmetic (processed = processed + 1, etc.) instead —
+    MySQL performs the read-modify-write atomically inside that one
+    statement, with the row lock held only for the statement's own duration
+    rather than across a SELECT + Python computation + second write. A
+    lock-wait error here is now retried a few times in-place before giving
+    up, instead of being dropped on the first hit.
+    """
     from models.models import EmailStatus  # local import to avoid unused-import churn elsewhere
 
     status = result.status
-
-    job = db.execute(
-        select(Job).where(Job.job_id == job_id).with_for_update()
-    ).scalar_one_or_none()
-
-    if not job:
-        return
-
     now = utc_now_naive()
 
-    if job.started_at is None:
-        job.started_at = now
-
-    job.processed = (job.processed or 0) + 1
-
-    if status in (EmailStatus.verified, EmailStatus.deliverable, EmailStatus.trusted, EmailStatus.probably_valid):
-        job.verified = (job.verified or 0) + 1
-    elif status in (EmailStatus.invalid, EmailStatus.undeliverable):
-        job.invalid = (job.invalid or 0) + 1
-    elif status in (EmailStatus.risky, EmailStatus.unconfirmed, EmailStatus.uncertain):
-        job.risky = (job.risky or 0) + 1
+    verified_inc = 1 if status in (EmailStatus.verified, EmailStatus.deliverable, EmailStatus.trusted, EmailStatus.probably_valid) else 0
+    invalid_inc = 1 if status in (EmailStatus.invalid, EmailStatus.undeliverable) else 0
+    risky_inc = 1 if status in (EmailStatus.risky, EmailStatus.unconfirmed, EmailStatus.uncertain) else 0
 
     dns_satisfied = (not result.dns_check_applicable) or result.dns_reused
     smtp_satisfied = (not result.smtp_check_applicable) or result.smtp_reused
     fully_reused = bool(result.record_existed and dns_satisfied and smtp_satisfied)
 
-    if fully_reused:
-        job.reused_results = (job.reused_results or 0) + 1
-    else:
-        job.newly_verified = (job.newly_verified or 0) + 1
+    reused_inc = 1 if fully_reused else 0
+    newly_verified_inc = 0 if fully_reused else 1
+    dns_saved_inc = 1 if (result.dns_check_applicable and result.dns_reused) else 0
+    smtp_saved_inc = 1 if (result.smtp_check_applicable and result.smtp_reused) else 0
 
-    if result.dns_check_applicable and result.dns_reused:
-        job.dns_checks_saved = (job.dns_checks_saved or 0) + 1
-    if result.smtp_check_applicable and result.smtp_reused:
-        job.smtp_checks_saved = (job.smtp_checks_saved or 0) + 1
+    last_exc = None
+    for attempt in range(3):
+        try:
+            db.execute(
+                update(Job)
+                .where(Job.job_id == job_id)
+                .values(
+                    processed=Job.processed + 1,
+                    verified=Job.verified + verified_inc,
+                    invalid=Job.invalid + invalid_inc,
+                    risky=Job.risky + risky_inc,
+                    reused_results=Job.reused_results + reused_inc,
+                    newly_verified=Job.newly_verified + newly_verified_inc,
+                    dns_checks_saved=Job.dns_checks_saved + dns_saved_inc,
+                    smtp_checks_saved=Job.smtp_checks_saved + smtp_saved_inc,
+                    started_at=case((Job.started_at.is_(None), now), else_=Job.started_at),
+                )
+            )
+            last_exc = None
+            break
+        except OperationalError as exc:
+            db.rollback()
+            last_exc = exc
+            logger.warning("job_counter_update_retry", job_id=job_id, attempt=attempt + 1, error=str(exc))
+            time.sleep(0.05 * (attempt + 1))
+
+    if last_exc is not None:
+        # All in-place retries exhausted — let it propagate so
+        # _run_with_retry / the caller's logging still sees it (this is
+        # now a rare fallback, not the common path it used to be).
+        raise last_exc
+
+    # Non-locking read-back of the values we just wrote, to compute the
+    # derived fields below (progress %, stage, ETA, terminal status). No
+    # FOR UPDATE needed — we already own the committed-within-this-txn
+    # increment from the UPDATE above (same session sees its own writes).
+    job = db.execute(select(Job).where(Job.job_id == job_id)).scalar_one_or_none()
+    if not job:
+        return
+
+    progress_percent = 0
+    current_stage = job.current_stage
+    estimated_time_remaining = None
+    completed_at = job.completed_at
+    new_status = None
 
     if job.total > 0:
         progress = (job.processed / job.total) * 100
-        job.progress_percent = int(progress)
+        progress_percent = int(progress)
 
         if progress < 10:
-            job.current_stage = 'uploading'
+            current_stage = 'uploading'
         elif progress < 40:
-            job.current_stage = 'validating'
+            current_stage = 'validating'
         elif progress < 80:
-            job.current_stage = 'processing'
+            current_stage = 'processing'
         elif progress < 100:
-            job.current_stage = 'cleaning'
+            current_stage = 'cleaning'
         else:
-            job.current_stage = 'completed'
+            current_stage = 'completed'
 
-        if job.processed > 0:
+        if job.processed > 0 and job.started_at:
             elapsed = (now - job.started_at).total_seconds()
             if elapsed > 0:
                 rate = job.processed / elapsed
                 if rate > 0:
-                    remaining_seconds = (job.total - job.processed) / rate
-                    job.estimated_time_remaining = int(remaining_seconds)
-                else:
-                    job.estimated_time_remaining = None
-            else:
-                job.estimated_time_remaining = None
-        else:
-            job.estimated_time_remaining = None
+                    estimated_time_remaining = int((job.total - job.processed) / rate)
 
         if job.processed >= job.total:
-            job.completed_at = now
-            if job.current_stage != 'completed':
-                job.current_stage = 'completed'
+            completed_at = completed_at or now
+            current_stage = 'completed'
+            # ── Crash-safe terminal state ────────────────────────────────
+            # Flip status to completed the MOMENT the last email is
+            # counted, in the same commit as that email's own counter
+            # update — not just later in Step 4's finalize block at the
+            # end of process_bulk_job_sync. If the process crashes/restarts
+            # between now and that finalize step, the job row is already
+            # correctly marked completed instead of being stuck on
+            # "processing" forever with nothing left to revisit it.
+            # Guarded so we never clobber a cancellation racing in around
+            # the same time.
+            if not job.cancel_requested and job.status == JobStatus.processing:
+                new_status = JobStatus.completed
     else:
-        job.progress_percent = 0
-        job.estimated_time_remaining = None
+        progress_percent = 0
         if job.processed >= job.total:
-            job.completed_at = now
-            job.current_stage = 'completed'
+            completed_at = completed_at or now
+            current_stage = 'completed'
+
+    values = {
+        "progress_percent": progress_percent,
+        "current_stage": current_stage,
+        "estimated_time_remaining": estimated_time_remaining,
+        "completed_at": completed_at,
+    }
+    if new_status is not None:
+        values["status"] = new_status
+
+    db.execute(update(Job).where(Job.job_id == job_id).values(**values))
 
 
 def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email", force_fresh: bool = False) -> None:
@@ -392,6 +488,8 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email", fo
         # sitting around to go stale.
         cancelled = False
         completed_count = 0
+        # Scaled down for small jobs — see _cancel_check_interval_for().
+        cancel_check_interval = _cancel_check_interval_for(len(emails))
 
         for future in as_completed(futures):
             email = futures[future]
@@ -402,7 +500,7 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email", fo
 
             completed_count += 1
 
-            if not cancelled and completed_count % CANCEL_CHECK_INTERVAL == 0:
+            if not cancelled and completed_count % cancel_check_interval == 0:
                 if _is_cancel_requested(job_id):
                     cancelled = True
                     still_pending = sum(1 for f in futures if not f.done())

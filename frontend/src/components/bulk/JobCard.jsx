@@ -148,7 +148,7 @@ export default function JobCard({
                 disabled={isCancelling || job.cancel_requested}
                 loading={isCancelling}
                 className="text-warning hover:text-warning hover:bg-warning/10"
-                title={job.cancel_requested ? 'Cancellation in progress…' : 'Cancel this job'}
+                title={job.cancel_requested ? 'Finishing emails already in flight — remaining ones are skipped' : 'Cancel remaining emails (already-processed ones are kept)'}
               >
                 {!isCancelling && <StopCircle className="h-3.5 w-3.5" />}
                 {job.cancel_requested ? 'Cancelling…' : 'Cancel'}

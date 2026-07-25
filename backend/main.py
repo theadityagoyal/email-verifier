@@ -16,6 +16,7 @@ configure_logging()
 logger = get_logger(__name__)
 
 from tasks.retry_scheduler import start_retry_scheduler, stop_retry_scheduler
+from tasks.job_watchdog import start_job_watchdog, stop_job_watchdog
 
 
 async def _reconcile_orphaned_jobs() -> None:
@@ -112,10 +113,17 @@ async def lifespan(app: FastAPI):
 
     start_retry_scheduler()
 
+    # Reconciles bulk jobs orphaned by a crash/restart mid-processing —
+    # see tasks/job_watchdog.py. Safety net for the "stuck at Processing
+    # forever" failure mode; the in-loop status flip in bulk_processor.py
+    # handles the common case, this catches whatever slips through.
+    start_job_watchdog()
+
     yield
     logger.info("application_shutdown")
     shutdown_executor(wait=True)
     stop_retry_scheduler(wait=True)
+    stop_job_watchdog(wait=True)
 
 
 app = FastAPI(
