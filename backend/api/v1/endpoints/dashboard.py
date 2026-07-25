@@ -57,9 +57,23 @@ DEFAULT_SORT_ORDER = "desc"
 
 FLAGGED_FILTER_OPTIONS = {"any", "disposable", "role_based", "catch_all"}
 
+# Reason filter options (map to backend reason_code values)
+REASON_FILTER_MAP = {
+    "smtp_rejected": ["SMTP_REJECTED", "SMTP_BLOCKED"],
+    "catch_all": ["CATCH_ALL_MASKED"],
+    "disposable": ["DISPOSABLE_DOMAIN"],
+    "role_based": ["ROLE_BASED_ADDRESS"],
+    "mailbox_not_found": ["SMTP_REJECTED", "SMTP_BLOCKED"],
+    "domain_not_found": ["DOMAIN_NOT_FOUND"],
+    "invalid_syntax": ["SYNTAX_INVALID"],
+    "mx_missing": ["NO_MX_RECORDS"],
+    "temp_failure": ["SMTP_TEMP_FAILURE", "SMTP_RATE_LIMITED", "GREYLISTED_UNCONFIRMED", "DNS_TIMEOUT_ASSUMED", "SMTP_AMBIGUOUS_TRUSTED"],
+    "unknown": ["UNKNOWN_ERROR"],
+}
+
 # ── FIX (audit #7): server-side sort for /emails ─────────────────────────────
 # Whitelisted so sort_by can never be interpolated into raw SQL.
-SORTABLE_EMAIL_FIELDS = {"email", "domain", "status", "score", "verified_at", "created_at"}
+SORTABLE_EMAIL_FIELDS = {"email", "domain", "status", "score", "verified_at", "created_at", "reason_code"}
 DEFAULT_EMAIL_SORT_BY = "created_at"
 DEFAULT_EMAIL_SORT_ORDER = "desc"
 
@@ -641,6 +655,7 @@ async def list_emails(
     date_from: str | None = Query(default=None),
     date_to: str | None = Query(default=None),
     flagged: str | None = Query(default=None),
+    reason: str | None = Query(default=None, description=f"One of {sorted(REASON_FILTER_MAP.keys())}"),
     order: str = Query(default="asc"),
     # FIX (audit #7): real server-side sort. `order` (asc|desc on created_at)
     # is kept for backward compat with existing callers (e.g.
@@ -696,6 +711,11 @@ async def list_emails(
     elif flagged in FLAGGED_FILTER_OPTIONS:
         query = query.where(getattr(Email, flagged).is_(True))
 
+    # Reason filter (maps to reason_code)
+    if reason and reason in REASON_FILTER_MAP:
+        reason_codes = REASON_FILTER_MAP[reason]
+        query = query.where(Email.reason_code.in_(reason_codes))
+
     total_result = await db.execute(select(func.count()).select_from(query.subquery()))
     total = total_result.scalar_one()
 
@@ -709,6 +729,7 @@ async def list_emails(
         "score": Email.score,
         "verified_at": Email.verified_at,
         "created_at": Email.created_at,
+        "reason_code": Email.reason_code,
     }
 
     normalized_sort_order = sort_order.lower() if sort_order else DEFAULT_EMAIL_SORT_ORDER
@@ -737,20 +758,89 @@ async def list_emails(
 
 @router.get("/emails/export")
 async def export_emails(
+    search: str | None = Query(default=None),
     status: str | None = Query(default=None),
     domain: str | None = Query(default=None),
+    score_min: int | None = Query(default=None, ge=0, le=100),
+    score_max: int | None = Query(default=None, ge=0, le=100),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    flagged: str | None = Query(default=None),
+    reason: str | None = Query(default=None),
+    sort_by: str | None = Query(default=None),
+    sort_order: str = Query(default=DEFAULT_EMAIL_SORT_ORDER),
     db: AsyncSession = Depends(get_db),
 ):
     query = select(Email)
+
+    if search:
+        query = query.where(Email.email.ilike(f"%{search}%"))
+
+    BUCKET_NAMES = {"safe", "risky", "unsafe", "processing"}
     if status:
+        if status in BUCKET_NAMES:
+            query = query.where(bucket_case() == status)
+        else:
+            try:
+                query = query.where(Email.status == EmailStatus(status))
+            except ValueError:
+                pass
+
+    if domain:
+        query = query.where(Email.domain.ilike(f"%{domain}%"))
+
+    if score_min is not None:
+        query = query.where(Email.score >= score_min)
+    if score_max is not None:
+        query = query.where(Email.score <= score_max)
+
+    if date_from:
         try:
-            query = query.where(Email.status == EmailStatus(status))
+            df = datetime.strptime(date_from, "%Y-%m-%d")
+            query = query.where(Email.created_at >= df)
         except ValueError:
             pass
-    if domain:
-        query = query.where(Email.domain == domain)
+    if date_to:
+        try:
+            dt = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+            query = query.where(Email.created_at < dt)
+        except ValueError:
+            pass
 
-    emails = (await db.execute(query.limit(100_000))).scalars().all()
+    if flagged == "any":
+        query = query.where(
+            or_(Email.disposable.is_(True), Email.role_based.is_(True), Email.catch_all.is_(True))
+        )
+    elif flagged in FLAGGED_FILTER_OPTIONS:
+        query = query.where(getattr(Email, flagged).is_(True))
+
+    # Reason filter (maps to reason_code)
+    if reason and reason in REASON_FILTER_MAP:
+        reason_codes = REASON_FILTER_MAP[reason]
+        query = query.where(Email.reason_code.in_(reason_codes))
+
+    # Sort (match list endpoint behavior)
+    sortable_columns = {
+        "email": Email.email,
+        "domain": Email.domain,
+        "status": Email.status,
+        "score": Email.score,
+        "verified_at": Email.verified_at,
+        "created_at": Email.created_at,
+        "reason_code": Email.reason_code,
+    }
+
+    normalized_sort_order = sort_order.lower() if sort_order else DEFAULT_EMAIL_SORT_ORDER
+    if normalized_sort_order not in ("asc", "desc"):
+        normalized_sort_order = DEFAULT_EMAIL_SORT_ORDER
+
+    if sort_by and sort_by in SORTABLE_EMAIL_FIELDS:
+        sort_col = sortable_columns[sort_by]
+        order_col = sort_col.asc() if normalized_sort_order == "asc" else sort_col.desc()
+    else:
+        order_col = Email.created_at.desc() if order == "desc" else Email.created_at.asc()
+
+    emails = (await db.execute(query.order_by(order_col, Email.id.desc()).limit(100_000))).scalars().all()
 
     df = pd.DataFrame(
         [

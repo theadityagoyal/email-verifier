@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
@@ -63,35 +63,13 @@ const reasonOptions = [
   { value: 'unknown', label: 'Unknown' },
 ];
 
-// Map filter values to shortReason strings from getVerificationReason()
-// Uses SUB_STATUS_LABELS (primary) and fallback chain (secondary) —
-// single source of truth, no duplicated business logic.
-const REASON_FILTER_MAP = Object.freeze({
-  smtp_rejected: ['SMTP Rejected', 'Blocked by Server', 'SMTP verification failed.'],
-  catch_all: ['Catch-All Domain', 'Catch-all domain detected.'],
-  disposable: ['Disposable Domain', 'Disposable email provider detected.'],
-  role_based: ['Role-Based Address', 'Role-based mailbox.'],
-  mailbox_not_found: ['SMTP Rejected', 'Blocked by Server', 'SMTP verification failed.'],
-  domain_not_found: ['Domain Not Found', 'Domain does not exist.'],
-  invalid_syntax: ['Invalid Syntax', 'Invalid email syntax.'],
-  mx_missing: ['No MX Records', 'No MX records found.'],
-  temp_failure: [
-    'Temporary Failure',
-    'Rate Limited',
-    'Greylisted',
-    'Trusted Domain — Inconclusive',
-    'DNS Timeout',
-  ],
-  unknown: ['Unknown Error'],
-});
-
 import SortHeader from '@/components/pages/SortHeader';
 
 // FIX (audit #7): fields the backend actually accepts sort_by for now
 // (SORTABLE_EMAIL_FIELDS in dashboard.py). Kept as a whitelist here too so
 // clicking a non-sortable header is simply a no-op instead of silently
 // sending a param the backend ignores.
-const SORTABLE_FIELDS = new Set(['email', 'domain', 'status', 'score', 'verified_at', 'created_at']);
+const SORTABLE_FIELDS = new Set(['email', 'domain', 'status', 'score', 'verified_at', 'created_at', 'reason_code']);
 
 // FIX (project-wide live-update audit): this page previously had NO
 // refetchInterval on either query below, so a bulk job finishing, a new
@@ -190,8 +168,6 @@ export default function EmailListPage() {
   // to /emails, instead of a client-side re-sort of whatever 20 rows the
   // current page happened to return.
   const [sortConfig, setSortConfig] = useState({ key: 'created_at', direction: 'desc' });
-  // Client-side sort for Reason column (backend doesn't support reason_code sorting)
-  const [reasonSortConfig, setReasonSortConfig] = useState({ key: 'reason', direction: 'asc' });
   const [selectedEmails, setSelectedEmails] = useState(new Set());
   const [isDeleting, setIsDeleting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -263,6 +239,7 @@ export default function EmailListPage() {
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
         flagged: flaggedFilter || undefined,
+        reason: reasonFilter || undefined,
         sort_by: sortConfig.key,
         sort_order: sortConfig.direction,
       }),
@@ -283,33 +260,6 @@ export default function EmailListPage() {
   const total = data?.total || 0;
   const totalPages = data?.pages || 1;
 
-  // Client-side reason filtering (backend doesn't support reason parameter yet)
-  // Uses getVerificationReason() as single source of truth
-  const filteredEmails = useMemo(() => {
-    let result = emails;
-
-    // Apply reason filter
-    if (reasonFilter) {
-      const allowedReasons = REASON_FILTER_MAP[reasonFilter] || [];
-      result = result.filter((email) => {
-        const reason = getVerificationReason(email);
-        return allowedReasons.includes(reason.shortReason);
-      });
-    }
-
-    // Apply client-side reason sort (backend doesn't support reason_code sorting)
-    if (reasonSortConfig.key === 'reason') {
-      result = [...result].sort((a, b) => {
-        const reasonA = getVerificationReason(a).shortReason;
-        const reasonB = getVerificationReason(b).shortReason;
-        const comparison = reasonA.localeCompare(reasonB);
-        return reasonSortConfig.direction === 'asc' ? comparison : -comparison;
-      });
-    }
-
-    return result;
-  }, [emails, reasonFilter, reasonSortConfig]);
-
   const totalEmails = stats?.total_emails || 0;
   const safeCount = stats?.bucket_counts?.safe || 0;
   const riskyCount = stats?.bucket_counts?.risky || 0;
@@ -320,7 +270,7 @@ export default function EmailListPage() {
     if (selectAll) {
       setSelectedEmails(new Set());
     } else {
-      setSelectedEmails(new Set(filteredEmails.map((e) => e.email)));
+      setSelectedEmails(new Set(emails.map((e) => e.email)));
     }
   };
 
@@ -407,7 +357,7 @@ export default function EmailListPage() {
     setSearchInput('');
     setFlaggedFilter('');
     setReasonFilter('');
-    setReasonSortConfig({ key: 'reason', direction: 'asc' });
+    setSortConfig({ key: 'created_at', direction: 'desc' });
     setSearchParams({});
     setSelectedEmails(new Set());
     setPage(1);
@@ -416,20 +366,8 @@ export default function EmailListPage() {
   // FIX (audit #7): now updates real sort state that feeds the query,
   // instead of re-sorting only the currently-loaded page client-side.
   const handleSort = (key) => {
-    // Reason column: client-side sort using getVerificationReason()
-    if (key === 'reason') {
-      setReasonSortConfig((prev) => ({
-        key,
-        direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc',
-      }));
-      // Reset backend sort config when client-side reason sort is active
-      setSortConfig({ key: 'created_at', direction: 'desc' });
-      setPage(1);
-      return;
-    }
-    // Backend-supported fields: reset client-side reason sort
+    // All sortable fields are now handled by backend
     if (!SORTABLE_FIELDS.has(key)) return;
-    setReasonSortConfig({ key: 'reason', direction: 'asc' });
     setSortConfig((prev) => ({
       key,
       direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc',
@@ -438,18 +376,16 @@ export default function EmailListPage() {
   };
 
   // FIX (explainability): new "Reason" column, positioned between Overall
-  // Status and Score per spec. Non-sortable on backend (reason_code isn't in
-  // SORTABLE_EMAIL_FIELDS) — we implement client-side sort using
-  // getVerificationReason() shortReason as the sort key.
+  // Status and Score per spec. Now sortable on backend via reason_code.
   const columns = [
     { key: 'select', label: '', width: 'w-12', sortable: false },
-    { key: 'email', label: 'Email', width: 'min-w-[240px]', sortable: true },
-    { key: 'domain', label: 'Domain', width: 'min-w-[140px]', sortable: true },
-    { key: 'status', label: 'Overall Status', width: 'w-36', sortable: true },
-    { key: 'reason', label: 'Reason', width: 'min-w-[200px]', sortable: true },
-    { key: 'score', label: 'Score', width: 'w-24', sortable: true },
+    { key: 'email', label: 'Email', width: 'min-w-[240px]', sortable: true, sortField: 'email' },
+    { key: 'domain', label: 'Domain', width: 'min-w-[140px]', sortable: true, sortField: 'domain' },
+    { key: 'status', label: 'Overall Status', width: 'w-36', sortable: true, sortField: 'status' },
+    { key: 'reason', label: 'Reason', width: 'min-w-[200px]', sortable: true, sortField: 'reason_code' },
+    { key: 'score', label: 'Score', width: 'w-24', sortable: true, sortField: 'score' },
     { key: 'checks', label: 'Checks', width: 'w-36', sortable: false },
-    { key: 'verified_at', label: 'Verified', width: 'w-36', sortable: true },
+    { key: 'verified_at', label: 'Verified', width: 'w-36', sortable: true, sortField: 'verified_at' },
     { key: 'actions', label: 'Actions', width: 'w-24', sortable: false },
   ];
 
@@ -706,7 +642,7 @@ export default function EmailListPage() {
               Retry
             </Button>
           </div>
-        ) : filteredEmails.length === 0 ? (
+        ) : emails.length === 0 ? (
           <div className="p-12 text-center">
             <Mail className="h-16 w-16 text-[var(--foreground)]/20 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-[var(--foreground)] mb-2">No emails found</h3>
@@ -732,7 +668,7 @@ export default function EmailListPage() {
                         {col.key === 'select' ? (
                           <input
                             type="checkbox"
-                            checked={selectAll && filteredEmails.length > 0}
+                            checked={selectAll && emails.length > 0}
                             onChange={handleSelectAll}
                             className="w-4 h-4 rounded border-[var(--muted)] text-[var(--accent)] focus:ring-[var(--accent)] cursor-pointer"
                             aria-label="Select all emails on this page"
@@ -740,9 +676,9 @@ export default function EmailListPage() {
                         ) : col.sortable ? (
                             <SortHeader
                               label={col.label}
-                              field={col.key}
-                              sortBy={col.key === 'reason' ? reasonSortConfig.key : sortConfig.key}
-                              sortOrder={col.key === 'reason' ? reasonSortConfig.direction : sortConfig.direction}
+                              field={col.sortField || col.key}
+                              sortBy={sortConfig.key}
+                              sortOrder={sortConfig.direction}
                               onSort={handleSort}
                             />
                         ) : (
@@ -753,7 +689,7 @@ export default function EmailListPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--muted)]">
-                  {filteredEmails.map((email, rowIndex) => {
+                  {emails.map((email, rowIndex) => {
                     // FIX (explainability): computed once per row, used for
                     // both the short (truncated) label and the full-text
                     // hover tooltip — same object, no duplicate derivation.
