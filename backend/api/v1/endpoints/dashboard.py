@@ -484,7 +484,7 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365), db: AsyncSessi
         "catch_all": flag_row[2] or 0,
     }
 
-    // NOTE: top_domains result — confirm frontend actually uses this before optimizing away, DashboardPage.jsx currently uses separate listDomains() call instead for leaderboard
+    # NOTE: top_domains result - confirm frontend actually uses this before optimizing away, DashboardPage.jsx currently uses separate listDomains() call instead for leaderboard
     domain_bucket_rows = (
         await db.execute(
             select(Email.domain, bucket_expr.label("bucket"), func.count(Email.id))
@@ -573,7 +573,7 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365), db: AsyncSessi
     )
 
 
-// UNUSED — not called anywhere in current UI as of audit, confirm before removing
+# UNUSED - not called anywhere in current UI as of audit, confirm before removing
 @router.get("/dashboard/trends", response_model=list[VerificationTrend])
 async def get_trends(
     days: int = Query(default=30, ge=1, le=90),
@@ -723,7 +723,7 @@ async def list_emails(
 
     offset = (page - 1) * size
 
-    # Whitelisted sort target map — sort_by is only ever used as a dict key.
+    # Whitelisted sort target map - sort_by is only ever used as a dict key.
     sortable_columns = {
         "email": Email.email,
         "domain": Email.domain,
@@ -1256,7 +1256,7 @@ async def export_domains(
     db: AsyncSession = Depends(get_db),
 ):
     """FIX (audit #8): real full export respecting the current search/filters
-    — not just whatever 20 rows happened to be on the current page."""
+    - not just whatever 20 rows happened to be on the current page."""
     domain_subq = _domain_aggregate_subquery(search)
     risk_percent_expr, trust_score_expr = _risk_and_trust_exprs(domain_subq)
 
@@ -1332,7 +1332,7 @@ async def bulk_delete_domains(
     db: AsyncSession = Depends(get_db),
 ):
     """FIX (audit #3): "Delete Selected" on the Domains page previously called
-    an empty function — no API existed. Domains are aggregated LIVE from the
+    an empty function - no API existed. Domains are aggregated LIVE from the
     Email table (see module docstring further up: Domain rows are only ever
     touched for mx_records caching), so "deleting a domain" means deleting
     every Email row under it, plus its Domain cache row if present."""
