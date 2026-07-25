@@ -51,7 +51,7 @@ export default function DomainPagination({
           <ChevronLeft className="h-4 w-4" />
         </Button>
         {getPageWindow(page, pages).map((p, i) =>
-          p === '…' ? (
+          p === '...' ? (
             <span key={`ellipsis-${i}`} className="px-2 text-sm text-[var(--foreground)]/40">
               …
             </span>

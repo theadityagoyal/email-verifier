@@ -74,8 +74,7 @@ export function useNotifications() {
 
   useEffect(() => {
     const handleVisibilityChange = () => {
-      // Trigger a refetch to re-evaluate the refetchInterval function
-      query.refetch();
+      if (document.visibilityState === 'visible') query.refetch();
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);

@@ -4,7 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { Upload as UploadIcon } from 'lucide-react';
 
-import { bulkUpload, getJobStatus, listJobs, deleteJob, cancelJob } from '@/services/api';
+import { bulkUpload, getJobStatus, listJobs, deleteJob, cancelJob, retryJob } from '@/services/api';
 import { reportError } from '@/utils/errorReporter';
 import { istDateKey, istMonthKey } from '@/utils/dateUtils';
 import { previewUploadFile } from '@/utils/csvPreview';
@@ -164,9 +164,6 @@ export default function BulkUploadPage() {
         created_at: data.created_at || new Date().toISOString(),
         total: data.total_emails ?? 0,
         processed: 0,
-        safe: 0,
-        risky: 0,
-        unsafe: 0,
         progress_percent: 0,
         cancel_requested: false,
         duplicate_emails_removed: data.duplicate_emails_removed ?? 0,
@@ -320,9 +317,17 @@ export default function BulkUploadPage() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   }, []);
 
-  const handleRetry = useCallback((jobId) => {
-    pollFailuresRef.current[jobId] = 0;
-    setPolling(prev => ({ ...prev, [jobId]: true }));
+  const handleRetry = useCallback(async (jobId) => {
+    try {
+      await retryJob(jobId);
+      pollFailuresRef.current[jobId] = 0;
+      setPolling(prev => ({ ...prev, [jobId]: true }));
+      // Optimistically update job status to 'processing' so UI updates immediately
+      setJobs(prev => prev.map(job => job.job_id === jobId ? { ...job, status: 'processing', progress_percent: 0, cancel_requested: false, error_message: null } : job));
+    } catch (err) {
+      reportError('BulkUploadPage.retryJob', err, { jobId });
+      toast.error(err.message || 'Failed to retry job');
+    }
   }, []);
 
   const handleDelete = useCallback(async (jobId) => {

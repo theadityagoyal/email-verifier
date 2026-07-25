@@ -1,3 +1,4 @@
+// UNUSED — not called anywhere in current UI as of audit, confirm before removing
 import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useTheme } from '@/styles/theme';
 

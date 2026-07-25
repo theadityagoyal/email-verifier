@@ -189,11 +189,17 @@ export const deleteJob = (jobId) =>
 export const cancelJob = (jobId) =>
   apiEnhanced.post(`/jobs/${jobId}/cancel`).then((r) => r.data)
 
+// Retry a failed or pending bulk job. Resets job to 'processing' and re-queues
+// with the same file/params.
+export const retryJob = (jobId) =>
+  apiEnhanced.post(`/jobs/${jobId}/retry`).then((r) => r.data)
+
 // ── Dashboard ────────────────────────────────────────────────────────────────
 
 export const getDashboardStats = (days = 7) =>
   apiEnhanced.get('/dashboard/stats', { params: { days } }).then((r) => r.data)
 
+// UNUSED — not called anywhere in current UI as of audit, confirm before removing
 export const getTrends = (days = 30) =>
   apiEnhanced.get('/dashboard/trends', { params: { days } }).then((r) => r.data)
 

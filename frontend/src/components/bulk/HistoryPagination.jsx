@@ -49,7 +49,7 @@ export default function HistoryPagination({
           <ChevronLeft className="h-4 w-4" />
         </button>
         {getPageWindow(page, pages).map((p, i) =>
-          p === '…' ? (
+          p === '...' ? (
             <span key={`e-${i}`} className="px-2 text-sm text-[var(--foreground)]/40">…</span>
           ) : (
             <button

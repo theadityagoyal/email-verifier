@@ -484,6 +484,7 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365), db: AsyncSessi
         "catch_all": flag_row[2] or 0,
     }
 
+    // NOTE: top_domains result — confirm frontend actually uses this before optimizing away, DashboardPage.jsx currently uses separate listDomains() call instead for leaderboard
     domain_bucket_rows = (
         await db.execute(
             select(Email.domain, bucket_expr.label("bucket"), func.count(Email.id))
@@ -572,6 +573,7 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365), db: AsyncSessi
     )
 
 
+// UNUSED — not called anywhere in current UI as of audit, confirm before removing
 @router.get("/dashboard/trends", response_model=list[VerificationTrend])
 async def get_trends(
     days: int = Query(default=30, ge=1, le=90),

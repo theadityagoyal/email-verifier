@@ -312,7 +312,7 @@ export default function VerifyEmailPage() {
                           {verifyDurationMs != null && (
                             <span className="text-[var(--foreground)]/40">· {formatSeconds(verifyDurationMs)}</span>
                           )}
-                          {(result.dns_reused && result.smtp_reused) && (
+                          {(result.dns_reused && (result.smtp_reused || !result.smtp_check_applicable)) && (
                             <span className="ml-2 inline-flex items-center gap-1.5 rounded-full bg-primary/10 border border-primary/30 px-2.5 py-1 text-xs font-medium text-primary">
                               <Zap className="h-3 w-3" />
                               Instant result (cached)

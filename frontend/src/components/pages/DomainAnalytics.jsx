@@ -49,7 +49,7 @@ export default function DomainAnalytics({
           )}
         </div>
         <button
-          onClick={() => navigate?.('/domains?sort=risk')}
+          onClick={() => navigate?.('/domains?sort_by=risk_percent&sort_order=desc')}
           className="mt-4 w-full text-center text-sm font-medium text-[var(--accent)] hover:underline"
         >
           View all
@@ -133,7 +133,7 @@ export default function DomainAnalytics({
           variant="outline"
           size="sm"
           className="mt-4 w-full"
-          onClick={() => navigate?.('/domains?sort=newest')}
+          onClick={() => navigate?.('/domains?sort_by=first_seen&sort_order=desc')}
         >
           View new domains
         </Button>

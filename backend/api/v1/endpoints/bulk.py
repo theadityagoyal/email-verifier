@@ -201,7 +201,7 @@ async def bulk_upload(
         logger.error(f"Unexpected error in bulk_upload: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-@router.get("/jobs")
+@router.get("/jobs", response_model=list[JobStatusResponse])
 async def list_jobs(db: AsyncSession = Depends(get_db)):
     """
     Return all bulk upload jobs ordered by newest first.
@@ -214,7 +214,17 @@ async def list_jobs(db: AsyncSession = Depends(get_db)):
             )
         ).scalars().all()
 
-        return jobs
+        # Validate each job through JobStatusResponse and compute derived fields
+        # (unique_emails, total_emails_seen, cache_hit_rate) same as get_job_status()
+        validated_jobs = []
+        for job in jobs:
+            response = JobStatusResponse.model_validate(job)
+            response.unique_emails = job.total
+            response.total_emails_seen = job.total + (job.duplicate_emails_removed or 0)
+            response.cache_hit_rate = round((job.reused_results / job.total * 100), 1) if job.total else 0.0
+            validated_jobs.append(response)
+
+        return validated_jobs
     except Exception as e:
         logger.error(f"Error retrieving jobs: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to retrieve jobs: {str(e)}")
@@ -275,6 +285,69 @@ async def cancel_job(job_id: str, db: AsyncSession = Depends(get_db)):
         message="Cancellation requested. The job will stop after in-flight emails finish.",
         job_id=job_id,
         status=job.status.value,
+    )
+
+
+@router.post("/jobs/{job_id}/retry", response_model=BulkUploadResponse)
+async def retry_job(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+):
+    """
+    Retry a failed or pending bulk job.
+
+    Resets the job to 'processing' status and re-queues it with the same
+    file/parameters. Only jobs with status 'failed' or 'pending' can be retried.
+    """
+    job = (await db.execute(select(Job).where(Job.job_id == job_id))).scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    if job.status not in (JobStatus.failed, JobStatus.pending):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job cannot be retried — current status is '{job.status.value}'. Only 'failed' or 'pending' jobs can be retried.",
+        )
+
+    # Store original params before reset
+    original_s3_key = job.s3_key
+    original_force_fresh = job.force_fresh
+    original_email_col = "email"  # default, same as initial upload
+
+    # Reset job state
+    job.status = JobStatus.processing
+    job.current_stage = "processing"
+    job.progress_percent = 0
+    job.estimated_time_remaining = None
+    job.started_at = None
+    job.completed_at = None
+    job.error_message = None
+    job.error_details = None
+    job.cancel_requested = False
+
+    # Reset counters
+    job.processed = 0
+    job.verified = 0
+    job.invalid = 0
+    job.risky = 0
+    job.reused_results = 0
+    job.newly_verified = 0
+    job.dns_checks_saved = 0
+    job.smtp_checks_saved = 0
+    job.duplicate_emails_removed = 0
+
+    await db.commit()
+
+    # Re-queue the background job with original parameters
+    logger.info("job_retry_dispatched", job_id=job_id, force_fresh=original_force_fresh)
+    background_tasks.add_task(process_bulk_job_sync, job_id, original_s3_key, original_email_col, original_force_fresh)
+
+    return BulkUploadResponse(
+        job_id=job_id,
+        message="Job retried",
+        total_emails=job.total,
+        duplicate_emails_removed=0,
     )
 
 

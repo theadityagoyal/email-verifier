@@ -35,9 +35,9 @@ const statusOptions = [
 
 const scoreRangeOptions = [
   { value: '', label: 'All Scores' },
-  { value: '80-100', label: '80+' },
-  { value: '60-79', label: '60 - 79' },
-  { value: '0-59', label: 'Below 60' },
+  { value: '76-100', label: 'Safe (76+)' },
+  { value: '46-75', label: 'Risky (46–75)' },
+  { value: '0-45', label: 'Unsafe (0–45)' },
 ];
 
 const flaggedOptions = [
@@ -55,7 +55,6 @@ const reasonOptions = [
   { value: 'catch_all', label: 'Catch-All Domain' },
   { value: 'disposable', label: 'Disposable Email' },
   { value: 'role_based', label: 'Role-Based Email' },
-  { value: 'mailbox_not_found', label: 'Mailbox Not Found' },
   { value: 'domain_not_found', label: 'Domain Not Found' },
   { value: 'invalid_syntax', label: 'Invalid Syntax' },
   { value: 'mx_missing', label: 'MX Record Missing' },
