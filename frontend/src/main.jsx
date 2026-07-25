@@ -5,7 +5,34 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router-dom'
 import './index.css'
 
+// Load status bucket config from backend at startup (before first render that may call getStatusBucket)
+// FIX (audit #1.1): ensureConfigLoaded() MUST be called at bootstrap so backend config loads.
+// Falls back to embedded defaults on failure (handled inside loadConfig).
+import { ensureConfigLoaded } from '@/utils/statusBucket'
+
 const queryClient = new QueryClient()
+
+// Bootstrap: load backend config before rendering
+async function bootstrap() {
+  await ensureConfigLoaded()
+  createRoot(document.getElementById('root')).render(
+    <React.StrictMode>
+      <BrowserRouter>
+        <QueryClientProvider client={queryClient}>
+          <ErrorBoundary>
+            <App />
+            {/* React Query Devtools - only in development */}
+            {process.env.NODE_ENV === 'development' && (
+              <Suspense fallback={null}>
+                <ReactQueryDevtools initialIsOpen={false} />
+              </Suspense>
+            )}
+          </ErrorBoundary>
+        </QueryClientProvider>
+      </BrowserRouter>
+    </React.StrictMode>
+  )
+}
 
 // Error boundary component for graceful error handling
 class ErrorBoundary extends React.Component {
@@ -64,20 +91,4 @@ const ReactQueryDevtools = process.env.NODE_ENV === 'development'
     })))
   : null
 
-createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <BrowserRouter>
-      <QueryClientProvider client={queryClient}>
-        <ErrorBoundary>
-          <App />
-          {/* React Query Devtools - only in development */}
-          {process.env.NODE_ENV === 'development' && (
-            <Suspense fallback={null}>
-              <ReactQueryDevtools initialIsOpen={false} />
-            </Suspense>
-          )}
-        </ErrorBoundary>
-      </QueryClientProvider>
-    </BrowserRouter>
-  </React.StrictMode>
-)
+bootstrap()

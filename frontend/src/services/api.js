@@ -156,14 +156,15 @@ const normalizeVerifyResponse = (data) => normalizeEmail(data)
 
 // ── Verification ─────────────────────────────────────────────────────────────
 
-export const verifyEmail = (email) =>
-  apiEnhanced.post('/verify-email', { email }).then((r) => normalizeVerifyResponse(r.data))
+export const verifyEmail = (email, forceFresh = false) =>
+  apiEnhanced.post('/verify-email', { email }, { params: { force_fresh: forceFresh } }).then((r) => normalizeVerifyResponse(r.data))
 
-export const bulkUpload = (file) => {
+export const bulkUpload = (file, forceFresh = false) => {
   const form = new FormData()
   form.append('file', file)
   return apiEnhanced.post('/bulk-upload', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    params: { force_fresh: forceFresh },
   }).then((r) => r.data)
 }
 

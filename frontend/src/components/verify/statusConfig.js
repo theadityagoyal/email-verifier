@@ -48,6 +48,8 @@ import {
   Trash2,
   UserCog,
   Target,
+  Shield,
+  BadgeCheck,
 } from 'lucide-react';
 import { SUB_STATUS_LABELS } from '@/utils/verificationReason';
 
@@ -93,6 +95,8 @@ export const CHECK_DEFS = [
   { key: 'domain', title: 'Domain', icon: Globe, field: 'domain_exists' },
   { key: 'mx', title: 'MX Records', icon: Mail, field: 'mx_found' },
   { key: 'smtp', title: 'SMTP', icon: Server, field: 'smtp_valid' },
+  { key: 'spf', title: 'SPF', icon: Shield, field: 'spf_valid' },
+  { key: 'dmarc', title: 'DMARC', icon: BadgeCheck, field: 'dmarc_valid' },
   { key: 'disposable', title: 'Disposable', icon: Trash2, field: 'disposable', inverted: true },
   { key: 'role_based', title: 'Role-based', icon: UserCog, field: 'role_based', inverted: true },
   { key: 'catch_all', title: 'Catch-All', icon: Target, field: 'catch_all', inverted: true },
@@ -119,6 +123,16 @@ const DESCRIPTIONS = {
     issue: 'The mail server did not accept this address during a live check.',
     not_applicable: 'Skipped — no mail server was available to check against.',
     couldnt_verify: 'The mail server temporarily deferred or did not respond — we could not confirm if this address exists.',
+  },
+  spf: {
+    verified: 'The domain has a valid SPF record authorizing its mail servers.',
+    issue: 'No valid SPF record was found — this domain may be vulnerable to spoofing.',
+    not_applicable: 'Skipped because the domain check did not pass.',
+  },
+  dmarc: {
+    verified: 'The domain has a DMARC policy protecting against spoofing.',
+    issue: 'No DMARC record found — this domain is not protected against spoofing.',
+    not_applicable: 'Skipped because the domain check did not pass.',
   },
   disposable: {
     verified: 'Not a temporary or throwaway email provider.',
@@ -186,6 +200,12 @@ export function resolveCheckStatus(checkKey, result) {
           : result.smtp_valid
           ? pass()
           : fail();
+      break;
+    case 'spf':
+      resolved = !result.syntax_valid || !result.domain_exists ? na() : result.spf_valid ? pass() : fail();
+      break;
+    case 'dmarc':
+      resolved = !result.syntax_valid || !result.domain_exists ? na() : result.dmarc_valid ? pass() : fail();
       break;
     case 'disposable':
       resolved = !result.syntax_valid ? na() : result.disposable ? fail() : pass();

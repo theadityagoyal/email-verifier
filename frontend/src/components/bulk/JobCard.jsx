@@ -1,17 +1,19 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Calendar, Clock, RotateCcw, StopCircle, ChevronDown, Copy, Ban,
+  Calendar, Clock, RotateCcw, StopCircle, ChevronDown, Copy, Ban, XCircle,
+  AlertCircle, TrendingUp,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Button from '@/components/ui/Button';
 import BulkStatusBadge, { getBulkStatusMeta } from './BulkStatusBadge';
 import JobActionsMenu from './JobActionsMenu';
 import JobDownloadMenu from './JobDownloadMenu';
+import ReuseMetricsPanel from './ReuseMetricsPanel';
 import { calculateJobStats, isJobActive } from '@/utils/jobUtils';
 import { formatDateTimeIST, formatDurationShort } from '@/utils/dateUtils';
 import { getFileExt, getFileExtBadgeClass } from '@/utils/fileHelpers';
 
-function StatTile({ label, value, colorClass }) {
+export function StatTile({ label, value, colorClass }) {
   return (
     <div className="text-center">
       <p className={`text-lg font-bold tabular-nums ${colorClass}`}>{value.toLocaleString()}</p>
@@ -93,6 +95,17 @@ export default function JobCard({
             <span className="flex items-center gap-1">
               <Clock className="h-3 w-3" aria-hidden="true" /> {duration}
             </span>
+            {active && job.current_stage && (
+              <span className="flex items-center gap-1 text-[var(--primary)]">
+                <TrendingUp className="h-3 w-3" aria-hidden="true" /> {job.current_stage}
+              </span>
+            )}
+            {active && job.estimated_time_remaining && job.estimated_time_remaining > 0 && (
+              <span className="flex items-center gap-1 text-success">
+                <AlertCircle className="h-3 w-3" aria-hidden="true" />
+                ETA: {formatDurationShort(null, null, job.estimated_time_remaining)}
+              </span>
+            )}
           </div>
 
           {/* Requirement: progress must be visible on the COLLAPSED card, not
@@ -205,14 +218,32 @@ export default function JobCard({
 
             {job.status === 'cancelled' && (
               <div className="px-4 pb-4">
-                <div className="flex items-center gap-2 rounded-lg bg-warning/10 border border-warning/20 px-3 py-2.5 text-sm text-warning">
+                <div className="flex items-start gap-2 rounded-lg bg-warning/10 border border-warning/20 px-3 py-2.5 text-sm text-warning">
                   <Ban className="h-4 w-4 shrink-0" />
-                  Cancelled after processing {processedCount.toLocaleString()} of {totalCount.toLocaleString()} emails.
-                  Results already processed are preserved and available above.
+                  <div>
+                    <p className="font-medium">Upload cancelled</p>
+                    <p className="text-warning/80 mt-0.5">Cancelled after processing {processedCount.toLocaleString()} of {totalCount.toLocaleString()} emails.</p>
+                    <p className="text-warning/80 mt-0.5">Results already processed are preserved and available above.</p>
+                  </div>
                 </div>
               </div>
             )}
-            
+
+            {job.status === 'failed' && job.error_message && (
+              <div className="px-4 pb-4">
+                <div className="flex items-start gap-2 rounded-lg bg-error/10 border border-error/20 px-3 py-2.5 text-sm text-error">
+                  <XCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-medium">Upload failed</p>
+                    <p className="text-error/80 mt-0.5">{job.error_message}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Smart verification reuse metrics — only shown for completed jobs */}
+            <ReuseMetricsPanel job={job} />
+
           </motion.div>
         )}
       </AnimatePresence>

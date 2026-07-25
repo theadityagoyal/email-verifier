@@ -40,7 +40,7 @@ import {
   Briefcase,
   Coins,
 } from 'lucide-react';
-import { formatDateTimeIST, formatAvgTime, relativeTime } from '@/utils/dateUtils';
+import { formatDateTimeIST, formatAvgTime, relativeTime, formatDurationShort } from '@/utils/dateUtils';
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -371,6 +371,7 @@ function TrustScoreCard({ trustScore, trustScoreColor, trustScoreLabel, badgeCla
 // there's no real backend health metric wired up for it, and inventing one
 // would be exactly the kind of fake-data UI this project's audit already
 // stripped out elsewhere (see memory: "Honest UI over placeholder UI").
+
 function ActiveJobSection({ activeJob }) {
   return (
     <motion.div variants={itemVariants} className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-stretch">
@@ -382,6 +383,11 @@ function ActiveJobSection({ activeJob }) {
         {activeJob ? (
           <div className="space-y-2">
             <p className="text-sm font-medium text-[var(--foreground)] truncate">{activeJob.file_name}</p>
+            {activeJob.current_stage && (
+              <p className="text-xs text-[var(--primary)] flex items-center gap-1">
+                <TrendingUp className="h-3 w-3" /> {activeJob.current_stage}
+              </p>
+            )}
             <div className="w-full bg-[var(--muted)] rounded-full h-2">
               <div
                 className="h-2 bg-[var(--primary)] rounded-full transition-all duration-500"
@@ -391,6 +397,12 @@ function ActiveJobSection({ activeJob }) {
             <p className="text-xs text-[var(--foreground)]/50">
               {activeJob.progress_percent}% · {activeJob.processed}/{activeJob.total}
             </p>
+            {activeJob.estimated_time_remaining && activeJob.estimated_time_remaining > 0 && (
+              <p className="text-xs text-success flex items-center gap-1">
+                <AlertCircle className="h-3 w-3" />
+                ETA: {formatDurationShort(null, null, activeJob.estimated_time_remaining)}
+              </p>
+            )}
           </div>
         ) : (
           <>

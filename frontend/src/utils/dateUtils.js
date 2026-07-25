@@ -145,8 +145,21 @@ export function istMonthKey(date) {
  * If `endDateString` is omitted/null, measures up to "now" — safe to call
  * on every render for an in-progress job since it naturally ticks forward
  * on each poll-triggered re-render, no separate timer needed.
+ *
+ * If `estimatedSeconds` is provided (integer seconds), returns a formatted
+ * ETA string like "~2m 30s" instead of computing a duration.
  */
-export function formatDurationShort(startDateString, endDateString) {
+export function formatDurationShort(startDateString, endDateString, estimatedSeconds) {
+  if (estimatedSeconds !== undefined && estimatedSeconds !== null) {
+    let secs = Math.max(0, Math.round(estimatedSeconds));
+    if (secs < 60) return `~${secs}s`;
+    const totalMin = Math.floor(secs / 60);
+    const sec = secs % 60;
+    if (totalMin < 60) return `~${totalMin}m ${sec}s`;
+    const hr = Math.floor(totalMin / 60);
+    const remMin = totalMin % 60;
+    return `~${hr}h ${remMin}m`;
+  }
   if (!startDateString) return '—';
   const start = parseUTC(startDateString);
   const end = endDateString ? parseUTC(endDateString) : new Date();

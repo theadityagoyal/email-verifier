@@ -9,6 +9,7 @@ import { reportError } from '@/utils/errorReporter';
 import { istDateKey, istMonthKey } from '@/utils/dateUtils';
 import { previewUploadFile } from '@/utils/csvPreview';
 import { getStatusOrder } from '@/utils/jobUtils';
+import { useIsTabVisible } from '@/hooks/useIsTabVisible';
 
 import UploadZone from '@/components/bulk/UploadZone';
 import TopStatsRow from '@/components/bulk/TopStatsRow';
@@ -69,11 +70,15 @@ const isValidStatus = (status) => {
 export default function BulkUploadPage() {
   const [dragActive, setDragActive] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
+  const [forceFresh, setForceFresh] = useState(false);
   const [filePreview, setFilePreview] = useState(null);
   const [jobs, setJobs] = useState([]);
   const [isLoadingJobs, setIsLoadingJobs] = useState(true);
   const [expandedJob, setExpandedJob] = useState(null);
   const [polling, setPolling] = useState({});
+
+  // Tab visibility optimization — pause polling when tab is hidden
+  const isTabVisible = useIsTabVisible();
 
   // History toolbar state — additive, doesn't change any existing behaviour.
   const [dateFilter, setDateFilter] = useState('all');
@@ -150,7 +155,7 @@ export default function BulkUploadPage() {
   }, [selectedFile]);
 
   const uploadMutation = useMutation({
-    mutationFn: bulkUpload,
+    mutationFn: ({ file, forceFresh }) => bulkUpload(file, forceFresh),
     onSuccess: (data) => {
       const newJob = {
         job_id: data.job_id,
@@ -164,6 +169,7 @@ export default function BulkUploadPage() {
         unsafe: 0,
         progress_percent: 0,
         cancel_requested: false,
+        duplicate_emails_removed: data.duplicate_emails_removed ?? 0,
       };
       setSelectedFile(null);
       setJobs(prev => [newJob, ...prev]);
@@ -262,6 +268,7 @@ export default function BulkUploadPage() {
   }, [queryClient]);
 
   useEffect(() => {
+    if (!isTabVisible) return;
     const interval = setInterval(() => {
       jobsRef.current.forEach((job) => {
         if (pollingRef.current[job.job_id] && (job.status === 'pending' || job.status === 'processing')) {
@@ -270,7 +277,7 @@ export default function BulkUploadPage() {
       });
     }, 2000);
     return () => clearInterval(interval);
-  }, [pollJob]);
+  }, [pollJob, isTabVisible]);
 
   const validateAndSetFile = useCallback((file) => {
     if (!file) return;
@@ -305,8 +312,8 @@ export default function BulkUploadPage() {
   }, [validateAndSetFile]);
 
   const handleUpload = useCallback(() => {
-    if (selectedFile) uploadMutation.mutate(selectedFile);
-  }, [selectedFile, uploadMutation]);
+    if (selectedFile) uploadMutation.mutate({ file: selectedFile, forceFresh });
+  }, [selectedFile, forceFresh, uploadMutation]);
 
   const handleRemoveFile = useCallback(() => {
     setSelectedFile(null);
@@ -451,6 +458,8 @@ export default function BulkUploadPage() {
           onUpload={handleUpload}
           uploadPending={uploadMutation.isPending}
           maxFileSizeMB={50}
+          forceFresh={forceFresh}
+          onForceFreshChange={setForceFresh}
         />
       </motion.div>
 

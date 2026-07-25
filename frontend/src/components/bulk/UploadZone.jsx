@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from 'framer-motion';
-import { Upload, FolderOpen, FileText, X, Check, Hash, Mail as MailIcon, Copy as DuplicateIcon, Clock3 } from 'lucide-react';
+import { Upload, FolderOpen, FileText, X, Check, Hash, Mail as MailIcon, Copy as DuplicateIcon, Clock3, Zap } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import { getFileExt, getFileExtBadgeClass, formatFileSize } from '@/utils/fileHelpers';
 
@@ -52,6 +52,8 @@ export default function UploadZone({
   onUpload,
   uploadPending,
   maxFileSizeMB,
+  forceFresh = false,
+  onForceFreshChange,
 }) {
   const hasFile = !!selectedFile;
   const ext = hasFile ? getFileExt(selectedFile.name) : null;
@@ -144,6 +146,19 @@ export default function UploadZone({
                 <PreviewStat icon={MailIcon} label="Email Column" loading={loading} value={formatPreviewValue(preview, 'emailColumn')} />
                 <PreviewStat icon={DuplicateIcon} label="Duplicates" loading={loading} value={formatPreviewValue(preview, 'duplicates')} />
                 <PreviewStat icon={Clock3} label="Est. Time" loading={loading} value={formatPreviewValue(preview, 'estimate')} />
+              </div>
+
+              <div className="flex items-center gap-3 mb-4">
+                <label className="inline-flex items-center gap-2 text-sm text-[var(--foreground)]/60 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={forceFresh}
+                    onChange={onForceFreshChange}
+                    disabled={uploadPending}
+                    className="w-4 h-4 rounded border-[var(--muted)] text-[var(--primary)] focus:ring-[var(--primary)] focus:ring-2"
+                  />
+                  <span>Force fresh verification for all emails (skip cache)</span>
+                </label>
               </div>
 
               <div className="flex items-center gap-2">

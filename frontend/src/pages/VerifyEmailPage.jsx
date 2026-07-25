@@ -3,9 +3,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   Mail, Search, Loader2, X as XIcon, Sparkles, CheckCircle, Globe, ExternalLink,
+  Zap,
 } from 'lucide-react';
 import { verifyEmail, listEmails, getDashboardStats } from '@/services/api';
 import { reportError } from '@/utils/errorReporter';
+import { useIsTabVisible } from '@/hooks/useIsTabVisible';
 
 import { CHECK_DEFS, resolveAllChecks, resolveRecommendation, buildScoreReason } from '@/components/verify/statusConfig';
 import CheckCard from '@/components/verify/CheckCard';
@@ -35,6 +37,7 @@ function formatSeconds(ms) {
 
 export default function VerifyEmailPage() {
   const [email, setEmail] = useState('');
+  const [forceFresh, setForceFresh] = useState(false);
   const [phase, setPhase] = useState('idle'); // idle | verifying | complete
   const [result, setResult] = useState(null);
   const [checkPhases, setCheckPhases] = useState(() => Object.fromEntries(CHECK_DEFS.map((c) => [c.key, 'idle'])));
@@ -45,6 +48,7 @@ export default function VerifyEmailPage() {
   const timeoutsRef = useRef([]);
   const startTimeRef = useRef(null);
   const inputRef = useRef(null);
+  const isTabVisible = useIsTabVisible();
 
   const clearAllTimeouts = () => {
     timeoutsRef.current.forEach((id) => clearTimeout(id));
@@ -54,7 +58,7 @@ export default function VerifyEmailPage() {
   useEffect(() => () => clearAllTimeouts(), []);
 
   const verifyMutation = useMutation({
-    mutationFn: verifyEmail,
+    mutationFn: ({ email, forceFresh }) => verifyEmail(email, forceFresh),
     onSuccess: (data) => {
       runRevealSequence(data);
     },
@@ -120,13 +124,13 @@ export default function VerifyEmailPage() {
   const { data: recentData } = useQuery({
     queryKey: ['recent-verifications'],
     queryFn: () => listEmails({ page: 1, size: 5, order: 'desc' }),
-    refetchInterval: 15000,
+    refetchInterval: isTabVisible ? 15000 : false,
   });
 
   const { data: statsData } = useQuery({
     queryKey: ['verify-page-stats'],
     queryFn: () => getDashboardStats(1),
-    refetchInterval: 30000,
+    refetchInterval: isTabVisible ? 30000 : false,
   });
 
   // Covers BOTH the real network wait (verifyMutation.isPending) AND the
@@ -140,7 +144,7 @@ export default function VerifyEmailPage() {
     e.preventDefault();
     if (!email.trim() || isBusy) return;
     startTimeRef.current = performance.now();
-    verifyMutation.mutate(email.trim().toLowerCase());
+    verifyMutation.mutate({ email: email.trim().toLowerCase(), forceFresh });
   };
 
   // FIX (Issue 1): the input never unmounts anymore, so this is no longer
@@ -202,7 +206,7 @@ export default function VerifyEmailPage() {
               the same card. User can replace the email and hit Verify again
               without ever losing the search bar or scrolling to a button. */}
           <motion.div layout className="card overflow-hidden">
-            <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3">
+            <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3 items-end">
               <div className="relative flex-1">
                 <Mail className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-[var(--foreground)]/40" aria-hidden="true" />
                 <label htmlFor="verify-email-input" className="sr-only">Email address to verify</label>
@@ -229,18 +233,31 @@ export default function VerifyEmailPage() {
                   </button>
                 )}
               </div>
-              <button
-                type="submit"
-                disabled={!email.trim() || isBusy}
-                className="btn-primary sm:w-auto whitespace-nowrap flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isBusy ? (
-                  <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
-                ) : (
-                  <Search className="h-5 w-5" aria-hidden="true" />
-                )}
-                {isBusy ? 'Verifying…' : 'Verify Email'}
-              </button>
+              <div className="flex items-center gap-3 sm:w-auto">
+                <label className="inline-flex items-center gap-2 text-sm text-[var(--foreground)]/60 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={forceFresh}
+                    onChange={(e) => setForceFresh(e.target.checked)}
+                    disabled={isBusy}
+                    className="w-4 h-4 rounded border-[var(--muted)] text-[var(--primary)] focus:ring-[var(--primary)] focus:ring-2"
+                    aria-describedby="force-fresh-hint"
+                  />
+                  <span>Force fresh check (ignore cache)</span>
+                </label>
+                <button
+                  type="submit"
+                  disabled={!email.trim() || isBusy}
+                  className="btn-primary sm:w-auto whitespace-nowrap flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isBusy ? (
+                    <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Search className="h-5 w-5" aria-hidden="true" />
+                  )}
+                  {isBusy ? 'Verifying…' : 'Verify Email'}
+                </button>
+              </div>
             </form>
 
             {!result && (
@@ -294,6 +311,12 @@ export default function VerifyEmailPage() {
                           Verification Completed
                           {verifyDurationMs != null && (
                             <span className="text-[var(--foreground)]/40">· {formatSeconds(verifyDurationMs)}</span>
+                          )}
+                          {(result.dns_reused && result.smtp_reused) && (
+                            <span className="ml-2 inline-flex items-center gap-1.5 rounded-full bg-primary/10 border border-primary/30 px-2.5 py-1 text-xs font-medium text-primary">
+                              <Zap className="h-3 w-3" />
+                              Instant result (cached)
+                            </span>
                           )}
                         </div>
                       )}
