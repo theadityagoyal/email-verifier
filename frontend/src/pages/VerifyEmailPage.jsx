@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   Mail, Search, Loader2, X as XIcon, Sparkles, CheckCircle, Globe, ExternalLink,
-  Zap, Clock,
+  Zap, Clock, AlertTriangle,
 } from 'lucide-react';
 import { verifyEmail, listEmails, getDashboardStats } from '@/services/api';
 import { reportError } from '@/utils/errorReporter';
@@ -64,21 +64,30 @@ export default function VerifyEmailPage() {
     },
     onError: (error) => {
       reportError('VerifyEmailPage.verify', error);
-      // Even on error, run the same sequence with a synthetic invalid
-      // result so the user gets the same progressive experience instead
-      // of an abrupt error dump.
+      // IMPORTANT: this is a REQUEST failure (network error, timeout,
+      // backend 500, etc.) — it tells us nothing about whether the email
+      // itself is valid. Previously this built a synthetic result with
+      // syntax_valid: false (and every other field false/0), which the UI
+      // rendered exactly like a real "invalid syntax" finding — i.e. a
+      // perfectly valid email would come back as "Not Recommended", score
+      // 0, "Syntax: Issue Found", with every other check falsely marked
+      // "Not Applicable" as if it cascaded from a real syntax failure.
+      // That's misleading: we never actually checked this email at all.
+      // `request_failed: true` lets the UI show a distinct "couldn't
+      // complete verification" state instead of fabricating check results.
       runRevealSequence({
         email,
         domain: null,
-        status: 'invalid',
-        syntax_valid: false,
-        domain_exists: false,
-        mx_found: false,
-        smtp_valid: false,
-        disposable: false,
-        role_based: false,
-        catch_all: false,
-        score: 0,
+        status: 'error',
+        request_failed: true,
+        syntax_valid: null,
+        domain_exists: null,
+        mx_found: null,
+        smtp_valid: null,
+        disposable: null,
+        role_based: null,
+        catch_all: null,
+        score: null,
         username_quality: null,
         username_flags: [],
         verified_at: null,
@@ -305,7 +314,7 @@ export default function VerifyEmailPage() {
                           Checking {Object.values(checkPhases).filter((p) => p !== 'idle').length} of {CHECK_DEFS.length}
                         </div>
                       )}
-                      {phase === 'complete' && (
+                      {phase === 'complete' && !result.request_failed && (
                         <div className="flex items-center gap-2 text-sm text-success shrink-0">
                           <CheckCircle className="h-4 w-4" />
                           Verification Completed
@@ -320,7 +329,31 @@ export default function VerifyEmailPage() {
                           )}
                         </div>
                       )}
+                      {phase === 'complete' && result.request_failed && (
+                        <div className="flex items-center gap-2 text-sm text-warning shrink-0">
+                          <AlertTriangle className="h-4 w-4" />
+                          Verification Failed
+                        </div>
+                      )}
                     </div>
+
+                    {/* Request-failed state: we could NOT reach/complete the
+                        verification (network error, timeout, backend error).
+                        This is NOT a finding about the email — do not render
+                        the score/recommendation/check grid, since we have no
+                        real check results to show. */}
+                    {phase === 'complete' && result.request_failed && (
+                      <div className="rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-[var(--foreground)] flex items-start gap-2.5">
+                        <AlertTriangle className="h-4 w-4 mt-0.5 text-warning shrink-0" />
+                        <div>
+                          <p className="font-medium">We couldn't complete this verification.</p>
+                          <p className="text-[var(--foreground)]/60 mt-0.5">
+                            {result.error || 'Something went wrong while checking this email.'} This does not
+                            mean the email is invalid — please try again{result.error ? ', or with "Force fresh check" enabled' : ''}.
+                          </p>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Progress bar during verifying */}
                     {phase === 'verifying' && (
@@ -337,8 +370,10 @@ export default function VerifyEmailPage() {
                     )}
 
                     {/* Recommendation banner + score — reveal instantly once
-                        the last check resolves (see runRevealSequence). */}
-                    {detailsRevealed && recommendation && (
+                        the last check resolves (see runRevealSequence).
+                        Skipped entirely on a request failure: there's no
+                        real score/recommendation to show. */}
+                    {detailsRevealed && recommendation && !result.request_failed && (
                       <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-4 items-center">
                         <RecommendationBanner recommendation={recommendation} reason={scoreReason} />
                         <div className="flex justify-center sm:justify-end">
@@ -348,6 +383,7 @@ export default function VerifyEmailPage() {
                     )}
 
                     {/* Horizontal checks row — always visible, animates left to right */}
+                    {!result.request_failed && (
                     <div className="flex flex-wrap gap-2.5">
                       {CHECK_DEFS.map((def) => {
                         const phaseForCheck = checkPhases[def.key];
@@ -363,6 +399,7 @@ export default function VerifyEmailPage() {
                         );
                       })}
                     </div>
+                    )}
                   </div>
                 </motion.div>
               )}
@@ -373,7 +410,7 @@ export default function VerifyEmailPage() {
               FIX (Issue 2): Technical Details accordion is completely gone —
               no import, no render, no raw-fields mapping. */}
           <AnimatePresence>
-            {detailsRevealed && result && (
+            {detailsRevealed && result && !result.request_failed && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
