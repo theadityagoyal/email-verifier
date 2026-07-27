@@ -164,6 +164,12 @@ export function resolveCheckStatus(checkKey, result) {
     return null;
   }
 
+  // If the entire verification pipeline errored (backend exception), show
+  // "Couldn't Verify" for all checks instead of fabricating pass/fail results.
+  // This is distinct from a real "invalid" finding — we couldn't complete the
+  // checks at all due to an internal error.
+  const isVerificationError = result.status === 'error' || !!result.verification_error;
+
   const na = () => ({ ...STATUS.NOT_APPLICABLE, description: DESCRIPTIONS[checkKey]?.not_applicable });
   const pass = () => ({ ...STATUS.VERIFIED, description: DESCRIPTIONS[checkKey]?.verified });
   const fail = () => ({ ...STATUS.ISSUE, description: DESCRIPTIONS[checkKey]?.issue });
@@ -186,16 +192,25 @@ export function resolveCheckStatus(checkKey, result) {
 
   switch (checkKey) {
     case 'syntax':
-      resolved = result.syntax_valid ? pass() : fail();
+      // For syntax, if verification errored we still have a real syntax_valid bool
+      // (backend preserves it), so show that. Otherwise show couldn't verify.
+      if (isVerificationError) {
+        resolved = couldntVerify();
+      } else {
+        resolved = result.syntax_valid ? pass() : fail();
+      }
       break;
     case 'domain':
-      resolved = !result.syntax_valid ? na() : result.domain_exists ? pass() : fail();
+      if (isVerificationError) resolved = couldntVerify();
+      else resolved = !result.syntax_valid ? na() : result.domain_exists ? pass() : fail();
       break;
     case 'mx':
-      resolved = !result.syntax_valid || !result.domain_exists ? na() : result.mx_found ? pass() : fail();
+      if (isVerificationError) resolved = couldntVerify();
+      else resolved = !result.syntax_valid || !result.domain_exists ? na() : result.mx_found ? pass() : fail();
       break;
     case 'smtp':
-      resolved =
+      if (isVerificationError) resolved = couldntVerify();
+      else resolved =
         !result.syntax_valid || !result.mx_found || result.disposable || result.sub_status === 'smtp_skipped_trusted'
           ? na()
           : isCouldntVerify
@@ -205,19 +220,24 @@ export function resolveCheckStatus(checkKey, result) {
           : fail();
       break;
     case 'spf':
-      resolved = !result.syntax_valid || !result.domain_exists ? na() : result.spf_valid ? pass() : fail();
+      if (isVerificationError) resolved = couldntVerify();
+      else resolved = !result.syntax_valid || !result.domain_exists ? na() : result.spf_valid ? pass() : fail();
       break;
     case 'dmarc':
-      resolved = !result.syntax_valid || !result.domain_exists ? na() : result.dmarc_valid ? pass() : fail();
+      if (isVerificationError) resolved = couldntVerify();
+      else resolved = !result.syntax_valid || !result.domain_exists ? na() : result.dmarc_valid ? pass() : fail();
       break;
     case 'disposable':
-      resolved = !result.syntax_valid ? na() : result.disposable ? fail() : pass();
+      if (isVerificationError) resolved = couldntVerify();
+      else resolved = !result.syntax_valid ? na() : result.disposable ? fail() : pass();
       break;
     case 'role_based':
-      resolved = !result.syntax_valid ? na() : result.role_based ? fail() : pass();
+      if (isVerificationError) resolved = couldntVerify();
+      else resolved = !result.syntax_valid ? na() : result.role_based ? fail() : pass();
       break;
     case 'catch_all':
-      resolved =
+      if (isVerificationError) resolved = couldntVerify();
+      else resolved =
         !result.syntax_valid || !result.mx_found || result.disposable
           ? na()
           : result.catch_all

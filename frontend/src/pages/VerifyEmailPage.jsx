@@ -178,6 +178,9 @@ export default function VerifyEmailPage() {
   const recommendation = result ? resolveRecommendation(result.score) : null;
   const scoreReason = resolvedChecks.length ? buildScoreReason(resolvedChecks) : null;
 
+  // Check if verification errored (distinct from request failure)
+  const isVerificationError = result && (result.status === 'error' || !!result.verification_error);
+
   const avgSeconds = statsData?.avg_processing_time_ms
     ? (statsData.avg_processing_time_ms / 1000).toFixed(1)
     : null;
@@ -335,6 +338,12 @@ export default function VerifyEmailPage() {
                           Verification Failed
                         </div>
                       )}
+                      {phase === 'complete' && (result.status === 'error' || result.verification_error) && (
+                        <div className="flex items-center gap-2 text-sm text-warning shrink-0">
+                          <AlertTriangle className="h-4 w-4" />
+                          Verification Error
+                        </div>
+                      )}
                     </div>
 
                     {/* Request-failed state: we could NOT reach/complete the
@@ -350,6 +359,25 @@ export default function VerifyEmailPage() {
                           <p className="text-[var(--foreground)]/60 mt-0.5">
                             {result.error || 'Something went wrong while checking this email.'} This does not
                             mean the email is invalid — please try again{result.error ? ', or with "Force fresh check" enabled' : ''}.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Verification error state: backend completed but hit an
+                        internal exception (e.g., SMTP timeout, DNS failure,
+                        scoring bug, DB error). The email itself may be perfectly
+                        valid — we just couldn't complete the checks. Show a
+                        distinct banner and DO NOT render the score/check grid
+                        with fabricated "fail" results. */}
+                    {phase === 'complete' && (result.status === 'error' || result.verification_error) && (
+                      <div className="rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-[var(--foreground)] flex items-start gap-2.5">
+                        <AlertTriangle className="h-4 w-4 mt-0.5 text-warning shrink-0" />
+                        <div>
+                          <p className="font-medium">We couldn't complete this verification.</p>
+                          <p className="text-[var(--foreground)]/60 mt-0.5">
+                            {result.verification_error || 'An internal verification error occurred.'} This does not
+                            mean the email is invalid — please try again, or with "Force fresh check" enabled.
                           </p>
                         </div>
                       </div>
@@ -371,9 +399,9 @@ export default function VerifyEmailPage() {
 
                     {/* Recommendation banner + score — reveal instantly once
                         the last check resolves (see runRevealSequence).
-                        Skipped entirely on a request failure: there's no
-                        real score/recommendation to show. */}
-                    {detailsRevealed && recommendation && !result.request_failed && (
+                        Skipped entirely on a request failure or verification error:
+                        there's no real score/recommendation to show. */}
+                    {detailsRevealed && recommendation && !result.request_failed && !isVerificationError && (
                       <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-4 items-center">
                         <RecommendationBanner recommendation={recommendation} reason={scoreReason} />
                         <div className="flex justify-center sm:justify-end">
@@ -382,8 +410,9 @@ export default function VerifyEmailPage() {
                       </div>
                     )}
 
-                    {/* Horizontal checks row — always visible, animates left to right */}
-                    {!result.request_failed && (
+                    {/* Horizontal checks row — always visible, animates left to right.
+                        Skipped entirely on request failure or verification error. */}
+                    {!result.request_failed && !isVerificationError && (
                     <div className="flex flex-wrap gap-2.5">
                       {CHECK_DEFS.map((def) => {
                         const phaseForCheck = checkPhases[def.key];
@@ -410,7 +439,7 @@ export default function VerifyEmailPage() {
               FIX (Issue 2): Technical Details accordion is completely gone —
               no import, no render, no raw-fields mapping. */}
           <AnimatePresence>
-            {detailsRevealed && result && !result.request_failed && (
+            {detailsRevealed && result && !result.request_failed && !isVerificationError && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}

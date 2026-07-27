@@ -23,16 +23,19 @@ class EmailVerifyResponse(BaseModel):
     domain: Optional[str]
     status: EmailStatus
     syntax_valid: bool
-    domain_exists: bool
-    mx_found: bool
-    smtp_valid: bool
-    disposable: bool
-    role_based: bool
-    catch_all: bool
-    score: int
+    domain_exists: Optional[bool] = None      # None = unknown (error), bool = checked
+    mx_found: Optional[bool] = None           # None = unknown (error), bool = checked
+    smtp_valid: Optional[bool] = None         # None = unknown (error), bool = checked
+    disposable: Optional[bool] = None         # None = unknown (error), bool = checked
+    role_based: Optional[bool] = None         # None = unknown (error), bool = checked
+    catch_all: Optional[bool] = None          # None = unknown (error), bool = checked
+    score: Optional[int] = None               # None = unknown (error), int = computed
     username_quality: Optional[str] = None
     username_flags: Optional[list[str]] = None
     verified_at: Optional[datetime]
+
+    # Verification pipeline error (distinct from "invalid" = syntax/format wrong)
+    verification_error: Optional[str] = None
 
     # New: MX records from real DNS lookup (None when skipped/reused)
     mx_records: Optional[List[str]] = None

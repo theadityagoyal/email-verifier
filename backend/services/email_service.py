@@ -72,7 +72,18 @@ async def _persist_result(response: EmailVerifyResponse, job_id: Optional[str], 
     external API verify, bulk worker) with three different error-handling
     conventions. A hard failure here must never be allowed to make an
     otherwise-successful verification look like it failed to the caller.
+
+    IMPORTANT: Do NOT persist error responses (status=EmailStatus.error) as
+    they would corrupt the cached valid/invalid results used for TTL-based
+    reuse. An errored verification is NOT a valid result and should not
+    overwrite or create a cached record that future lookups would trust.
     """
+    from models.models import EmailStatus
+    # Skip persistence for error responses to avoid corrupting the reuse cache
+    if response.status == EmailStatus.error:
+        logger.debug("persist_skipped_error_response", email=response.email)
+        return
+
     async with AsyncSessionLocal() as session:
         try:
             await async_upsert_email(session, response, job_id, now)
@@ -171,6 +182,9 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
         smtp_check_applicable) used by callers for job-level metrics.
     """
     logger.info("verify_start", email=email, force_fresh=force_fresh)
+
+    # Track whether syntax validation succeeded, for error response
+    syntactic_valid: Optional[bool] = None
 
     try:
         # 1. Syntax validation (always fresh, no I/O, no lock needed)
@@ -440,7 +454,14 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
     except Exception as e:
         logger.error(f"Email verification failed for {email}: {str(e)}", exc_info=True)
         # Return a safe fallback response indicating verification error
-        response = _build_error_response(email=email)
+        # Pass syntactic_valid if it was computed before the exception
+        # Use a concise, user-safe error summary (no stack traces)
+        error_summary = f"Verification error: {type(e).__name__}"
+        response = _build_error_response(
+            email=email,
+            syntax_valid=syntactic_valid,
+            error_msg=error_summary,
+        )
         await _persist_result(response, job_id, utc_now_naive())
         return response
 
@@ -559,21 +580,29 @@ def _build_invalid_response(
 
 def _build_error_response(
     email: str,
+    syntax_valid: bool | None = None,
+    error_msg: str | None = None,
 ) -> EmailVerifyResponse:
-    """Build a response for verification errors (exceptions during processing)."""
+    """Build a response for verification errors (exceptions during processing).
+
+    Args:
+        email: The email address being verified
+        syntax_valid: Preserve syntax check result if computed before error (None = not computed)
+        error_msg: Human-readable error message from the exception (no stack traces)
+    """
     from models.models import EmailStatus
     return EmailVerifyResponse(
         email=email,
         domain=None,
-        status=EmailStatus.invalid,  # or could use a special error status if available
-        syntax_valid=False,
-        domain_exists=False,
-        mx_found=False,
-        smtp_valid=False,
-        disposable=False,
-        role_based=False,
-        catch_all=False,
-        score=0,
+        status=EmailStatus.error,
+        syntax_valid=syntax_valid if syntax_valid is not None else False,
+        domain_exists=None,
+        mx_found=None,
+        smtp_valid=None,
+        disposable=None,
+        role_based=None,
+        catch_all=None,
+        score=None,
         username_quality=None,
         username_flags=None,
         verified_at=None,
@@ -592,4 +621,5 @@ def _build_error_response(
         reason_code=None,
         spf_valid=None,
         dmarc_valid=None,
+        verification_error=error_msg,
     )

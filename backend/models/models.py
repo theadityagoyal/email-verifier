@@ -23,6 +23,7 @@ class EmailStatus(str, enum.Enum):
     unconfirmed = "unconfirmed"
     uncertain = "uncertain"
     undeliverable = "undeliverable"
+    error = "error"
 
 
 class JobStatus(str, enum.Enum):
