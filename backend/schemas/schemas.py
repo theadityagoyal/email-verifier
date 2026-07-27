@@ -59,6 +59,9 @@ class EmailVerifyResponse(BaseModel):
     spf_valid: Optional[bool] = None         # SPF record exists
     dmarc_valid: Optional[bool] = None       # DMARC record exists
 
+    # ── Task 1: Probe mismatch flag (informational, no DB column) ──
+    probe_mismatch: Optional[bool] = None    # True when EVASION_SUSPECTED detected
+
     model_config = {"from_attributes": True}
 
 

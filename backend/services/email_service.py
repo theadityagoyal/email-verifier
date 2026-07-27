@@ -8,7 +8,7 @@ from validators.syntax_validator import validate_syntax, is_role_based
 from validators.dns_validator import async_check_domain_exists, async_get_mx_records, async_get_spf_record, async_get_dmarc_record
 from validators.smtp_validator import async_verify_smtp, SmtpResult, SmtpOutcome
 from validators.disposable_checker import is_disposable
-from validators.score_calculator import calculate_score, determine_status, determine_sub_status, determine_confidence, determine_reason_code, TRUSTED_DOMAINS
+from validators.score_calculator import calculate_score, determine_status, determine_sub_status, determine_confidence, determine_reason_code, TRUSTED_DOMAINS, HIGH_RISK_SMTP_PROVIDERS
 from schemas.schemas import EmailVerifyResponse
 from models.database import AsyncSessionLocal
 from models.models import Email as EmailModel, Domain as DomainModel, SmtpRetryQueue
@@ -284,6 +284,7 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
 
                 smtp_outcome = smtp_result.outcome.value
                 smtp_response_code = smtp_result.smtp_code
+                probe_mismatch = smtp_result.probe_mismatch
                 smtp_checked_at = now
 
                 # Phase 3: Handle ambiguous outcomes for trusted domains
@@ -302,7 +303,7 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
                     catch_all = smtp_result.catch_all_outcome
 
                 logger.info("smtp_checked", email=email, smtp_valid=smtp_valid, catch_all=catch_all,
-                            smtp_outcome=smtp_outcome, smtp_code=smtp_response_code, ambiguous=smtp_ambiguous_trusted)
+                            smtp_outcome=smtp_outcome, smtp_code=smtp_response_code, ambiguous=smtp_ambiguous_trusted, probe_mismatch=probe_mismatch)
 
             # Phase 4: Enqueue for delayed retry if greylisted (and not a trusted-domain ambiguous)
             greylist_enqueued = False
@@ -332,6 +333,7 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
                 dmarc_valid=dmarc_valid,
                 smtp_outcome=smtp_outcome,
                 role_based=role,
+                probe_mismatch=probe_mismatch,
             )
 
             status = determine_status(
@@ -343,6 +345,7 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
                 catch_all=catch_all,
                 score=score,
                 domain=domain or "",
+                probe_mismatch=probe_mismatch,
             )
 
             # Phase 2: Sub-status, confidence, reason code
@@ -357,6 +360,7 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
                 domain=domain or "",
                 smtp_outcome=smtp_outcome,
                 role_based=role,
+                probe_mismatch=probe_mismatch,
             )
             confidence = determine_confidence(
                 syntax_valid=syntactic_valid,
@@ -369,6 +373,7 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
                 domain=domain or "",
                 smtp_outcome=smtp_outcome,
                 role_based=role,
+                probe_mismatch=probe_mismatch,
             )
             reason_code = determine_reason_code(
                 syntax_valid=syntactic_valid,
@@ -381,6 +386,7 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
                 domain=domain or "",
                 smtp_outcome=smtp_outcome,
                 role_based=role,
+                probe_mismatch=probe_mismatch,
             )
 
             logger.info("verify_done", email=email, status=status, score=score,
@@ -416,6 +422,7 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
                 reason_code=reason_code,
                 spf_valid=spf_valid,
                 dmarc_valid=dmarc_valid,
+                probe_mismatch=probe_mismatch,
             )
 
             # Persist BEFORE releasing the lock — this is what actually
@@ -467,6 +474,7 @@ def _build_response(
     reason_code: Optional[str] = None,
     spf_valid: Optional[bool] = None,
     dmarc_valid: Optional[bool] = None,
+    probe_mismatch: Optional[bool] = None,
 ) -> EmailVerifyResponse:
     """Build a successful verification response."""
     from models.models import EmailStatus
@@ -506,6 +514,7 @@ def _build_response(
         reason_code=reason_code,
         spf_valid=spf_valid,
         dmarc_valid=dmarc_valid,
+        probe_mismatch=probe_mismatch,
     )
 
 

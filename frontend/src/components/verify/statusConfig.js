@@ -179,6 +179,8 @@ export function resolveCheckStatus(checkKey, result) {
     'smtp_temp_failure',
     'unknown_error',
     'smtp_ambiguous_trusted',
+    'mailbox_accepted_unverified',
+    'mailbox_confirmed_high_risk_provider',
   ]);
   const isCouldntVerify = result?.sub_status && couldntVerifySubStatuses.has(result.sub_status);
 

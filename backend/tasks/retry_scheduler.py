@@ -145,6 +145,7 @@ async def _persist_final_result(
     outcome = smtp_result.outcome
     smtp_valid = outcome in (SmtpOutcome.VALID, SmtpOutcome.CATCH_ALL)
     catch_all = smtp_result.catch_all_outcome
+    probe_mismatch = smtp_result.probe_mismatch
 
     # These were already validated on the initial check (they're true for retries)
     syntax_valid = True
@@ -176,6 +177,7 @@ async def _persist_final_result(
         smtp_ambiguous_trusted=False,  # retries don't have "trusted ambiguous" concept
         smtp_outcome=outcome.value,
         role_based=role,
+        probe_mismatch=probe_mismatch,
     )
 
     status = determine_status(
@@ -187,6 +189,7 @@ async def _persist_final_result(
         catch_all=catch_all,
         score=score,
         domain=domain,
+        probe_mismatch=probe_mismatch,
     )
 
     sub_status = determine_sub_status(
@@ -200,6 +203,7 @@ async def _persist_final_result(
         domain=domain,
         smtp_outcome=outcome.value,
         role_based=role,
+        probe_mismatch=probe_mismatch,
     )
     confidence = determine_confidence(
         syntax_valid=syntax_valid,
@@ -212,6 +216,7 @@ async def _persist_final_result(
         domain=domain,
         smtp_outcome=outcome.value,
         role_based=role,
+        probe_mismatch=probe_mismatch,
     )
     reason_code = determine_reason_code(
         syntax_valid=syntax_valid,
@@ -224,6 +229,7 @@ async def _persist_final_result(
         domain=domain,
         smtp_outcome=outcome.value,
         role_based=role,
+        probe_mismatch=probe_mismatch,
     )
 
     from schemas.schemas import EmailVerifyResponse
@@ -257,6 +263,7 @@ async def _persist_final_result(
         reason_code=reason_code,
         spf_valid=spf_valid,
         dmarc_valid=dmarc_valid,
+        probe_mismatch=probe_mismatch,
     )
 
     # Persist via shared upsert (same path as verify_email)

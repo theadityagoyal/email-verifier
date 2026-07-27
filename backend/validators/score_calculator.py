@@ -4,7 +4,7 @@ from models.models import EmailStatus
 from validators.syntax_validator import is_role_based
 
 TRUSTED_DOMAINS = frozenset({
-    
+
     # ── Microsoft ─────────────────────────────────────────────────────────────
     "outlook.com", "hotmail.com", "live.com", "msn.com",
     "hotmail.co.uk", "hotmail.fr", "hotmail.de", "hotmail.in",
@@ -25,8 +25,6 @@ TRUSTED_DOMAINS = frozenset({
     "protonmail.com", "protonmail.ch", "proton.me", "pm.me",
     "tutanota.com", "tutanota.de", "tutamail.com",
     "fastmail.com", "fastmail.fm", "fastmail.net",
-    "tutanota.com", "tutanota.de", "tutamail.com",
-    "fastmail.com", "fastmail.fm", "fastmail.net",
     "hushmail.com", "mailfence.com", "runbox.com",
 
     # ── German ────────────────────────────────────────────────────────────────
@@ -44,10 +42,6 @@ TRUSTED_DOMAINS = frozenset({
     # ── Russian ───────────────────────────────────────────────────────────────
     "mail.ru", "yandex.ru", "yandex.com", "rambler.ru",
     "bk.ru", "inbox.ru", "list.ru",
-
-    # ── Chinese ───────────────────────────────────────────────────────────────
-    "qq.com", "163.com", "126.com", "sina.com",
-    "sohu.com", "foxmail.com", "yeah.net",
 
     # ── Japanese ──────────────────────────────────────────────────────────────
     "docomo.ne.jp", "softbank.ne.jp", "ezweb.ne.jp",
@@ -69,7 +63,7 @@ TRUSTED_DOMAINS = frozenset({
     "adani.com", "adanigroup.com", "adaniports.com",
     "mahindra.com", "mahindraauto.com", "techm.com",
     "bajaj.com", "bajajfinserv.com", "bajajfinance.in",
-    "hdfcbank.com", "hdfc.com", "hdfclife.com",
+    "hdfcbank.com", "hdfc.com", "hdhflife.com",
     "icicibank.com", "iciciprulife.com", "icicilombard.com",
     "axisbank.com", "axissecurities.com",
     "sbi.co.in", "sbigeneral.in", "sbilife.co.in",
@@ -162,6 +156,19 @@ TRUSTED_DOMAINS = frozenset({
 # so even with max penalty (-30): 90 + 10 - 30 = 70 (still above floor).
 # Only real INVALID (550 mailbox not found) uses the penalized path (base=80).
 TRUSTED_DOMAIN_SCORE_FLOOR = 60
+
+# ── HIGH RISK SMTP PROVIDERS ──────────────────────────────────────────────────
+# Chinese webmail providers (Sina/Weibo/Tencent/NetEase family) that are known
+# to sometimes give false-positive SMTP 250 confirmations on realistic-looking
+# fake addresses while rejecting obvious random probes. This is the
+# "evasion_suspected" pattern. For these providers, we cap the base score at 75
+# (instead of 100) even when SMTP returns VALID, because we cannot fully trust
+# the confirmation. See weibo.com false-positive case.
+HIGH_RISK_SMTP_PROVIDERS = frozenset({
+    "weibo.com", "sina.com", "sina.cn", "qq.com", "163.com", "126.com",
+    "sohu.com", "foxmail.com", "yeah.net", "vip.163.com", "vip.126.com",
+    "sina.com.cn",
+})
 
 # ── Keyboard walk patterns ────────────────────────────────────────────────────
 KEYBOARD_WALKS = [
@@ -318,6 +325,7 @@ def calculate_score(
     dmarc_valid: bool | None = None,    # Phase 5: DMARC record exists (None = unknown/not checked)
     smtp_outcome: str | None = None,
     role_based: bool = False,
+    probe_mismatch: bool = False,       # Task 1: EVASION_SUSPECTED detection
 ) -> tuple[int, dict]:
     """
     Returns (final_score, username_analysis)
@@ -327,7 +335,7 @@ def calculate_score(
       2. + trusted_bonus (+10 if trusted domain), clamp 100
       3. + spf_dmarc_delta (SPF +2, DMARC +2; absent −2 each; unknown = 0; range −4..+4), clamp 100
       4. − username_penalty (0..30), clamp 100
-      5. clamp to floor (60 for trusted, 0 otherwise)
+      5. clamp to floor (60 for trusted, 0 otherwise) — but NOT if SMTP confirmed invalid
     """
     # Username quality pehle analyze karo
     username_analysis = analyze_username_quality(username) if username else {
@@ -349,6 +357,7 @@ def calculate_score(
 
     # Calculate base score based on validation results
     is_trusted = domain.lower() in TRUSTED_DOMAINS
+    is_high_risk = domain.lower() in HIGH_RISK_SMTP_PROVIDERS
 
     # Phase 3: Trusted domain with ambiguous SMTP outcome (timeout/greylist/blocked)
     # uses base_score=90 (not 80) to avoid penalizing for inconclusive results.
@@ -379,6 +388,23 @@ def calculate_score(
         # MX hai + SMTP pass = 100
         else:
             base_score = 100
+
+    # ── SCORE CAPS for high-risk / evasion-suspected cases ────────────────────
+
+    # Cap 1: High-risk provider with VALID SMTP outcome
+    # These providers (weibo.com, sina.com, qq.com, etc.) are known to sometimes
+    # give false-positive 250 confirmations on realistic-looking fake addresses
+    # while rejecting obvious random probes. We cap at 75 because we cannot
+    # fully trust the confirmation. Reference: weibo.com false-positive case.
+    if is_high_risk and smtp_outcome == "valid":
+        base_score = min(base_score, 75)
+
+    # Cap 2: Probe mismatch (EVASION_SUSPECTED from smtp_validator)
+    # Server accepts realistic-looking fakes but rejects obvious ones — cannot
+    # trust the target's 250 as genuine mailbox confirmation. Cap at 55
+    # regardless of domain trust (no trusted_domain bonus/floor override).
+    if probe_mismatch:
+        base_score = min(base_score, 55)
 
     # Step 1: trusted domain bonus (+10, max 100)
     trusted_bonus = 10 if is_trusted else 0
@@ -459,6 +485,10 @@ ReasonCode = str  # machine-readable code for programmatic handling
 #   smtp_rate_limited           — SMTP 421 (too many connections)
 #   smtp_temp_failure           — Other 4xx temporary failure
 #   unknown_error               — Unexpected/unclassified error
+#   mailbox_accepted_unverified — Task 1: EVASION_SUSPECTED — server accepted target
+#                                 and realistic fake but rejected obvious fake
+#   mailbox_confirmed_high_risk_provider — Task 2: SMTP VALID but domain in
+#                                          HIGH_RISK_SMTP_PROVIDERS (capped at 75)
 
 
 def determine_sub_status(
@@ -472,6 +502,7 @@ def determine_sub_status(
     domain: str = "",
     smtp_outcome: str | None = None,
     role_based: bool = False,
+    probe_mismatch: bool = False,      # Task 1: EVASION_SUSPECTED flag
 ) -> SubStatus:
     """
     Determine granular sub-status from verification signals.
@@ -480,11 +511,13 @@ def determine_sub_status(
         ... (same as determine_status)
         smtp_outcome: Raw SmtpOutcome value from smtp_validator (VALID, INVALID, CATCH_ALL, GREYLISTED, RATE_LIMITED, TEMP_FAILURE, TIMEOUT, BLOCKED, UNKNOWN)
         role_based: Pre-computed role-based check result (True if username is role-based like admin@, support@, etc.)
+        probe_mismatch: True when EVASION_SUSPECTED outcome detected (target 250, obvious fake rejected, realistic fake accepted)
 
     Returns:
         Sub-status string for frontend display and programmatic use.
     """
     is_trusted = domain.lower() in TRUSTED_DOMAINS
+    is_high_risk = domain.lower() in HIGH_RISK_SMTP_PROVIDERS
 
     # 1. Syntax failure
     if not syntax_valid:
@@ -530,6 +563,12 @@ def determine_sub_status(
         if smtp_outcome == "mailbox_full":
             return "smtp_mailbox_full"
         if smtp_outcome == "valid":
+            # Task 1: EVASION_SUSPECTED — probe mismatch detected
+            if probe_mismatch:
+                return "mailbox_accepted_unverified"
+            # Task 2: High-risk provider with VALID outcome (capped at 75)
+            if is_high_risk:
+                return "mailbox_confirmed_high_risk_provider"
             return "mailbox_confirmed"
 
     # Fallback based on boolean flags (backward compat if smtp_outcome missing)
@@ -551,23 +590,29 @@ def determine_confidence(
     domain: str = "",
     smtp_outcome: str | None = None,
     role_based: bool = False,
+    probe_mismatch: bool = False,      # Task 1: for medium confidence mapping
 ) -> Confidence:
     """
     Determine confidence bucket: High / Medium / Low.
 
     High: mailbox_confirmed, smtp_skipped_trusted (known good domains)
-    Medium: catch_all_masked, role_based_address, smtp_ambiguous_trusted
+    Medium: catch_all_masked, role_based_address, smtp_ambiguous_trusted,
+            mailbox_accepted_unverified (probe_mismatch),
+            mailbox_confirmed_high_risk_provider
     Low: everything else (syntax_invalid, domain_not_found, no_mx_records, disposable_domain,
           smtp_rejected, smtp_blocked, smtp_rate_limited, smtp_temp_failure,
           greylisted_unconfirmed, dns_timeout_assumed, unknown_error)
     """
     sub = determine_sub_status(
         syntax_valid, domain_exists, mx_found, smtp_valid, disposable, catch_all,
-        score, domain, smtp_outcome, role_based
+        score, domain, smtp_outcome, role_based, probe_mismatch
     )
 
     high_confidence = {"mailbox_confirmed", "smtp_skipped_trusted"}
-    medium_confidence = {"catch_all_masked", "role_based_address", "smtp_ambiguous_trusted"}
+    medium_confidence = {
+        "catch_all_masked", "role_based_address", "smtp_ambiguous_trusted",
+        "mailbox_accepted_unverified", "mailbox_confirmed_high_risk_provider"
+    }
 
     if sub in high_confidence:
         return "High"
@@ -587,6 +632,7 @@ def determine_reason_code(
     domain: str = "",
     smtp_outcome: str | None = None,
     role_based: bool = False,
+    probe_mismatch: bool = False,      # Task 1/2: not used directly, sub->upper handles it
 ) -> ReasonCode:
     """
     Determine machine-readable reason code for programmatic handling.
@@ -596,6 +642,6 @@ def determine_reason_code(
     """
     sub = determine_sub_status(
         syntax_valid, domain_exists, mx_found, smtp_valid, disposable, catch_all,
-        score, domain, smtp_outcome, role_based
+        score, domain, smtp_outcome, role_based, probe_mismatch
     )
     return sub.upper()  # e.g., MAILBOX_CONFIRMED, CATCH_ALL_MASKED

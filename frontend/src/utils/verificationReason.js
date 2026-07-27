@@ -34,6 +34,10 @@ export const SUB_STATUS_LABELS = Object.freeze({
   smtp_rate_limited: { label: 'Rate Limited', color: 'warning', summary: 'Too many connection attempts — server temporarily unavailable.' },
   smtp_temp_failure: { label: 'Temporary Failure', color: 'warning', summary: 'Server returned a temporary error — may succeed if retried.' },
   unknown_error: { label: 'Unknown Error', color: 'error', summary: 'An unexpected error occurred during verification.' },
+  // Task 1: EVASION_SUSPECTED — server accepts realistic fakes but rejects obvious ones
+  mailbox_accepted_unverified: { label: 'Mailbox Accepted Unverified', color: 'warning', summary: 'Server accepted this address but showed signs of catch-all-like behavior — cannot fully confirm this mailbox exists.' },
+  // Task 2: High-risk provider with VALID SMTP outcome (score capped at 75)
+  mailbox_confirmed_high_risk_provider: { label: 'Mailbox Confirmed (High-Risk Provider)', color: 'warning', summary: 'This provider is known to sometimes give unreliable SMTP confirmation — treat this result with some caution.' },
 });
 
 // ── Fallback reason chain (used only when sub_status is missing — e.g. old
