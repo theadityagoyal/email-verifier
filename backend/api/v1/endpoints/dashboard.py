@@ -750,8 +750,25 @@ async def list_emails(
     )
     items = items_result.scalars().all()
 
+    # Fix any invalid status values in the retrieved items
+    # This handles cases where corrupted data might have empty strings or invalid values
+    from models.models import EmailStatus
+    valid_statuses = {s.value for s in EmailStatus}
+    fixed_items = []
+    for item in items:
+        if item.status not in valid_statuses:
+            logger.warning(
+                "Found invalid email status, correcting to 'processing'",
+                email=item.email,
+                invalid_status=item.status
+            )
+            # Create a copy of the item with fixed status
+            # We need to be careful not to modify the original object in the session
+            item.status = EmailStatus.processing
+        fixed_items.append(item)
+
     return PaginatedEmailsResponse(
-        items=items,
+        items=fixed_items,
         total=total,
         page=page,
         size=size,
@@ -844,6 +861,47 @@ async def export_emails(
 
     emails = (await db.execute(query.order_by(order_col, Email.id.desc()).limit(100_000))).scalars().all()
 
+    # Fix any invalid status values in the retrieved emails
+    from models.models import EmailStatus
+    valid_statuses = {s.value for s in EmailStatus}
+    fixed_emails = []
+    for email in emails:
+        if email.status not in valid_statuses:
+            logger.warning(
+                "Found invalid email status in export, correcting to 'processing'",
+                email=email.email,
+                invalid_status=email.status
+            )
+            # Create a temporary copy with fixed status for the dataframe
+            # We won't modify the actual object to avoid changing the database state
+            email_copy = email.__class__()
+            email_copy.id = email.id
+            email_copy.email = email.email
+            email_copy.domain = email.domain
+            email_copy.status = EmailStatus.processing  # Fixed value
+            email_copy.syntax_valid = email.syntax_valid
+            email_copy.domain_exists = email.domain_exists
+            email_copy.mx_found = email.mx_found
+            email_copy.smtp_valid = email.smtp_valid
+            email_copy.disposable = email.disposable
+            email_copy.role_based = email.role_based
+            email_copy.catch_all = email.catch_all
+            email_copy.score = email.score
+            email_copy.verified_at = email.verified_at
+            email_copy.job_id = email.job_id
+            email_copy.dns_checked_at = email.dns_checked_at
+            email_copy.smtp_checked_at = email.smtp_checked_at
+            email_copy.created_at = email.created_at
+            email_copy.updated_at = email.updated_at
+            email_copy.sub_status = email.sub_status
+            email_copy.confidence = email.confidence
+            email_copy.reason_code = email.reason_code
+            email_copy.spf_valid = email.spf_valid
+            email_copy.dmarc_valid = email.dmarc_valid
+            fixed_emails.append(email_copy)
+        else:
+            fixed_emails.append(email)
+
     df = pd.DataFrame(
         [
             {
@@ -860,7 +918,7 @@ async def export_emails(
                 "catch_all": e.catch_all,
                 "verified_at": str(e.verified_at) if e.verified_at else "",
             }
-            for e in emails
+            for e in fixed_emails
         ]
     )
 
