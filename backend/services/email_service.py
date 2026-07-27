@@ -288,7 +288,7 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
 
                 # Phase 3: Handle ambiguous outcomes for trusted domains
                 # (TIMEOUT, GREYLISTED, TEMP_FAILURE, BLOCKED) — treat as "ambiguous" not "invalid"
-                ambiguous_outcomes = {SmtpOutcome.TIMEOUT, SmtpOutcome.GREYLISTED, SmtpOutcome.TEMP_FAILURE, SmtpOutcome.BLOCKED}
+                ambiguous_outcomes = {SmtpOutcome.TIMEOUT, SmtpOutcome.GREYLISTED, SmtpOutcome.TEMP_FAILURE, SmtpOutcome.BLOCKED, SmtpOutcome.UNKNOWN}
 
                 if is_trusted and smtp_result.outcome in ambiguous_outcomes:
                     # Ambiguous result for trusted domain — don't penalize, treat as couldn't verify
@@ -330,6 +330,8 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
                 smtp_ambiguous_trusted=smtp_ambiguous_trusted,
                 spf_valid=spf_valid,
                 dmarc_valid=dmarc_valid,
+                smtp_outcome=smtp_outcome,
+                role_based=role,
             )
 
             status = determine_status(

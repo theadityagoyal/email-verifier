@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     ADMIN_PASSWORD: str = "change-me-admin-password"
 
     # SMTP
-    SMTP_TIMEOUT: int = 3
+    SMTP_TIMEOUT: int = 6
     SMTP_TIMEOUT_TRUSTED: int = 2
     SMTP_RETRIES: int = 2
     SMTP_MAX_WORKERS: int = 20

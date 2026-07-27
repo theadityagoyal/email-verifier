@@ -316,6 +316,8 @@ def calculate_score(
     smtp_ambiguous_trusted: bool = False,
     spf_valid: bool | None = None,      # Phase 5: SPF record exists (None = unknown/not checked)
     dmarc_valid: bool | None = None,    # Phase 5: DMARC record exists (None = unknown/not checked)
+    smtp_outcome: str | None = None,
+    role_based: bool = False,
 ) -> tuple[int, dict]:
     """
     Returns (final_score, username_analysis)
@@ -332,6 +334,9 @@ def calculate_score(
         "score": 100, "penalty": 0, "flags": [], "verdict": "clean"
     }
     penalty = username_analysis["penalty"]
+
+    if role_based:
+        penalty = min(30, penalty + 10)
 
     # Disposable = straight 0 (overrides trust — a disposable domain is
     # never safe, even if it happened to be in TRUSTED_DOMAINS)
@@ -359,9 +364,18 @@ def calculate_score(
         # MX hai + Catch-All = 70
         elif catch_all:
             base_score = 70
-        # MX hai + SMTP fail = 80
+        # MX hai + SMTP invalid = 10
+        elif smtp_outcome == "invalid":
+            base_score = 10
+        # MX hai + SMTP mailbox_full = 55
+        elif smtp_outcome == "mailbox_full":
+            base_score = 55
+        # MX hai + SMTP ambiguous (timeout/greylisted/rate_limited/temp_failure/blocked/unknown) = 45
+        elif smtp_outcome in ("timeout", "greylisted", "rate_limited", "temp_failure", "blocked", "unknown"):
+            base_score = 45
+        # MX hai + SMTP fail (fallback safety net if smtp_outcome somehow None)
         elif not smtp_valid:
-            base_score = 80
+            base_score = 45
         # MX hai + SMTP pass = 100
         else:
             base_score = 100
@@ -385,8 +399,8 @@ def calculate_score(
     # Step 3: username quality penalty (0..30), then clamp to 100 (should already be ≤100)
     score_after_penalty = min(100, score_with_spf_dmarc - penalty)
 
-    # Step 4: floor clamp (trusted floor = 60, else 0)
-    if is_trusted:
+    # Step 4: floor clamp (trusted floor = 60, else 0) — but NOT if SMTP confirmed invalid
+    if is_trusted and smtp_outcome != "invalid":
         final_score = max(TRUSTED_DOMAIN_SCORE_FLOOR, score_after_penalty)
     else:
         final_score = max(0, score_after_penalty)
@@ -496,7 +510,7 @@ def determine_sub_status(
     # Trusted domains now go through real SMTP — ambiguous outcomes get their own sub-status
     if smtp_outcome:
         # Trusted domain with ambiguous (non-conclusive) outcome
-        if is_trusted and smtp_outcome in ("timeout", "greylisted", "temp_failure", "blocked"):
+        if is_trusted and smtp_outcome in ("timeout", "greylisted", "temp_failure", "blocked", "unknown", "mailbox_full"):
             return "smtp_ambiguous_trusted"
 
         if smtp_outcome == "greylisted":
@@ -513,6 +527,8 @@ def determine_sub_status(
             return "catch_all_masked"
         if smtp_outcome == "invalid":
             return "smtp_rejected"
+        if smtp_outcome == "mailbox_full":
+            return "smtp_mailbox_full"
         if smtp_outcome == "valid":
             return "mailbox_confirmed"
 

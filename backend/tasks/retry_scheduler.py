@@ -174,6 +174,8 @@ async def _persist_final_result(
         spf_valid=spf_valid,
         dmarc_valid=dmarc_valid,
         smtp_ambiguous_trusted=False,  # retries don't have "trusted ambiguous" concept
+        smtp_outcome=outcome.value,
+        role_based=role,
     )
 
     status = determine_status(

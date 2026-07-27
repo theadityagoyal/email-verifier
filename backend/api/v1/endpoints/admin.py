@@ -23,8 +23,9 @@ from utils.config import settings
 from utils.admin_auth import create_admin_token, require_admin
 from utils.api_key import generate_api_key
 from utils.logging import get_logger
-from utils.timezone import utc_now_naive
 from utils.rate_limiter import RateLimiter
+from utils.timezone import utc_now_naive
+from validators.disposable_checker import get_disposable_stats
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 logger = get_logger(__name__)
@@ -227,3 +228,8 @@ async def get_api_key_usage(
         days=days,
         daily=[DailyUsageItem(**d) for d in daily],
     )
+
+
+@router.get("/disposable-list-health", dependencies=[Depends(require_admin)])
+async def disposable_list_health():
+    return get_disposable_stats()

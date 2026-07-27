@@ -33,7 +33,8 @@ class SmtpOutcome(str, Enum):
     VALID = "valid"              # 250 on target RCPT, 5xx on random probe
     INVALID = "invalid"          # 5xx on target RCPT (mailbox not found, etc.)
     CATCH_ALL = "catch_all"      # 250 on target RCPT AND 250 on random probe
-    GREYLISTED = "greylisted"    # 450/451/452 on target RCPT
+    GREYLISTED = "greylisted"    # 450/451 on target RCPT
+    MAILBOX_FULL = "mailbox_full"  # 452 (mailbox full / quota exceeded)
     RATE_LIMITED = "rate_limited"  # 421 (service not available, too many connections)
     TEMP_FAILURE = "temp_failure"  # Other 4xx (transient server error)
     TIMEOUT = "timeout"          # Socket/connection timeout
@@ -113,11 +114,20 @@ def _classify_outcome(
             catch_all_outcome=False,
         )
 
-    # Greylisting (typical 450/451/452)
-    if target_code in (450, 451, 452):
+    # Greylisting (typical 450/451)
+    if target_code in (450, 451):
         return SmtpResult(
             outcome=SmtpOutcome.GREYLISTED,
             smtp_code=target_code,
+            raw_response=target_text,
+            catch_all_outcome=False,
+        )
+
+    # Mailbox full / quota exceeded (452)
+    if target_code == 452:
+        return SmtpResult(
+            outcome=SmtpOutcome.MAILBOX_FULL,
+            smtp_code=452,
             raw_response=target_text,
             catch_all_outcome=False,
         )
