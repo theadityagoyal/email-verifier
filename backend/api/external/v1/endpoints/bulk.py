@@ -237,6 +237,16 @@ async def external_export_job_results(
         "mx_found": e.mx_found,
         "smtp_valid": e.smtp_valid,
         "verified_at": str(e.verified_at) if e.verified_at else "",
+        # New columns:
+        "syntax_valid": "Yes" if e.syntax_valid else "No",
+        "domain_exists": "Yes" if e.domain_exists else "No",
+        "spf_valid": "Yes" if e.spf_valid is True else ("No" if e.spf_valid is False else ""),
+        "dmarc_valid": "Yes" if e.dmarc_valid is True else ("No" if e.dmarc_valid is False else ""),
+        "smtp_outcome": e.smtp_outcome if e.smtp_outcome is not None else "",
+        "smtp_response_code": str(e.smtp_response_code) if e.smtp_response_code is not None else "",
+        "sub_status": e.sub_status if e.sub_status is not None else "",
+        "confidence": e.confidence if e.confidence is not None else "",
+        "reason_code": e.reason_code if e.reason_code is not None else "",
     } for e in emails_db])
 
     output = io.StringIO()

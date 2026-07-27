@@ -474,6 +474,16 @@ async def export_job_results(
             df["ev_mx_found"] = emails_series.map(lambda e: "Yes" if e in results_map and results_map[e].mx_found else "No")
             df["ev_smtp_valid"] = emails_series.map(lambda e: "Yes" if e in results_map and results_map[e].smtp_valid else "No")
             df["ev_verified_at"] = emails_series.map(lambda e: str(results_map[e].verified_at) if e in results_map and results_map[e].verified_at else "")
+            # --- Added missing columns ---
+            df["ev_syntax_valid"] = emails_series.map(lambda e: "Yes" if e in results_map and results_map[e].syntax_valid else "No")
+            df["ev_domain_exists"] = emails_series.map(lambda e: "Yes" if e in results_map and results_map[e].domain_exists else "No")
+            df["ev_spf_valid"] = emails_series.map(lambda e: "Yes" if e in results_map and results_map[e].spf_valid is True else ("No" if e in results_map and results_map[e].spf_valid is False else ""))
+            df["ev_dmarc_valid"] = emails_series.map(lambda e: "Yes" if e in results_map and results_map[e].dmarc_valid is True else ("No" if e in results_map and results_map[e].dmarc_valid is False else ""))
+            df["ev_smtp_outcome"] = emails_series.map(lambda e: results_map[e].smtp_outcome if e in results_map and results_map[e].smtp_outcome is not None else "")
+            df["ev_smtp_response_code"] = emails_series.map(lambda e: str(results_map[e].smtp_response_code) if e in results_map and results_map[e].smtp_response_code is not None else "")
+            df["ev_sub_status"] = emails_series.map(lambda e: results_map[e].sub_status if e in results_map and results_map[e].sub_status is not None else "")
+            df["ev_confidence"] = emails_series.map(lambda e: results_map[e].confidence if e in results_map and results_map[e].confidence is not None else "")
+            df["ev_reason_code"] = emails_series.map(lambda e: results_map[e].reason_code if e in results_map and results_map[e].reason_code is not None else "")
         else:
             # Fallback fresh sheet — emails_db is already filtered above.
             df = pd.DataFrame([{
@@ -486,6 +496,16 @@ async def export_job_results(
                 "ev_mx_found": "Yes" if e.mx_found else "No",
                 "ev_smtp_valid": "Yes" if e.smtp_valid else "No",
                 "ev_verified_at": str(e.verified_at) if e.verified_at else "",
+                # --- Added missing columns ---
+                "ev_syntax_valid": "Yes" if e.syntax_valid else "No",
+                "ev_domain_exists": "Yes" if e.domain_exists else "No",
+                "ev_spf_valid": "Yes" if e.spf_valid is True else ("No" if e.spf_valid is False else ""),
+                "ev_dmarc_valid": "Yes" if e.dmarc_valid is True else ("No" if e.dmarc_valid is False else ""),
+                "ev_smtp_outcome": e.smtp_outcome if e.smtp_outcome is not None else "",
+                "ev_smtp_response_code": str(e.smtp_response_code) if e.smtp_response_code is not None else "",
+                "ev_sub_status": e.sub_status if e.sub_status is not None else "",
+                "ev_confidence": e.confidence if e.confidence is not None else "",
+                "ev_reason_code": e.reason_code if e.reason_code is not None else "",
             } for e in emails_db])
 
         output = io.StringIO()

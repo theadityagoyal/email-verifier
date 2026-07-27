@@ -71,6 +71,7 @@ REASON_FILTER_MAP = {
     "unknown": ["UNKNOWN_ERROR"],
 }
 
+
 # ── FIX (audit #7): server-side sort for /emails ─────────────────────────────
 # Whitelisted so sort_by can never be interpolated into raw SQL.
 SORTABLE_EMAIL_FIELDS = {"email", "domain", "status", "score", "verified_at", "created_at", "reason_code"}
@@ -775,6 +776,7 @@ async def list_emails(
         pages=(total + size - 1) // size,
     )
 
+
 @router.get("/emails/export")
 async def export_emails(
     search: str | None = Query(default=None),
@@ -917,6 +919,14 @@ async def export_emails(
                 "role_based": e.role_based,
                 "catch_all": e.catch_all,
                 "verified_at": str(e.verified_at) if e.verified_at else "",
+                # New columns per specification:
+                "spf_valid": "Yes" if e.spf_valid is True else ("No" if e.spf_valid is False else ""),
+                "dmarc_valid": "Yes" if e.dmarc_valid is True else ("No" if e.dmarc_valid is False else ""),
+                "smtp_outcome": e.smtp_outcome if e.smtp_outcome is not None else "",
+                "smtp_response_code": str(e.smtp_response_code) if e.smtp_response_code is not None else "",
+                "sub_status": e.sub_status if e.sub_status is not None else "",
+                "confidence": e.confidence if e.confidence is not None else "",
+                "reason_code": e.reason_code if e.reason_code is not None else "",
             }
             for e in fixed_emails
         ]

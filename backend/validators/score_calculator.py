@@ -12,6 +12,9 @@ TRUSTED_DOMAINS = frozenset({
     "live.in", "live.co.uk", "live.com.au", "live.fr",
     "windowslive.com",
 
+    # ── Google ────────────────────────────────────────────────────────────────
+    "gmail.com", "googlemail.com",
+
     # ── Yahoo ─────────────────────────────────────────────────────────────────
     "yahoo.com", "yahoo.co.in", "yahoo.co.uk", "yahoo.fr",
     "yahoo.de", "yahoo.es", "yahoo.it", "yahoo.com.ar",
@@ -51,101 +54,6 @@ TRUSTED_DOMAINS = frozenset({
     "aol.com", "aim.com", "zoho.com",
     "iname.com", "mail.com", "email.com",
     "usa.com", "dr.com", "myself.com",
-
-    # ── Indian Top Companies ──────────────────────────────────────────────────
-    "tcs.com", "infosys.com", "wipro.com", "hcltech.com",
-    "techmahindra.com", "ltimindtree.com", "mphasis.com",
-    "hexaware.com", "persistent.com", "kpit.com",
-    "tatamotors.com", "tatasteel.com", "tatapower.com",
-    "tatacommunications.com", "tatacapital.com",
-    "relianceindustries.com", "ril.com", "jio.com",
-    "relianceretail.com", "reliancejio.com",
-    "adani.com", "adanigroup.com", "adaniports.com",
-    "mahindra.com", "mahindraauto.com", "techm.com",
-    "bajaj.com", "bajajfinserv.com", "bajajfinance.in",
-    "hdfcbank.com", "hdfc.com", "hdhflife.com",
-    "icicibank.com", "iciciprulife.com", "icicilombard.com",
-    "axisbank.com", "axissecurities.com",
-    "sbi.co.in", "sbigeneral.in", "sbilife.co.in",
-    "kotak.com", "kotaklife.com", "kotaksecurities.com",
-    "indusind.com", "yesbank.in", "bandhanbank.com",
-    "ongc.co.in", "bpcl.in", "iocl.com", "hpcl.com",
-    "ntpc.co.in", "powergrid.in", "nhpc.in",
-    "airtelindia.com", "airtel.in", "bhartiairtel.com",
-    "vodafone.in", "idea.adityabirla.com",
-    "flipkart.com", "myntra.com", "meesho.com",
-    "snapdeal.com", "paytm.com", "paytmmall.com",
-    "zomato.com", "swiggy.com", "dunzo.com",
-    "ola.com", "olacabs.com", "olaelectric.com",
-    "byju.com", "byjus.com", "unacademy.com", "vedantu.com",
-    "razorpay.com", "zerodha.com", "groww.in",
-    "policybazaar.com", "acko.com", "digit.in",
-    "naukri.com", "infoedge.com", "99acres.com",
-    "makemytrip.com", "goibibo.com", "cleartrip.com",
-    "irctc.co.in", "indianrailways.gov.in",
-    "ultratech.in", "ambujacement.com", "shreecement.com",
-    "asianpaints.com", "bergerpaints.com",
-    "drreddy.com", "sunpharma.com", "cipla.com",
-    "lupin.com", "auropharma.com", "torrentpharma.com",
-    "itc.in", "itcportal.com", "hindustan-unilever.com",
-    "nestle.in", "britannia.co.in", "dabur.com",
-    "marico.com", "godrej.com", "godrejcp.com",
-    "apollohospitals.com", "fortishealthcare.com",
-    "maxhealthcare.in", "medanta.org",
-
-    # ── Global Top Companies ──────────────────────────────────────────────────
-    "apple.com", "microsoft.com", "amazon.com", "meta.com",
-    "netflix.com", "tesla.com", "nvidia.com", "amd.com",
-    "intel.com", "ibm.com", "oracle.com", "salesforce.com",
-    "adobe.com", "spotify.com", "twitter.com", "x.com",
-    "linkedin.com", "uber.com", "airbnb.com", "stripe.com",
-    "shopify.com", "zoom.us", "slack.com", "dropbox.com",
-    "paypal.com", "ebay.com", "walmart.com", "target.com",
-    "mcdonalds.com", "starbucks.com", "nike.com", "adidas.com",
-    "samsung.com", "sony.com", "lg.com", "panasonic.com",
-    "toyota.com", "honda.com", "bmw.com", "mercedes-benz.com",
-    "volkswagen.com", "ford.com", "gm.com", "hyundai.com",
-    "jpmorgan.com", "goldmansachs.com", "morganstanley.com",
-    "citigroup.com", "bankofamerica.com", "wellsfargo.com",
-    "hsbc.com", "barclays.com", "deutschebank.com",
-    "mckinsey.com", "bcg.com", "bain.com", "deloitte.com",
-    "pwc.com", "ey.com", "kpmg.com", "accenture.com",
-    "capgemini.com", "cognizant.com", "cgi.com",
-    "unilever.com", "pg.com", "nestle.com", "coca-cola.com",
-    "pepsi.com", "pepsico.com", "kraft.com", "mondelez.com",
-    "pfizer.com", "johnson.com", "novartis.com", "roche.com",
-    "astrazeneca.com", "gsk.com", "abbvie.com", "merck.com",
-    "3m.com", "honeywell.com", "siemens.com", "ge.com",
-    "boeing.com", "airbus.com", "lockheedmartin.com",
-    "shell.com", "bp.com", "exxonmobil.com", "chevron.com",
-    "total.com", "totalenergies.com",
-
-    # ── HR & Attendance Apps ──────────────────────────────────────────────────
-    "greythr.com", "greytip.com",
-    "zoho.com", "zohomail.com", "zohocorp.com",
-    "darwinbox.com", "darwinbox.in",
-    "keka.com", "keka.in",
-    "bamboohr.com",
-    "successfactors.com", "sap.com",
-    "workday.com", "workdayhcm.com",
-    "adp.com", "adpvantage.com",
-    "sumhr.com", "sumtotal.com",
-    "hrone.com", "hrone.in",
-    "kredily.com", "kredily.in",
-    "factohr.com", "factohr.in",
-    "spine.in", "spinehr.com",
-    "beehive.com", "beehivehr.com",
-    "247hrm.com", "247hrm.in",
-    "peoplestrong.com", "peoplestrong.in",
-    "adrenalin.co.in", "adrenalinapp.com",
-    "qandle.com", "qandle.in",
-    "zimyo.com", "zimyo.in",
-    "empxtrack.com", "empxtrack.in",
-    "pocket-hrms.com", "pockethrms.com",
-    "timelabs.in", "timelabs.com",
-    "uknowva.com", "uknowva.in",
-    "hrmantra.com", "hrmantra.in",
-    "ascentsoftware.in", "ascentsoftware.com", "zinghr.com",
 })
 
 # Minimum score guaranteed for a trusted domain that passed syntax and isn't
@@ -480,11 +388,11 @@ ReasonCode = str  # machine-readable code for programmatic handling
 #   no_mx_records               — Domain exists but no MX records
 #   disposable_domain           — Known disposable email provider
 #   role_based_address          — Generic/role address (admin@, support@, etc.)
-#   smtp_rejected               — SMTP permanent failure (550, mailbox not found)
+#   smtp_rejected                — SMTP permanent failure (550, mailbox not found)
 #   smtp_blocked                — SMTP 550 with blocked/blacklist indication
-#   smtp_rate_limited           — SMTP 421 (too many connections)
+#   smtp_rate_limited            — SMTP 421 (too many connections)
 #   smtp_temp_failure           — Other 4xx temporary failure
-#   unknown_error               — Unexpected/unclassified error
+#   unknown_error                — Unexpected/unclassified error
 #   mailbox_accepted_unverified — Task 1: EVASION_SUSPECTED — server accepted target
 #                                 and realistic fake but rejected obvious fake
 #   mailbox_confirmed_high_risk_provider — Task 2: SMTP VALID but domain in
