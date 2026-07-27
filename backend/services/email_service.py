@@ -12,7 +12,7 @@ from validators.score_calculator import calculate_score, determine_status, deter
 from schemas.schemas import EmailVerifyResponse
 from models.database import AsyncSessionLocal
 from models.models import Email as EmailModel, Domain as DomainModel, SmtpRetryQueue
-from services.domain_service import async_upsert_email, async_upsert_domain
+from services.domain_service import async_upsert_email, async_upsert_domain, async_upsert_email_error_terminal
 from utils.config import settings
 from utils.logging import get_logger
 from utils.timezone import utc_now_naive
@@ -73,20 +73,33 @@ async def _persist_result(response: EmailVerifyResponse, job_id: Optional[str], 
     conventions. A hard failure here must never be allowed to make an
     otherwise-successful verification look like it failed to the caller.
 
-    IMPORTANT: Do NOT persist error responses (status=EmailStatus.error) as
-    they would corrupt the cached valid/invalid results used for TTL-based
-    reuse. An errored verification is NOT a valid result and should not
-    overwrite or create a cached record that future lookups would trust.
+    For error responses (status=EmailStatus.error), we DO persist to move
+    the row out of 'processing' state, but we carefully avoid corrupting
+    the TTL reuse cache:
+    - status = EmailStatus.error (terminal state, not 'processing')
+    - syntax_valid = preserved from before the error
+    - verification_error = human-readable error message
+    - domain_exists/mx_found/smtp_valid/etc. = None (unknown, not False)
+    - score = None
+    - dns_checked_at/smtp_checked_at = None (don't stamp 'now' — future
+      lookups must NOT treat this as a fresh DNS/SMTP check to reuse)
+    - Other optional fields = None
     """
     from models.models import EmailStatus
-    # Skip persistence for error responses to avoid corrupting the reuse cache
-    if response.status == EmailStatus.error:
-        logger.debug("persist_skipped_error_response", email=response.email)
-        return
-
     async with AsyncSessionLocal() as session:
         try:
-            await async_upsert_email(session, response, job_id, now)
+            if response.status == EmailStatus.error:
+                await async_upsert_email_error_terminal(
+                    session,
+                    email=response.email,
+                    domain=response.domain,
+                    syntax_valid=response.syntax_valid,
+                    job_id=job_id,
+                    verification_error=response.verification_error,
+                    now=now,
+                )
+            else:
+                await async_upsert_email(session, response, job_id, now)
             if response.domain:
                 await async_upsert_domain(session, response.domain, response.mx_records, now)
             await session.commit()
@@ -277,7 +290,10 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
             smtp_checked_at = existing.smtp_checked_at if existing else None
             smtp_outcome: Optional[str] = None
             smtp_response_code: Optional[int] = None
+            probe_mismatch: Optional[bool] = None
             smtp_ambiguous_trusted = False  # Phase 3: true if trusted domain + ambiguous SMTP outcome
+            probe_mismatch = False  # BUGFIX: default so it's always defined, even when
+                                     # smtp_check_applicable=False or smtp_fresh=True
 
             if not smtp_check_applicable:
                 smtp_valid = False
@@ -359,7 +375,6 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
                 catch_all=catch_all,
                 score=score,
                 domain=domain or "",
-                probe_mismatch=probe_mismatch,
             )
 
             # Phase 2: Sub-status, confidence, reason code

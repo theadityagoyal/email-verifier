@@ -150,6 +150,36 @@ _EMAIL_MARK_PROCESSING_SQL = text("""
         updated_at = VALUES(updated_at)
 """)
 
+# ── "Error terminal state" upsert ───────────────────────────────────────────
+# Persists a terminal 'error' status for emails where verification crashed
+# mid-pipeline. Unlike the normal result upsert, this:
+#   - Does NOT write domain_exists/mx_found/smtp_valid/disposable/role_based/
+#     catch_all/score (leaves them NULL so future TTL checks don't treat this
+#     as a "fresh" cached result)
+#   - Does NOT stamp dns_checked_at / smtp_checked_at (leaves NULL so future
+#     verifications will do fresh DNS/SMTP checks instead of reusing "error"
+#     timestamps)
+#   - Only writes: status=error, syntax_valid (preserved from before crash),
+#     verification_error, updated_at
+# Uses COALESCE on optional fields so existing non-NULL values aren't clobbered.
+_EMAIL_ERROR_TERMINAL_SQL = text("""
+    INSERT INTO emails
+        (email, domain, status, syntax_valid, domain_exists, mx_found, smtp_valid,
+         disposable, role_based, catch_all, score, job_id, verified_at,
+         dns_checked_at, smtp_checked_at, smtp_outcome, smtp_response_code,
+         sub_status, confidence, reason_code, spf_valid, dmarc_valid,
+         verification_error, created_at, updated_at)
+    VALUES
+        (:email, :domain, :status, :syntax_valid, NULL, NULL, NULL,
+         NULL, NULL, NULL, NULL, :job_id, NULL, NULL, NULL, NULL, NULL,
+         NULL, NULL, NULL, NULL, :verification_error, :now, :now)
+    ON DUPLICATE KEY UPDATE
+        status = VALUES(status),
+        syntax_valid = COALESCE(VALUES(syntax_valid), syntax_valid),
+        verification_error = VALUES(verification_error),
+        updated_at = VALUES(updated_at)
+""")
+
 # NOTE: intentionally does NOT touch verified_count / invalid_count /
 # risky_count / bounce_rate — those columns are dead reads (nothing in the
 # app queries them; dashboard/domains pages aggregate live from `emails`).
@@ -184,6 +214,25 @@ def _email_params_processing(email: str, domain: str, job_id: Optional[str], now
     }
 
 
+def _email_params_error_terminal(
+    email: str, domain: Optional[str], syntax_valid: Optional[bool],
+    job_id: Optional[str], verification_error: Optional[str], now: datetime
+) -> dict:
+    """Parameters for the 'error terminal state' upsert. Writes only the
+    minimum needed to mark the row as a terminal error without corrupting
+    TTL-based reuse cache (all optional signal columns stay NULL)."""
+    from models.models import EmailStatus
+    return {
+        "email": email,
+        "domain": domain,
+        "status": EmailStatus.error.value,
+        "syntax_valid": syntax_valid,
+        "job_id": job_id,
+        "verification_error": verification_error,
+        "now": now,
+    }
+
+
 def _domain_params(domain: str, mx_records: Optional[list[str]], now: datetime) -> dict:
     return {
         "domain": domain,
@@ -211,6 +260,20 @@ async def async_upsert_email_processing(
     immediately. Does NOT wipe any existing verification result — see
     module docstring BUGFIX note."""
     await db.execute(_EMAIL_MARK_PROCESSING_SQL, _email_params_processing(email, domain, job_id, now))
+
+
+async def async_upsert_email_error_terminal(
+    db: AsyncSession, email: str, domain: Optional[str], syntax_valid: Optional[bool],
+    job_id: Optional[str], verification_error: Optional[str], now: datetime
+) -> None:
+    """Atomically insert-or-update an Email row with terminal 'error' status.
+    Called when verification crashes mid-pipeline. Writes only the minimum
+    needed to mark the row as error (not 'processing') while preserving
+    TTL reuse cache integrity — signal columns stay NULL, timestamps stay
+    NULL so future lookups will do fresh checks."""
+    await db.execute(_EMAIL_ERROR_TERMINAL_SQL, _email_params_error_terminal(
+        email, domain, syntax_valid, job_id, verification_error, now
+    ))
 
 
 async def async_upsert_domain(
