@@ -278,8 +278,8 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
                 # Phase 5: SPF/DMARC presence lookups (cheap, same DNS batch)
                 spf_record = await async_get_spf_record(domain) if domain_exists else None
                 dmarc_record = await async_get_dmarc_record(domain) if domain_exists else None
-                spf_valid = spf_record is not None
-                dmarc_valid = dmarc_record is not None
+                spf_valid = (spf_record is not None) if domain_exists else None
+                dmarc_valid = (dmarc_record is not None) if domain_exists else None
                 logger.debug("spf_dmarc_checked", email=email, spf_valid=spf_valid, dmarc_valid=dmarc_valid)
 
             # 6. SMTP verification

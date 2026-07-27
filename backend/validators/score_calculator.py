@@ -57,13 +57,13 @@ TRUSTED_DOMAINS = frozenset({
 })
 
 # Minimum score guaranteed for a trusted domain that passed syntax and isn't
-# disposable — keeps it inside the "Risky" bucket (score > 60) even with harsh
-# username penalties. Changed from 76 to 60 in Phase 3: trusted domains now
+# disposable — keeps it at least 55 (so it falls in the "uncertain" or better bucket) even with harsh
+# username penalties. Changed from 60 to 55 in Phase 5: trusted domains now
 # go through real SMTP, so the score reflects the actual SMTP result.
 # Ambiguous outcomes (timeout/greylist/blocked) use base_score=90 (not 80),
 # so even with max penalty (-30): 90 + 10 - 30 = 70 (still above floor).
 # Only real INVALID (550 mailbox not found) uses the penalized path (base=80).
-TRUSTED_DOMAIN_SCORE_FLOOR = 60
+TRUSTED_DOMAIN_SCORE_FLOOR = 55
 
 # ── HIGH RISK SMTP PROVIDERS ──────────────────────────────────────────────────
 # Chinese webmail providers (Sina/Weibo/Tencent/NetEase family) that are known
@@ -241,8 +241,8 @@ def calculate_score(
     Scoring order (additive, each step clamped):
       1. base_score from validation chain (40..100)
       2. + trusted_bonus (+10 if trusted domain), clamp 100
-      3. + spf_dmarc_delta (SPF +2, DMARC +2; absent −2 each; unknown = 0; range −4..+4), clamp 100
-      4. − username_penalty (0..30), clamp 100
+      3. + spf_dmarc_delta (SPF +2, DMARC +2; absent -2 each; unknown = 0; range -4..+4), clamp 100
+      4. - username_penalty (0..30), clamp 100
       5. clamp to floor (60 for trusted, 0 otherwise) — but NOT if SMTP confirmed invalid
     """
     # Username quality pehle analyze karo
@@ -333,7 +333,7 @@ def calculate_score(
     # Step 3: username quality penalty (0..30), then clamp to 100 (should already be ≤100)
     score_after_penalty = min(100, score_with_spf_dmarc - penalty)
 
-    # Step 4: floor clamp (trusted floor = 60, else 0) — but NOT if SMTP confirmed invalid
+    # Step 4: floor clamp (trusted floor = 55, else 0) — but NOT if SMTP confirmed invalid
     if is_trusted and smtp_outcome != "invalid":
         final_score = max(TRUSTED_DOMAIN_SCORE_FLOOR, score_after_penalty)
     else:
@@ -518,7 +518,7 @@ def determine_confidence(
 
     high_confidence = {"mailbox_confirmed", "smtp_skipped_trusted"}
     medium_confidence = {
-        "catch_all_masked", "role_based_address", "smtp_ambiguous_trusted",
+        "catch_all_masked", "smtp_ambiguous_trusted",
         "mailbox_accepted_unverified", "mailbox_confirmed_high_risk_provider"
     }
 
