@@ -24,7 +24,7 @@ logger = get_logger(__name__)
 SAFE_STATUSES = [EmailStatus.verified, EmailStatus.deliverable, EmailStatus.trusted, EmailStatus.probably_valid]
 RISKY_STATUSES = [EmailStatus.risky, EmailStatus.unconfirmed, EmailStatus.uncertain]
 UNSAFE_STATUSES = [EmailStatus.invalid, EmailStatus.undeliverable]
-ALL_STATUSES = SAFE_STATUSES + RISKY_STATUSES + UNSAFE_STATUSES + [EmailStatus.processing]
+ALL_STATUSES = SAFE_STATUSES + RISKY_STATUSES + UNSAFE_STATUSES + [EmailStatus.processing, EmailStatus.error]
 
 LOW_SAMPLE_THRESHOLD = 5
 RISK_HEALTHY_MAX = 10
@@ -98,6 +98,7 @@ def bucket_case():
         (Email.status.in_(RISKY_STATUSES), "risky"),
         (Email.status.in_(UNSAFE_STATUSES), "unsafe"),
         (Email.status == EmailStatus.processing, "processing"),
+        (Email.status == EmailStatus.error, "error"),
         else_="unsafe",
     )
 
@@ -144,12 +145,13 @@ async def _compute_dashboard_trends(db: AsyncSession):
     bucket_trend_pct = {}
     total_recent = 0
     total_prev = 0
-    for b in ["safe", "risky", "unsafe", "processing"]:
+    for b in ["safe", "risky", "unsafe", "processing", "error"]:
         windows = bucket_window_map.get(b, {})
         recent = windows.get("recent", 0)
         prev = windows.get("previous", 0)
-        total_recent += recent
-        total_prev += prev
+        if b in ["safe", "risky", "unsafe", "processing"]:
+            total_recent += recent
+            total_prev += prev
         if prev > 0:
             bucket_trend_pct[b] = round(((recent - prev) / prev) * 100, 1)
         else:
@@ -465,6 +467,7 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365), db: AsyncSessi
         "risky": raw_bucket_counts.get("risky", 0),
         "unsafe": raw_bucket_counts.get("unsafe", 0),
         "processing": raw_bucket_counts.get("processing", 0),
+        "error": raw_bucket_counts.get("error", 0),
     }
 
     denom = bucket_counts["safe"] + bucket_counts["risky"] + bucket_counts["unsafe"]
@@ -676,7 +679,7 @@ async def list_emails(
     if search:
         query = query.where(Email.email.ilike(f"%{search}%"))
 
-    BUCKET_NAMES = {"safe", "risky", "unsafe", "processing"}
+    BUCKET_NAMES = {"safe", "risky", "unsafe", "processing", "error"}
     if status:
         if status in BUCKET_NAMES:
             query = query.where(bucket_case() == status)
@@ -797,7 +800,7 @@ async def export_emails(
     if search:
         query = query.where(Email.email.ilike(f"%{search}%"))
 
-    BUCKET_NAMES = {"safe", "risky", "unsafe", "processing"}
+    BUCKET_NAMES = {"safe", "risky", "unsafe", "processing", "error"}
     if status:
         if status in BUCKET_NAMES:
             query = query.where(bucket_case() == status)
@@ -956,6 +959,7 @@ def _domain_aggregate_subquery(search: str | None = None):
             func.sum(case((bucket_expr == "risky", 1), else_=0)).label("risky_count"),
             func.sum(case((bucket_expr == "unsafe", 1), else_=0)).label("unsafe_count"),
             func.sum(case((bucket_expr == "processing", 1), else_=0)).label("processing_count"),
+            func.sum(case((bucket_expr == "error", 1), else_=0)).label("error_count"),
             func.sum(cast(Email.disposable, Integer)).label("disposable_count"),
             func.sum(cast(Email.role_based, Integer)).label("role_based_count"),
             func.sum(cast(Email.catch_all, Integer)).label("catch_all_count"),
@@ -1051,6 +1055,7 @@ async def get_domains_overview(db: AsyncSession = Depends(get_db)):
                 domain_subq.c.disposable_count,
                 domain_subq.c.role_based_count,
                 domain_subq.c.catch_all_count,
+                domain_subq.c.error_count,
                 domain_subq.c.first_seen,
                 risk_percent_expr.label("risk_percent"),
                 trust_score_expr.label("trust_score"),
@@ -1076,6 +1081,7 @@ async def get_domains_overview(db: AsyncSession = Depends(get_db)):
     risky = sum(r.risky_count for r in rows)
     unsafe = sum(r.unsafe_count for r in rows)
     processing = sum(r.processing_count for r in rows)
+    error = sum(r.error_count for r in rows)
     flagged_domains = sum(
         1 for r in rows if r.disposable_count or r.role_based_count or r.catch_all_count
     )
@@ -1099,6 +1105,7 @@ async def get_domains_overview(db: AsyncSession = Depends(get_db)):
         risky=risky,
         unsafe=unsafe,
         processing=processing,
+        error=error,
         flagged_domains=flagged_domains,
         disposable_domains=disposable_domains,
         catch_all_domains=catch_all_domains,

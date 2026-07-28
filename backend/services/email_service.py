@@ -16,6 +16,9 @@ from services.domain_service import async_upsert_email, async_upsert_domain, asy
 from utils.config import settings
 from utils.logging import get_logger
 from utils.timezone import utc_now_naive
+from utils.verification_lock import email_lock_manager
+
+import asyncio  # already imported, but we'll keep it
 
 SMTP_TIMEOUT_TRUSTED = settings.SMTP_TIMEOUT_TRUSTED
 from utils.verification_lock import email_lock_manager
@@ -36,9 +39,13 @@ def _is_fresh(checked_at: Optional[datetime], ttl_days: int, now: datetime) -> b
 
 async def _fetch_existing_email(email: str) -> Optional[EmailModel]:
     """Short-lived read of the current DB row for this email, if any."""
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(EmailModel).where(EmailModel.email == email))
-        return result.scalar_one_or_none()
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(EmailModel).where(EmailModel.email == email))
+            return result.scalar_one_or_none()
+    except Exception as exc:
+        logger.error("fetch_existing_email_failed", email=email, error=str(exc), exc_info=True)
+        return None
 
 
 async def _fetch_domain_mx_records(domain: str) -> List[str]:
@@ -86,26 +93,29 @@ async def _persist_result(response: EmailVerifyResponse, job_id: Optional[str], 
     - Other optional fields = None
     """
     from models.models import EmailStatus
-    async with AsyncSessionLocal() as session:
-        try:
-            if response.status == EmailStatus.error:
-                await async_upsert_email_error_terminal(
-                    session,
-                    email=response.email,
-                    domain=response.domain,
-                    syntax_valid=response.syntax_valid,
-                    job_id=job_id,
-                    verification_error=response.verification_error,
-                    now=now,
-                )
-            else:
-                await async_upsert_email(session, response, job_id, now)
-            if response.domain:
-                await async_upsert_domain(session, response.domain, response.mx_records, now)
-            await session.commit()
-        except Exception as exc:
-            await session.rollback()
-            logger.error("verification_persist_failed", email=response.email, error=str(exc), exc_info=True)
+    try:
+        async with AsyncSessionLocal() as session:
+            try:
+                if response.status == EmailStatus.error:
+                    await async_upsert_email_error_terminal(
+                        session,
+                        email=response.email,
+                        domain=response.domain,
+                        syntax_valid=response.syntax_valid,
+                        job_id=job_id,
+                        verification_error=response.verification_error,
+                        now=now,
+                    )
+                else:
+                    await async_upsert_email(session, response, job_id, now)
+                if response.domain:
+                    await async_upsert_domain(session, response.domain, response.mx_records, now)
+                await session.commit()
+            except Exception as exc:
+                await session.rollback()
+                logger.error("verification_persist_failed", email=response.email, error=str(exc), exc_info=True)
+    except Exception as exc:
+        logger.error("verification_persist_failed_session_creation", email=response.email, error=str(exc), exc_info=True)
 
 
 async def _enqueue_greylist_retry(
@@ -139,8 +149,7 @@ async def _enqueue_greylist_retry(
     mx_host = mx_records[0]
     domain = email.split("@")[1].lower()
 
-    # Calculate next retry time with exponential backoff
-    initial_delay = settings.SMTP_RETRY_INITIAL_DELAY
+    # Calculate next retry time with exponential backoffline = initial_delay = settings.SMTP_RETRY_INITIAL_DELAY
     multiplier = settings.SMTP_RETRY_MULTIPLIER
     max_delay = settings.SMTP_RETRY_MAX_DELAY
     delay = min(initial_delay * (multiplier ** (attempt - 1)), max_delay)
@@ -223,7 +232,8 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
             logger.info("role_checked", email=email, role=role)
 
             # 3. Disposable check (no I/O, always fresh)
-            disposable = is_disposable(domain)
+            # FIX: Run in thread to avoid blocking the event loop
+            disposable = await asyncio.to_thread(is_disposable, domain)
             logger.info("disposable_checked", email=email, disposable=disposable)
 
             # 4. Look up any existing record for reuse decisions
@@ -503,27 +513,19 @@ def _build_response(
     smtp_reused: bool = False,
     dns_check_applicable: bool = True,
     smtp_check_applicable: bool = True,
-    smtp_outcome: Optional[str] = None,
-    smtp_response_code: Optional[int] = None,
-    sub_status: Optional[str] = None,
-    confidence: Optional[str] = None,
-    reason_code: Optional[str] = None,
-    spf_valid: Optional[bool] = None,
-    dmarc_valid: Optional[bool] = None,
-    probe_mismatch: Optional[bool] = None,
+    smtp_outcome: str | None = None,
+    smtp_response_code: int | None = None,
+    sub_status: str | None = None,
+    confidence: str | None = None,
+    reason_code: str | None = None,
+    spf_valid: bool | None = None,
+    dmarc_valid: bool | None = None,
+    probe_mismatch: bool | None = None,
 ) -> EmailVerifyResponse:
-    """Build a successful verification response."""
-    from models.models import EmailStatus
-    if status is None:
-        status = EmailStatus.invalid
-
-    # Only set verified_at for non-processing statuses
-    verified_at = utc_now_naive() if status != EmailStatus.processing else None
-
+    """Build the EmailVerifyResponse object."""
     return EmailVerifyResponse(
         email=email,
         domain=domain,
-        status=status,
         syntax_valid=syntax_valid,
         domain_exists=domain_exists,
         mx_found=mx_found,
@@ -532,9 +534,9 @@ def _build_response(
         role_based=role_based,
         catch_all=catch_all,
         score=score,
+        status=status,
         username_quality=username_quality,
         username_flags=username_flags,
-        verified_at=verified_at,
         mx_records=mx_records,
         dns_checked_at=dns_checked_at,
         smtp_checked_at=smtp_checked_at,
@@ -554,16 +556,11 @@ def _build_response(
     )
 
 
-def _build_invalid_response(
-    email: str,
-    syntax_valid: bool = False,
-) -> EmailVerifyResponse:
-    """Build a response for invalid emails (syntax or other early failures)."""
-    from models.models import EmailStatus
+def _build_invalid_response(email: str, syntax_valid: bool) -> EmailVerifyResponse:
+    """Build a response for syntax-invalid emails."""
     return EmailVerifyResponse(
         email=email,
         domain=None,
-        status=EmailStatus.invalid,
         syntax_valid=syntax_valid,
         domain_exists=False,
         mx_found=False,
@@ -572,9 +569,9 @@ def _build_invalid_response(
         role_based=False,
         catch_all=False,
         score=0,
+        status=EmailStatus.invalid,
         username_quality=None,
         username_flags=None,
-        verified_at=None,
         mx_records=None,
         dns_checked_at=None,
         smtp_checked_at=None,
@@ -590,27 +587,16 @@ def _build_invalid_response(
         reason_code=None,
         spf_valid=None,
         dmarc_valid=None,
+        probe_mismatch=None,
     )
 
 
-def _build_error_response(
-    email: str,
-    syntax_valid: bool | None = None,
-    error_msg: str | None = None,
-) -> EmailVerifyResponse:
-    """Build a response for verification errors (exceptions during processing).
-
-    Args:
-        email: The email address being verified
-        syntax_valid: Preserve syntax check result if computed before error (None = not computed)
-        error_msg: Human-readable error message from the exception (no stack traces)
-    """
-    from models.models import EmailStatus
+def _build_error_response(email: str, syntax_valid: bool | None, error_msg: str) -> EmailVerifyResponse:
+    """Build a response for verification errors."""
     return EmailVerifyResponse(
         email=email,
         domain=None,
-        status=EmailStatus.error,
-        syntax_valid=syntax_valid if syntax_valid is not None else False,
+        syntax_valid=syntax_valid,
         domain_exists=None,
         mx_found=None,
         smtp_valid=None,
@@ -618,9 +604,9 @@ def _build_error_response(
         role_based=None,
         catch_all=None,
         score=None,
+        status=EmailStatus.error,
         username_quality=None,
         username_flags=None,
-        verified_at=None,
         mx_records=None,
         dns_checked_at=None,
         smtp_checked_at=None,
@@ -636,5 +622,6 @@ def _build_error_response(
         reason_code=None,
         spf_valid=None,
         dmarc_valid=None,
+        probe_mismatch=None,
         verification_error=error_msg,
     )

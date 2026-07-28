@@ -330,6 +330,7 @@ class DomainOverview(BaseModel):
     risky: int
     unsafe: int
     processing: int
+    error: int
 
     flagged_domains: int
     disposable_domains: int
@@ -351,7 +352,7 @@ class DomainOverview(BaseModel):
 
     @field_validator('total_domains', 'total_emails', 'safe', 'risky', 'unsafe', 'processing',
                      'flagged_domains', 'disposable_domains', 'catch_all_domains', 'no_mx_domains',
-                     'new_domains_count')
+                     'new_domains_count', 'error')
     @classmethod
     def count_must_be_non_negative(cls, v):
         if v < 0:
@@ -412,8 +413,8 @@ class DomainSummary(BaseModel):
 
 class DashboardStats(BaseModel):
     total_emails: int
-    per_status_counts: Dict[str, int]  # verified, deliverable, trusted, probably_valid, risky, unconfirmed, uncertain, invalid, undeliverable, processing
-    bucket_counts: Dict[str, int]      # safe, risky, unsafe, processing
+    per_status_counts: Dict[str, int]  # verified, deliverable, trusted, probably_valid, risky, unconfirmed, uncertain, invalid, undeliverable, processing, error
+    bucket_counts: Dict[str, int]      # safe, risky, unsafe, processing, error
     trust_score: int                   # 0-100
     flagged_counts: Dict[str, int]     # disposable, role_based, catch_all
     top_domains: List[TopDomainItem]  # each: {domain, safe, risky, unsafe, processing, total, risk_pct}

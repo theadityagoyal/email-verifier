@@ -14,12 +14,13 @@ from services.notification_service import async_create_notification
 from utils.logging import get_logger
 from utils.timezone import utc_now_naive
 from utils.email_utils import detect_email_column
-from utils.file_utils import read_upload_file, FileReadError, SUPPORTED_EXTENSIONS, is_supported_filename
+from utils.file_utils import read_upload_file, FileReadError, SUPPORTED_EXTENSIONS, is_supported_filename, sanitize_filename
 
 
 # Constants
 MAX_FILE_SIZE_MB = 50
 UPLOAD_BASE_DIR = "/tmp/uploads"
+
 
 # ── Export filter buckets ────────────────────────────────────────────────
 # Mirrors bucket_case() in api/v1/endpoints/dashboard.py and the JS mirror
@@ -108,8 +109,10 @@ async def bulk_upload(
         force_fresh: If true, bypass TTL cache and force fresh DNS/SMTP checks for all emails
     """
     try:
-        filename = file.filename.lower()
-        if not is_supported_filename(filename):
+        original_filename = file.filename or ""
+        safe_filename = sanitize_filename(original_filename)
+        filename_lower = safe_filename.lower()
+        if not is_supported_filename(filename_lower):
             raise HTTPException(status_code=400, detail=f"Only {', '.join(SUPPORTED_EXTENSIONS)} files accepted.")
 
         content = await file.read()
@@ -117,7 +120,7 @@ async def bulk_upload(
             raise HTTPException(status_code=413, detail=f"File too large. Max {MAX_FILE_SIZE_MB} MB.")
 
         # Read file
-        df = _read_file(content, file.filename)
+        df = _read_file(content, safe_filename)
 
         if df.empty:
             raise HTTPException(status_code=400, detail="File is empty.")
@@ -133,14 +136,14 @@ async def bulk_upload(
             raise HTTPException(status_code=400, detail="No valid emails found in file.")
 
         job_id = str(uuid.uuid4())
-        s3_key = f"uploads/{job_id}/{file.filename}"
+        s3_key = f"local:{job_id}/{safe_filename}"
 
         # Upload to local storage (S3 optional)
         try:
             os.makedirs(f"{UPLOAD_BASE_DIR}/{job_id}", exist_ok=True)
-            with open(f"{UPLOAD_BASE_DIR}/{job_id}/{file.filename}", "wb") as f:
+            with open(f"{UPLOAD_BASE_DIR}/{job_id}/{safe_filename}", "wb") as f:
                 f.write(content)
-            s3_key = f"local:{job_id}/{file.filename}"
+            s3_key = f"local:{job_id}/{safe_filename}"
             logger.info("file_saved_local", path=s3_key)
         except OSError as e:
             logger.error(f"Failed to save file for job {job_id}: {str(e)}")
@@ -149,7 +152,7 @@ async def bulk_upload(
         # Save job
         job = Job(
             job_id=job_id,
-            file_name=file.filename,
+            file_name=original_filename,  # Store original for display/download
             s3_key=s3_key,
             status=JobStatus.processing,
             current_stage='uploading',
@@ -173,12 +176,12 @@ async def bulk_upload(
         await async_create_notification(
             db,
             title="Bulk Upload Started",
-            message=f'"{file.filename}" queued for verification — {total} email(s){dup_note}.',
+            message=f'"{original_filename}" queued for verification — {total} email(s){dup_note}.',
             type=NotificationType.info,
             priority=NotificationPriority.low,
             metadata={
                 "job_id": job_id,
-                "file_name": file.filename,
+                "file_name": original_filename,
                 "total": total,
                 "duplicate_emails_removed": duplicate_emails_removed,
             },
@@ -200,6 +203,7 @@ async def bulk_upload(
     except Exception as e:
         logger.error(f"Unexpected error in bulk_upload: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 
 @router.get("/jobs", response_model=list[JobStatusResponse])
 async def list_jobs(db: AsyncSession = Depends(get_db)):
@@ -228,6 +232,7 @@ async def list_jobs(db: AsyncSession = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error retrieving jobs: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to retrieve jobs: {str(e)}")
+
 
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(job_id: str, db: AsyncSession = Depends(get_db)):
@@ -276,16 +281,16 @@ async def cancel_job(job_id: str, db: AsyncSession = Depends(get_db)):
             detail=f"Job cannot be cancelled — current status is '{job.status.value}'.",
         )
 
-    job.cancel_requested = True
-    await db.commit()
+        job.cancel_requested = True
+        await db.commit()
 
-    logger.info("job_cancel_requested", job_id=job_id)
+        logger.info("job_cancel_requested", job_id=job_id)
 
-    return JobCancelResponse(
-        message="Cancellation requested. The job will stop after in-flight emails finish.",
-        job_id=job_id,
-        status=job.status.value,
-    )
+        return JobCancelResponse(
+            message="Cancellation requested. The job will stop after in-flight emails finish.",
+            job_id=job_id,
+            status=job.status.value,
+        )
 
 
 @router.post("/jobs/{job_id}/retry", response_model=BulkUploadResponse)
@@ -313,7 +318,22 @@ async def retry_job(
     # Store original params before reset
     original_s3_key = job.s3_key
     original_force_fresh = job.force_fresh
-    original_email_col = "email"  # default, same as initial upload
+    # Detect email column from the stored file
+    try:
+        if original_s3_key.startswith("local:"):
+            path_part = original_s3_key.replace("local:", "")
+            job_id_part, filename = path_part.split("/", 1)
+            filepath = f"{UPLOAD_BASE_DIR}/{job_id_part}/{filename}"
+            with open(filepath, "rb") as f:
+                raw = f.read()
+        else:
+            from services.s3_service import download_file_from_s3
+            raw = download_file_from_s3(original_s3_key)
+        df = read_upload_file(raw, filename)
+        email_col = detect_email_column(df)
+    except Exception as e:
+        logger.warning(f"Failed to detect email column for job {job_id}: {str(e)}")
+        email_col = "email"  # fallback
 
     # Reset job state
     job.status = JobStatus.processing
@@ -340,8 +360,8 @@ async def retry_job(
     await db.commit()
 
     # Re-queue the background job with original parameters
-    logger.info("job_retry_dispatched", job_id=job_id, force_fresh=original_force_fresh)
-    background_tasks.add_task(process_bulk_job_sync, job_id, original_s3_key, original_email_col, original_force_fresh)
+    logger.info("job_retry_dispatched", job_id=job_id, force_fresh=original_force_fresh, email_col=email_col)
+    background_tasks.add_task(process_bulk_job_sync, job_id, original_s3_key, email_col, original_force_fresh)
 
     return BulkUploadResponse(
         job_id=job_id,
@@ -393,6 +413,7 @@ async def delete_job(
         await db.rollback()
         logger.error(f"Error deleting job {job_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to delete job: {str(e)}")
+
 
 @router.get("/jobs/{job_id}/export")
 async def export_job_results(
