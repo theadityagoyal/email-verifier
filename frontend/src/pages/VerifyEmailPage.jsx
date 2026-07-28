@@ -75,6 +75,13 @@ export default function VerifyEmailPage() {
       // That's misleading: we never actually checked this email at all.
       // `request_failed: true` lets the UI show a distinct "couldn't
       // complete verification" state instead of fabricating check results.
+      //
+      // NOTE: `status: 'error'` is ALSO set below purely so any code that
+      // pattern-matches on result.status doesn't see an unexpected value —
+      // but this file must NEVER treat request_failed as if it were also a
+      // "verification error" (isVerificationError below explicitly excludes
+      // request_failed) or both banners render together (see BUGFIX note
+      // on isVerificationError further down).
       runRevealSequence({
         email,
         domain: null,
@@ -178,8 +185,22 @@ export default function VerifyEmailPage() {
   const recommendation = result ? resolveRecommendation(result.score) : null;
   const scoreReason = resolvedChecks.length ? buildScoreReason(resolvedChecks) : null;
 
-  // Check if verification errored (distinct from request failure)
-  const isVerificationError = result && (result.status === 'error' || !!result.verification_error);
+  // Check if verification errored (distinct from request failure).
+  //
+  // BUGFIX (duplicate "Verification Failed" + "Verification Error" banners):
+  // The onError handler above builds a synthetic result with BOTH
+  // `request_failed: true` AND `status: 'error'` set at the same time. This
+  // condition previously did NOT exclude request_failed, so on any request
+  // failure (network error / backend 500) BOTH the "request failed" header
+  // + banner AND the "verification error" header + banner rendered together
+  // for the exact same single failure — two confusing, redundant messages
+  // stacked on top of each other. Excluding request_failed here makes the
+  // two states mutually exclusive, as they were always meant to be:
+  //   - request_failed  -> we never reached the server / got no valid reply
+  //   - isVerificationError -> server responded, but the pipeline itself
+  //     hit an internal exception (result.status === 'error' from a REAL
+  //     backend response, or result.verification_error present)
+  const isVerificationError = result && !result.request_failed && (result.status === 'error' || !!result.verification_error);
 
   const avgSeconds = statsData?.avg_processing_time_ms
     ? (statsData.avg_processing_time_ms / 1000).toFixed(1)
@@ -338,7 +359,7 @@ export default function VerifyEmailPage() {
                           Verification Failed
                         </div>
                       )}
-                      {phase === 'complete' && (result.status === 'error' || result.verification_error) && (
+                      {phase === 'complete' && isVerificationError && (
                         <div className="flex items-center gap-2 text-sm text-warning shrink-0">
                           <AlertTriangle className="h-4 w-4" />
                           Verification Error
@@ -369,8 +390,12 @@ export default function VerifyEmailPage() {
                         scoring bug, DB error). The email itself may be perfectly
                         valid — we just couldn't complete the checks. Show a
                         distinct banner and DO NOT render the score/check grid
-                        with fabricated "fail" results. */}
-                    {phase === 'complete' && (result.status === 'error' || result.verification_error) && (
+                        with fabricated "fail" results.
+                        BUGFIX: uses isVerificationError (which already excludes
+                        request_failed) instead of re-deriving the condition here
+                        — previously this rendered ALONGSIDE the request-failed
+                        banner above for the same single failure. */}
+                    {phase === 'complete' && isVerificationError && (
                       <div className="rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-[var(--foreground)] flex items-start gap-2.5">
                         <AlertTriangle className="h-4 w-4 mt-0.5 text-warning shrink-0" />
                         <div>

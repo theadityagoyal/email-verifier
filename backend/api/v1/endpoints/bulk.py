@@ -270,6 +270,17 @@ async def cancel_job(job_id: str, db: AsyncSession = Depends(get_db)):
 
     Only jobs currently 'pending' or 'processing' can be cancelled — a
     completed/failed/already-cancelled job has nothing left to stop.
+
+    BUGFIX: the success path below (job.cancel_requested = True, commit,
+    return JobCancelResponse) was previously mis-indented INSIDE the guard
+    `if job.status not in (...)` block. Since that block only ever runs
+    when the job is NOT cancellable (and always raises before reaching that
+    code), the success path was unreachable dead code — whenever a job WAS
+    actually cancellable, the function fell through with no return value at
+    all, which FastAPI then failed to validate against response_model=
+    JobCancelResponse, surfacing as a 500 to the caller. The Cancel button
+    in the UI never worked. Fixed by dedenting the success path to run
+    after the guard clause, unconditionally on the non-error path.
     """
     job = (await db.execute(select(Job).where(Job.job_id == job_id))).scalar_one_or_none()
     if not job:
@@ -281,16 +292,16 @@ async def cancel_job(job_id: str, db: AsyncSession = Depends(get_db)):
             detail=f"Job cannot be cancelled — current status is '{job.status.value}'.",
         )
 
-        job.cancel_requested = True
-        await db.commit()
+    job.cancel_requested = True
+    await db.commit()
 
-        logger.info("job_cancel_requested", job_id=job_id)
+    logger.info("job_cancel_requested", job_id=job_id)
 
-        return JobCancelResponse(
-            message="Cancellation requested. The job will stop after in-flight emails finish.",
-            job_id=job_id,
-            status=job.status.value,
-        )
+    return JobCancelResponse(
+        message="Cancellation requested. The job will stop after in-flight emails finish.",
+        job_id=job_id,
+        status=job.status.value,
+    )
 
 
 @router.post("/jobs/{job_id}/retry", response_model=BulkUploadResponse)
@@ -329,6 +340,16 @@ async def retry_job(
         else:
             from services.s3_service import download_file_from_s3
             raw = download_file_from_s3(original_s3_key)
+            # BUGFIX (minor, defensive): `filename` was previously only ever
+            # assigned inside the `if original_s3_key.startswith("local:")`
+            # branch above. When retrying a job stored on S3 (not local),
+            # `filename` was undefined and `read_upload_file(raw, filename)`
+            # below raised a NameError — silently swallowed by the except
+            # clause and masked as a generic "email column detection
+            # failed" fallback to email_col="email". Falls back to the
+            # job's own stored file_name so S3-backed retries still detect
+            # the real email column instead of silently guessing "email".
+            filename = job.file_name
         df = read_upload_file(raw, filename)
         email_col = detect_email_column(df)
     except Exception as e:
