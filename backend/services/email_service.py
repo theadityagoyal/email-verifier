@@ -11,7 +11,7 @@ from validators.disposable_checker import is_disposable
 from validators.score_calculator import calculate_score, determine_status, determine_sub_status, determine_confidence, determine_reason_code, TRUSTED_DOMAINS, HIGH_RISK_SMTP_PROVIDERS
 from schemas.schemas import EmailVerifyResponse
 from models.database import AsyncSessionLocal
-from models.models import Email as EmailModel, Domain as DomainModel, SmtpRetryQueue
+from models.models import Email as EmailModel, Domain as DomainModel, SmtpRetryQueue, EmailStatus
 from services.domain_service import async_upsert_email, async_upsert_domain, async_upsert_email_error_terminal
 from utils.config import settings
 from utils.logging import get_logger
@@ -149,7 +149,8 @@ async def _enqueue_greylist_retry(
     mx_host = mx_records[0]
     domain = email.split("@")[1].lower()
 
-    # Calculate next retry time with exponential backoffline = initial_delay = settings.SMTP_RETRY_INITIAL_DELAY
+    # Calculate next retry time with exponential backoff
+    initial_delay = settings.SMTP_RETRY_INITIAL_DELAY
     multiplier = settings.SMTP_RETRY_MULTIPLIER
     max_delay = settings.SMTP_RETRY_MAX_DELAY
     delay = min(initial_delay * (multiplier ** (attempt - 1)), max_delay)
@@ -553,6 +554,7 @@ def _build_response(
         spf_valid=spf_valid,
         dmarc_valid=dmarc_valid,
         probe_mismatch=probe_mismatch,
+        verified_at=utc_now_naive(),
     )
 
 
@@ -588,6 +590,7 @@ def _build_invalid_response(email: str, syntax_valid: bool) -> EmailVerifyRespon
         spf_valid=None,
         dmarc_valid=None,
         probe_mismatch=None,
+        verified_at=utc_now_naive(),
     )
 
 
@@ -624,4 +627,5 @@ def _build_error_response(email: str, syntax_valid: bool | None, error_msg: str)
         dmarc_valid=None,
         probe_mismatch=None,
         verification_error=error_msg,
+        verified_at=utc_now_naive(),
     )

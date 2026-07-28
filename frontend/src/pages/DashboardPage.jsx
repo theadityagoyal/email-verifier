@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   CircleCheckBig,
   AlertTriangle,
+  AlertCircle,
   ShieldX,
   RefreshCw,
   TrendingUp,
