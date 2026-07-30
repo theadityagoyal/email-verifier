@@ -22,6 +22,7 @@ const EMBEDDED_DEFAULTS = {
     riskyStatuses: ["risky", "unconfirmed", "uncertain"],
     unsafeStatuses: ["invalid", "undeliverable"],
     processingStatus: "processing",
+    errorStatus: "error",
     bucketRules: [
       { condition: "disposable", bucket: "unsafe", priority: 1 },
       { condition: "safe_status_and_role_or_catchall", bucket: "risky", priority: 2 },
@@ -29,7 +30,8 @@ const EMBEDDED_DEFAULTS = {
       { condition: "risky_status", bucket: "risky", priority: 4 },
       { condition: "unsafe_status", bucket: "unsafe", priority: 5 },
       { condition: "processing", bucket: "processing", priority: 6 },
-      { condition: "default", bucket: "unsafe", priority: 7 },
+      { condition: "error_status", bucket: "error", priority: 7 },
+      { condition: "default", bucket: "unsafe", priority: 8 },
     ],
   },
   domainVerdictThresholds: {
@@ -42,6 +44,7 @@ const EMBEDDED_DEFAULTS = {
     risky: "Risky",
     unsafe: "Unsafe",
     processing: "Processing",
+    error: "Verification Error",
     cancelled: "Cancelled",
     unknown: "Unknown",
   },
@@ -50,6 +53,7 @@ const EMBEDDED_DEFAULTS = {
     risky: "AlertTriangle",
     unsafe: "XCircle",
     processing: "Loader2",
+    error: "AlertOctagon",
     cancelled: "Ban",
     unknown: "HelpCircle",
   },
@@ -103,7 +107,7 @@ export function ensureConfigLoaded() {
  */
 export function getStatusBucket({ status, disposable, role_based, catch_all }) {
   const statusLower = (status || "").toLowerCase();
-  const { safeStatuses, riskyStatuses, unsafeStatuses, processingStatus } =
+  const { safeStatuses, riskyStatuses, unsafeStatuses, processingStatus, errorStatus } =
     moduleConfig.emailStatusBuckets;
 
   // 1. Disposable is always unsafe (highest priority)
@@ -136,7 +140,14 @@ export function getStatusBucket({ status, disposable, role_based, catch_all }) {
     return "processing";
   }
 
-  // 7. Default (matches backend's ELSE 'unsafe')
+  // 7. Verification error (pipeline crashed mid-run — distinct from "unsafe",
+  // which implies a confirmed-bad address). FIX: previously missing, so
+  // error-status emails always fell through to step 8's "unsafe" default.
+  if (errorStatus && statusLower === errorStatus) {
+    return "error";
+  }
+
+  // 8. Default (matches backend's ELSE 'unsafe')
   return "unsafe";
 }
 

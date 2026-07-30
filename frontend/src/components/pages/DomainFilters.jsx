@@ -33,13 +33,13 @@ export default function DomainFilters({
           {/* FIX (audit #30): htmlFor/id pairing added throughout this form —
               previously labels were visually placed but not programmatically
               linked, so screen readers announced them as unrelated elements. */}
-          <label htmlFor="domain-search-input" className="sr-only">Search domains, MX records</label>
+          <label htmlFor="domain-search-input" className="sr-only">Search domains</label>
           <input
             id="domain-search-input"
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search domains, MX records..."
+            placeholder="Search domains..."
             className="input pl-10 w-full"
           />
         </div>

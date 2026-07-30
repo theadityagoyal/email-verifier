@@ -5,9 +5,8 @@ import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
   Search, Filter, ChevronDown, ChevronUp, Download,
-  Check, Trash2, Mail, ExternalLink, ShieldCheck, AlertTriangle, XCircle,
-  ArrowUpDown, ArrowUp, ArrowDown, Globe, Shield, AlertCircle, Info, Calendar,
-  ChevronLeft, ChevronRight, Loader2
+  Trash2, Mail, ExternalLink, ShieldCheck, AlertTriangle, XCircle,
+  Calendar, ChevronLeft, ChevronRight, AlertOctagon,
 } from 'lucide-react';
 import { getPageWindow } from '@/utils/pagination';
 import { listEmails, downloadEmailsExport, deleteEmail, getDashboardStats } from '@/services/api';
@@ -31,6 +30,7 @@ const statusOptions = [
   { value: 'risky', label: 'Risky' },
   { value: 'unsafe', label: 'Unsafe' },
   { value: 'processing', label: 'Processing' },
+  { value: 'error', label: 'Verification Error' },
 ];
 
 const scoreRangeOptions = [
@@ -58,6 +58,7 @@ const reasonOptions = [
   { value: 'domain_not_found', label: 'Domain Not Found' },
   { value: 'invalid_syntax', label: 'Invalid Syntax' },
   { value: 'mx_missing', label: 'MX Record Missing' },
+  { value: 'mailbox_full', label: 'Mailbox Full' },
   { value: 'temp_failure', label: 'Temporary SMTP Failure' },
   { value: 'unknown', label: 'Unknown' },
 ];
@@ -156,6 +157,12 @@ export default function EmailListPage() {
   const [domainFilter, setDomainFilter] = useState(
     searchParams.get('domain') || ''
   );
+  // FIX: "View Emails" links from the Domains page / Dashboard pass a known,
+  // exact domain — previously that went through the same ILIKE substring
+  // match as free-text typing in the Domain box below, so e.g. domain=
+  // "gmail.com" could also pull in unrelated rows like "mygmail.com". This
+  // tracks whether the current domainFilter value should be matched exactly.
+  const [domainExact, setDomainExact] = useState(searchParams.get('domain_exact') === '1');
   const [scoreRange, setScoreRange] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -191,10 +198,21 @@ export default function EmailListPage() {
     const urlDomain = searchParams.get('domain') || '';
     if (urlDomain !== domainFilter) {
       setDomainFilter(urlDomain);
+      setDomainExact(searchParams.get('domain_exact') === '1');
       setPage(1);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams.get('domain')]);
+  }, [searchParams.get('domain'), searchParams.get('domain_exact')]);
+
+  // FIX: selectedEmails previously never got cleared on page/filter/sort
+  // changes (unlike DomainsPage's `selected`, which already does this).
+  // A selection made under one filter view silently persisted after
+  // switching filters/pages — "Delete Selected (N)" would then delete rows
+  // no longer visible on screen, with no indication of what was about to
+  // be deleted.
+  useEffect(() => {
+    setSelectedEmails(new Set());
+  }, [page, search, statusFilter, domainFilter, scoreRange, dateFrom, dateTo, flaggedFilter, reasonFilter, sortConfig.key, sortConfig.direction]);
 
   const { data: stats } = useQuery({
     queryKey: ['dashboard-stats', 7],
@@ -218,6 +236,7 @@ export default function EmailListPage() {
       search,
       statusFilter,
       domainFilter,
+      domainExact,
       scoreRange,
       dateFrom,
       dateTo,
@@ -233,6 +252,7 @@ export default function EmailListPage() {
         search: search || undefined,
         status: statusFilter || undefined,
         domain: domainFilter || undefined,
+        domain_exact: domainFilter && domainExact ? true : undefined,
         score_min: scoreMin,
         score_max: scoreMax,
         date_from: dateFrom || undefined,
@@ -263,7 +283,13 @@ export default function EmailListPage() {
   const safeCount = stats?.bucket_counts?.safe || 0;
   const riskyCount = stats?.bucket_counts?.risky || 0;
   const unsafeCount = stats?.bucket_counts?.unsafe || 0;
-  const pct = (n) => (totalEmails > 0 ? ((n / totalEmails) * 100).toFixed(1) : '0.0');
+  // FIX: was dividing by totalEmails (every row, including processing/error
+  // ones still in flight) — backend's own trust_score (/dashboard/stats)
+  // and DomainsPage's safePct/riskyUnsafePct both divide by safe+risky+unsafe
+  // only, so this page's KPI percentages could visibly disagree with those
+  // whenever there were active/errored verifications in the system.
+  const classifiedTotal = safeCount + riskyCount + unsafeCount;
+  const pct = (n) => (classifiedTotal > 0 ? ((n / classifiedTotal) * 100).toFixed(1) : '0.0');
 
   const handleSelectAll = () => {
     if (selectAll) {
@@ -327,6 +353,7 @@ export default function EmailListPage() {
     if (search) filters.search = search;
     if (statusFilter) filters.status = statusFilter;
     if (domainFilter) filters.domain = domainFilter;
+    if (domainFilter && domainExact) filters.domain_exact = true;
     if (scoreMin !== undefined) filters.score_min = scoreMin;
     if (scoreMax !== undefined) filters.score_max = scoreMax;
     if (dateFrom) filters.date_from = dateFrom;
@@ -349,6 +376,7 @@ export default function EmailListPage() {
   const handleClearFilters = () => {
     setStatusFilter('');
     setDomainFilter('');
+    setDomainExact(false);
     setScoreRange('');
     setDateFrom('');
     setDateTo('');
@@ -528,7 +556,7 @@ export default function EmailListPage() {
                   id="domain-filter"
                   type="text"
                   value={domainFilter}
-                  onChange={(e) => { setDomainFilter(e.target.value); setPage(1); }}
+                  onChange={(e) => { setDomainFilter(e.target.value); setDomainExact(false); setPage(1); }}
                   placeholder="All Domains"
                   className="input w-full"
                 />
@@ -556,7 +584,9 @@ export default function EmailListPage() {
                   onChange={(e) => {
                     setFlaggedFilter(e.target.value);
                     setPage(1);
-                    setSearchParams(e.target.value ? { filter: 'flagged' } : {});
+                    const next = new URLSearchParams(searchParams);
+                    if (e.target.value) next.set('filter', 'flagged'); else next.delete('filter');
+                    setSearchParams(next);
                   }}
                   className="input w-full"
                 >
@@ -646,7 +676,7 @@ export default function EmailListPage() {
             <Mail className="h-16 w-16 text-[var(--foreground)]/20 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-[var(--foreground)] mb-2">No emails found</h3>
             <p className="text-[var(--foreground)]/60">
-              {search || statusFilter || domainFilter || flaggedFilter || reasonFilter
+              {search || statusFilter || domainFilter || scoreRange || dateFrom || dateTo || flaggedFilter || reasonFilter
                 ? 'Try adjusting your filters'
                 : 'Upload emails via Bulk Upload to get started'}
             </p>
@@ -661,7 +691,6 @@ export default function EmailListPage() {
                       <th
                         key={col.key}
                         className={`px-4 py-3.5 text-left text-xs font-semibold text-[var(--foreground)]/50 uppercase tracking-wider ${col.width}`}
-                        style={{ minWidth: col.width }}
                         scope="col"
                       >
                         {col.key === 'select' ? (
@@ -723,18 +752,22 @@ export default function EmailListPage() {
                         </div>
                       </td>
                       <td className="px-4 py-3.5">
-                        <a
-                          href={`https://${email.domain}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-[var(--accent)] hover:underline transition-colors flex items-center gap-1"
-                        >
-                          {email.domain}
-                          <ExternalLink className="h-3 w-3 opacity-50" />
-                        </a>
+                        {email.domain ? (
+                          <a
+                            href={`https://${email.domain}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[var(--accent)] hover:underline transition-colors flex items-center gap-1"
+                          >
+                            {email.domain}
+                            <ExternalLink className="h-3 w-3 opacity-50" />
+                          </a>
+                        ) : (
+                          <span className="text-[var(--foreground)]/40">—</span>
+                        )}
                       </td>
                       <td className="px-4 py-3.5">
-                        <StatusBadge status={email.status} />
+                        <StatusBadge email={email} />
                       </td>
                       <td className="px-4 py-3.5 max-w-[220px]">
                         <span

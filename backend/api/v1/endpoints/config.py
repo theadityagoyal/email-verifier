@@ -33,6 +33,14 @@ def get_status_mapping():
             "riskyStatuses": [s.value for s in RISKY_STATUSES],
             "unsafeStatuses": [s.value for s in UNSAFE_STATUSES],
             "processingStatus": "processing",
+            # FIX: bucket_case() in dashboard.py has always had a distinct
+            # (Email.status == EmailStatus.error, "error") branch (checked
+            # before the final else_="unsafe"). This mirror never exposed
+            # it, so frontend's getStatusBucket() fell through to its own
+            # default->"unsafe" for every error-status email, misclassifying
+            # pipeline-crash rows as "unsafe" (implying a confirmed-bad
+            # address) instead of their own distinct "error" bucket.
+            "errorStatus": "error",
             # Rules in priority order (same as CASE expression order)
             "bucketRules": [
                 {
@@ -49,7 +57,8 @@ def get_status_mapping():
                 {"condition": "risky_status", "bucket": "risky", "priority": 4},
                 {"condition": "unsafe_status", "bucket": "unsafe", "priority": 5},
                 {"condition": "processing", "bucket": "processing", "priority": 6},
-                {"condition": "default", "bucket": "unsafe", "priority": 7},
+                {"condition": "error_status", "bucket": "error", "priority": 7},
+                {"condition": "default", "bucket": "unsafe", "priority": 8},
             ],
         },
         # ---- Domain verdict thresholds (matches dashboard.py _verdict) ----
@@ -64,6 +73,7 @@ def get_status_mapping():
             "risky": "Risky",
             "unsafe": "Unsafe",
             "processing": "Processing",
+            "error": "Verification Error",
             "cancelled": "Cancelled",
             "unknown": "Unknown",
         },
@@ -73,6 +83,7 @@ def get_status_mapping():
             "risky": "AlertTriangle",
             "unsafe": "XCircle",
             "processing": "Loader2",
+            "error": "AlertOctagon",
             "cancelled": "Ban",
             "unknown": "HelpCircle",
         },

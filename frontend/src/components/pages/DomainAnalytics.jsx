@@ -35,7 +35,7 @@ export default function DomainAnalytics({
               <div
                 key={d.domain}
                 className="flex items-center justify-between gap-3 rounded-xl border border-[var(--muted)] px-3 py-2.5 cursor-pointer hover:bg-[var(--muted)]/30 transition-colors"
-                onClick={() => navigate?.(`/emails?domain=${encodeURIComponent(d.domain)}`)}
+                onClick={() => navigate?.(`/emails?domain=${encodeURIComponent(d.domain)}&domain_exact=1`)}
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <ShieldAlert className="h-4 w-4 text-red-500 shrink-0" />

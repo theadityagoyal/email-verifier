@@ -82,7 +82,7 @@ export default function DomainTable({
   }, [openMenu, setOpenMenu]);
 
   const goToDomainEmails = (domain) => {
-    navigate(`/emails?domain=${encodeURIComponent(domain)}`);
+    navigate(`/emails?domain=${encodeURIComponent(domain)}&domain_exact=1`);
   };
 
   return (

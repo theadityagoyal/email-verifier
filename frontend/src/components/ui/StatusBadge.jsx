@@ -1,4 +1,4 @@
-import { CheckCircle2, AlertTriangle, XCircle, Loader2, HelpCircle, Ban } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, XCircle, Loader2, HelpCircle, Ban, AlertOctagon } from 'lucide-react';
 import { getStatusBucket, getBucketLabel, getBucketIcon } from '@/utils/statusBucket';
 
 const BUCKET_CLASSES = {
@@ -6,6 +6,10 @@ const BUCKET_CLASSES = {
   risky: 'text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-400/10 border-amber-200 dark:border-amber-400/20',
   unsafe: 'text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-400/10 border-red-200 dark:border-red-400/20',
   processing: 'text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-400/10 border-blue-200 dark:border-blue-400/20',
+  // FIX: bucket 'error' (verification pipeline crashed mid-run) previously
+  // had no entry here — fell back to BUCKET_CLASSES.unknown (plain grey),
+  // indistinguishable from a genuinely unclassified status.
+  error: 'text-purple-700 dark:text-purple-400 bg-purple-50 dark:bg-purple-400/10 border-purple-200 dark:border-purple-400/20',
   cancelled: 'text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-400/10 border-slate-300 dark:border-slate-400/20',
   unknown: 'text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-400/10 border-slate-200 dark:border-slate-400/20',
 };
@@ -15,6 +19,7 @@ const BUCKET_ICONS = {
   risky: AlertTriangle,
   unsafe: XCircle,
   processing: Loader2,
+  error: AlertOctagon,
   cancelled: Ban,
   unknown: HelpCircle,
 };
@@ -54,14 +59,4 @@ export default function StatusBadge({
       <span>{label}</span>
     </span>
   );
-}
-
-export function getStatusBucketFromStatus(status) {
-  const statusLower = (status || '').toLowerCase();
-  if (['verified', 'deliverable', 'trusted', 'probably_valid'].includes(statusLower)) return 'safe';
-  if (['risky', 'unconfirmed', 'uncertain'].includes(statusLower)) return 'risky';
-  if (['invalid', 'undeliverable'].includes(statusLower)) return 'unsafe';
-  if (statusLower === 'processing') return 'processing';
-  if (statusLower === 'cancelled') return 'cancelled';
-  return 'unknown';
 }

@@ -8,6 +8,7 @@ import { listDomains, getDomainOverview, getDashboardStats, getNewDomainsPerDay,
 import { reportError } from '@/utils/errorReporter';
 import { formatChartLabelIST } from '@/utils/dateUtils';
 import { useIsTabVisible } from '@/hooks/useIsTabVisible';
+import { getConfig } from '@/utils/statusBucket';
 
 import DomainHeader from '@/components/pages/DomainHeader';
 import DomainStats from '@/components/pages/DomainStats';
@@ -46,6 +47,11 @@ export default function DomainsPage() {
   });
   const [size, setSize] = useState(20);
   const [search, setSearch] = useState(() => searchParams.get('search') || '');
+  // FIX: raw textbox value, committed into the debounced `search` (used by
+  // the query key + URL sync) after 400ms — mirrors EmailListPage's pattern.
+  // Previously `search` itself was bound directly to the input, so every
+  // keystroke triggered an immediate, uncancelled /domains request.
+  const [searchInput, setSearchInput] = useState(() => searchParams.get('search') || '');
 
   const [sortBy, setSortBy] = useState(() => {
     const fromUrl = searchParams.get('sort_by');
@@ -70,11 +76,33 @@ export default function DomainsPage() {
   const [mxFilter, setMxFilter] = useState('All');
   const [flagsFilter, setFlagsFilter] = useState('All');
   const [minEmails, setMinEmails] = useState('');
+  // FIX: same debounce pattern as searchInput above — min_emails is a
+  // typed number field and had the identical per-keystroke request problem.
+  const [minEmailsInput, setMinEmailsInput] = useState('');
 
-  const handleSearchChange = (value) => {
-    setSearch(value);
-    setPage(1);
+  const handleSearchInputChange = (value) => {
+    setSearchInput(value);
   };
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSearch(searchInput);
+      setPage(1);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+
+  const handleMinEmailsInputChange = (value) => {
+    setMinEmailsInput(value);
+  };
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setMinEmails(minEmailsInput);
+      setPage(1);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [minEmailsInput]);
 
   const handleSort = useCallback((field, nextOrder) => {
     if (nextOrder === null) {
@@ -92,7 +120,6 @@ export default function DomainsPage() {
   const handleRiskFilterChange = (v) => { setRiskFilter(v); setPage(1); };
   const handleMxFilterChange = (v) => { setMxFilter(v); setPage(1); };
   const handleFlagsFilterChange = (v) => { setFlagsFilter(v); setPage(1); };
-  const handleMinEmailsChange = (v) => { setMinEmails(v); setPage(1); };
 
   useEffect(() => {
     setSelected([]);
@@ -122,7 +149,7 @@ export default function DomainsPage() {
     const urlSortOrder = searchParams.get('sort_order');
 
     if (Number.isFinite(urlPage) && urlPage > 0 && urlPage !== page) setPage(urlPage);
-    if (urlSearch !== search) setSearch(urlSearch);
+    if (urlSearch !== search) { setSearch(urlSearch); setSearchInput(urlSearch); }
     if (urlSortBy && SORTABLE_FIELDS.has(urlSortBy) && urlSortBy !== sortBy) setSortBy(urlSortBy);
     if ((urlSortOrder === 'asc' || urlSortOrder === 'desc') && urlSortOrder !== sortOrder) setSortOrder(urlSortOrder);
     // Only react to actual URL changes (popstate), not our own pushes above —
@@ -176,7 +203,7 @@ export default function DomainsPage() {
 
   const { data: topRiskData } = useQuery({
     queryKey: ['domains-top-risk'],
-    queryFn: () => listDomains({ page: 1, size: 5, sort_by: 'risk_percent', sort_order: 'desc', min_emails: 5 }),
+    queryFn: () => listDomains({ page: 1, size: 5, sort_by: 'risk_percent', sort_order: 'desc', min_emails: getConfig().domainVerdictThresholds.lowSampleThreshold }),
     // FIX: "Top 5 Riskiest Domains" card — same story, was static after
     // first load.
     refetchInterval: isTabVisible ? DOMAINS_REFETCH_INTERVAL_MS : false,
@@ -226,6 +253,7 @@ export default function DomainsPage() {
     setMxFilter('All');
     setFlagsFilter('All');
     setMinEmails('');
+    setMinEmailsInput('');
     setPage(1);
   };
 
@@ -346,16 +374,16 @@ export default function DomainsPage() {
       />
 
       <DomainFilters
-        search={search}
-        setSearch={handleSearchChange}
+        search={searchInput}
+        setSearch={handleSearchInputChange}
         riskFilter={riskFilter}
         setRiskFilter={handleRiskFilterChange}
         mxFilter={mxFilter}
         setMxFilter={handleMxFilterChange}
         flagsFilter={flagsFilter}
         setFlagsFilter={handleFlagsFilterChange}
-        minEmails={minEmails}
-        setMinEmails={handleMinEmailsChange}
+        minEmails={minEmailsInput}
+        setMinEmails={handleMinEmailsInputChange}
         showFilters={showFilters}
         setShowFilters={setShowFilters}
         clearFilters={clearFilters}

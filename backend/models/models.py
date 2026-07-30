@@ -92,6 +92,11 @@ class Email(Base):
     spf_valid = Column(Boolean, nullable=True)             # SPF record exists (presence only)
     dmarc_valid = Column(Boolean, nullable=True)           # DMARC record exists (presence only)
 
+    # ── Terminal error state (see migration a9c4d7e2f5b1) ──
+    # Human-readable message set only when status == EmailStatus.error
+    # (verification pipeline crashed mid-run). NULL for every other status.
+    verification_error = Column(Text, nullable=True)
+
     __table_args__ = (
         CheckConstraint('score >= 0 AND score <= 100', name='check_score_range'),
         Index('ix_emails_domain_status', 'domain', 'status'),

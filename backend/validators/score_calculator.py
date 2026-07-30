@@ -470,6 +470,14 @@ def determine_sub_status(
             return "smtp_rejected"
         if smtp_outcome == "mailbox_full":
             return "smtp_mailbox_full"
+        if smtp_outcome == "unknown":
+            # FIX: previously had no explicit branch here, so a non-trusted
+            # domain with an unrecognized/unclassified SMTP response fell
+            # through to the bottom fallback (`return "smtp_rejected"`),
+            # which overstates certainty — "rejected" implies the server
+            # confirmed the mailbox doesn't exist, when really we just
+            # couldn't classify what happened.
+            return "unknown_error"
         if smtp_outcome == "valid":
             # Task 1: EVASION_SUSPECTED — probe mismatch detected
             if probe_mismatch:

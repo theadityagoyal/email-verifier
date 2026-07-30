@@ -474,7 +474,7 @@ function RecentFlaggedActivity({ items, navigate }) {
             return (
               <div
                 key={email.email}
-                onClick={() => navigate(`/emails?domain=${encodeURIComponent(email.domain || '')}`)}
+                onClick={() => navigate(`/emails?domain=${encodeURIComponent(email.domain || '')}&domain_exact=1`)}
                 className="flex items-center gap-3 rounded-xl border border-[var(--muted)] px-3 py-2.5 cursor-pointer transition-colors hover:bg-[var(--muted)]/30"
               >
                 <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${tone.bg}`}>
@@ -530,7 +530,7 @@ function DomainRiskLeaderboard({ items, navigate }) {
             return (
               <tr
                 key={d.domain}
-                onClick={() => navigate(`/emails?domain=${encodeURIComponent(d.domain)}`)}
+                onClick={() => navigate(`/emails?domain=${encodeURIComponent(d.domain)}&domain_exact=1`)}
                 className="cursor-pointer transition-colors hover:bg-[var(--muted)]/20"
               >
                 <td className="py-3 pr-2">

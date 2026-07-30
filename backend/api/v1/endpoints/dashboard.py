@@ -68,6 +68,10 @@ REASON_FILTER_MAP = {
     "invalid_syntax": ["SYNTAX_INVALID"],
     "mx_missing": ["NO_MX_RECORDS"],
     "temp_failure": ["SMTP_TEMP_FAILURE", "SMTP_RATE_LIMITED", "GREYLISTED_UNCONFIRMED", "DNS_TIMEOUT_ASSUMED", "SMTP_AMBIGUOUS_TRUSTED"],
+    # FIX: determine_sub_status() can return "smtp_mailbox_full" (reason_code
+    # SMTP_MAILBOX_FULL) for SmtpOutcome.MAILBOX_FULL, but no filter group
+    # ever included it — those emails had no matching "Reason" filter option.
+    "mailbox_full": ["SMTP_MAILBOX_FULL"],
     "unknown": ["UNKNOWN_ERROR"],
 }
 
@@ -656,6 +660,7 @@ async def list_emails(
     search: str | None = Query(default=None),
     status: str | None = Query(default=None),
     domain: str | None = Query(default=None),
+    domain_exact: bool = Query(default=False, description="If true, match Email.domain exactly instead of substring — used when navigating from a known domain (Domains page, Dashboard) rather than free-text typing"),
     score_min: int | None = Query(default=None, ge=0, le=100),
     score_max: int | None = Query(default=None, ge=0, le=100),
     date_from: str | None = Query(default=None),
@@ -690,7 +695,10 @@ async def list_emails(
                 pass
 
     if domain:
-        query = query.where(Email.domain.ilike(f"%{domain}%"))
+        if domain_exact:
+            query = query.where(func.lower(Email.domain) == domain.lower())
+        else:
+            query = query.where(Email.domain.ilike(f"%{domain}%"))
 
     if score_min is not None:
         query = query.where(Email.score >= score_min)
@@ -700,13 +708,20 @@ async def list_emails(
     if date_from:
         try:
             df = datetime.strptime(date_from, "%Y-%m-%d")
-            query = query.where(Email.created_at >= df)
+            # FIX: was filtering on created_at (first-seen date, immutable
+            # across re-verifications) while the UI labels this "From Date"/
+            # "To Date" directly under a table whose date column is
+            # "Verified" (verified_at, which DOES update on every
+            # re-verification). An email first created weeks ago but
+            # re-verified today wouldn't show up in a "today" filter even
+            # though its displayed "Verified" timestamp said today.
+            query = query.where(Email.verified_at >= df)
         except ValueError:
             pass
     if date_to:
         try:
             dt = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
-            query = query.where(Email.created_at < dt)
+            query = query.where(Email.verified_at < dt)
         except ValueError:
             pass
 
@@ -785,6 +800,7 @@ async def export_emails(
     search: str | None = Query(default=None),
     status: str | None = Query(default=None),
     domain: str | None = Query(default=None),
+    domain_exact: bool = Query(default=False),
     score_min: int | None = Query(default=None, ge=0, le=100),
     score_max: int | None = Query(default=None, ge=0, le=100),
     date_from: str | None = Query(default=None),
@@ -811,7 +827,10 @@ async def export_emails(
                 pass
 
     if domain:
-        query = query.where(Email.domain.ilike(f"%{domain}%"))
+        if domain_exact:
+            query = query.where(func.lower(Email.domain) == domain.lower())
+        else:
+            query = query.where(Email.domain.ilike(f"%{domain}%"))
 
     if score_min is not None:
         query = query.where(Email.score >= score_min)
@@ -821,13 +840,20 @@ async def export_emails(
     if date_from:
         try:
             df = datetime.strptime(date_from, "%Y-%m-%d")
-            query = query.where(Email.created_at >= df)
+            # FIX: was filtering on created_at (first-seen date, immutable
+            # across re-verifications) while the UI labels this "From Date"/
+            # "To Date" directly under a table whose date column is
+            # "Verified" (verified_at, which DOES update on every
+            # re-verification). An email first created weeks ago but
+            # re-verified today wouldn't show up in a "today" filter even
+            # though its displayed "Verified" timestamp said today.
+            query = query.where(Email.verified_at >= df)
         except ValueError:
             pass
     if date_to:
         try:
             dt = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
-            query = query.where(Email.created_at < dt)
+            query = query.where(Email.verified_at < dt)
         except ValueError:
             pass
 

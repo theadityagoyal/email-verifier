@@ -30,6 +30,7 @@ export const SUB_STATUS_LABELS = Object.freeze({
   disposable_domain: { label: 'Disposable Domain', color: 'error', summary: 'Known temporary/throwaway email provider.' },
   role_based_address: { label: 'Role-Based Address', color: 'warning', summary: 'Generic inbox (admin@, support@, etc.) — not a personal mailbox.' },
   smtp_rejected: { label: 'SMTP Rejected', color: 'error', summary: 'Mail server rejected the address (mailbox not found).' },
+  smtp_mailbox_full: { label: 'Mailbox Full', color: 'warning', summary: "The recipient's mailbox is full or over quota — mail may bounce until they clear space." },
   smtp_blocked: { label: 'Blocked by Server', color: 'error', summary: 'Server indicated address is blocked or blacklisted.' },
   smtp_rate_limited: { label: 'Rate Limited', color: 'warning', summary: 'Too many connection attempts — server temporarily unavailable.' },
   smtp_temp_failure: { label: 'Temporary Failure', color: 'warning', summary: 'Server returned a temporary error — may succeed if retried.' },

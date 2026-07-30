@@ -32,12 +32,6 @@ export function scoreColorClass(score) {
   return 'text-red-700 bg-red-100 dark:text-red-400 dark:bg-red-900/20';
 }
 
-export function scoreTextColorClass(score) {
-  if (score >= SCORE_THRESHOLDS.SAFE_MIN) return 'text-success';
-  if (score >= SCORE_THRESHOLDS.RISKY_MIN) return 'text-warning';
-  return 'text-error';
-}
-
 export function riskBarColorClass(riskPercent) {
   if (riskPercent >= RISK_THRESHOLDS.WATCH_MAX) return 'bg-red-500';
   if (riskPercent >= RISK_THRESHOLDS.HEALTHY_MAX) return 'bg-amber-500';
