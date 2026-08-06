@@ -62,20 +62,22 @@ logger = get_logger(__name__)
 # Used ONLY when a verification has actually completed (email_service.py's
 # _persist_result). Full overwrite of every signal column is correct here —
 # this IS the new source of truth for the email.
+# BUGFIX: Added verification_error to INSERT (NULL for success) and
+# ON DUPLICATE KEY UPDATE (NULL to clear any stale error from prior runs).
 _EMAIL_UPSERT_SQL = text("""
     INSERT INTO emails
         (email, domain, status, syntax_valid, domain_exists, mx_found, smtp_valid,
          disposable, role_based, catch_all, score, job_id, verified_at,
          dns_checked_at, smtp_checked_at, smtp_outcome, smtp_response_code,
          sub_status, confidence, reason_code,
-         spf_valid, dmarc_valid,
+         spf_valid, dmarc_valid, verification_error,
          created_at, updated_at)
     VALUES
         (:email, :domain, :status, :syntax_valid, :domain_exists, :mx_found, :smtp_valid,
          :disposable, :role_based, :catch_all, :score, :job_id, :verified_at,
          :dns_checked_at, :smtp_checked_at, :smtp_outcome, :smtp_response_code,
          :sub_status, :confidence, :reason_code,
-         :spf_valid, :dmarc_valid,
+         :spf_valid, :dmarc_valid, NULL,
          :now, :now)
     ON DUPLICATE KEY UPDATE
         domain = VALUES(domain),
@@ -99,6 +101,7 @@ _EMAIL_UPSERT_SQL = text("""
         reason_code = VALUES(reason_code),
         spf_valid = VALUES(spf_valid),
         dmarc_valid = VALUES(dmarc_valid),
+        verification_error = NULL,
         updated_at = VALUES(updated_at)
 """)
 
@@ -127,6 +130,7 @@ def _email_params(result: EmailVerifyResponse, job_id: Optional[str], now: datet
         "reason_code": result.reason_code,
         "spf_valid": result.spf_valid,
         "dmarc_valid": result.dmarc_valid,
+        "verification_error": None,
         "now": now,
     }
 

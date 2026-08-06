@@ -153,7 +153,7 @@ export default function UploadZone({
                   <input
                     type="checkbox"
                     checked={forceFresh}
-                    onChange={onForceFreshChange}
+                    onChange={(e) => onForceFreshChange?.(e.target.checked)}
                     disabled={uploadPending}
                     className="w-4 h-4 rounded border-[var(--muted)] text-[var(--primary)] focus:ring-[var(--primary)] focus:ring-2"
                   />

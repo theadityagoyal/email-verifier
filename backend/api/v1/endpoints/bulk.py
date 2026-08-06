@@ -210,11 +210,12 @@ async def list_jobs(db: AsyncSession = Depends(get_db)):
     """
     Return all bulk upload jobs ordered by newest first.
     Used by the frontend to restore upload history after refresh/navigation.
+    Limited to 500 most recent jobs to prevent unbounded query growth.
     """
     try:
         jobs = (
             await db.execute(
-                select(Job).order_by(desc(Job.created_at))
+                select(Job).order_by(desc(Job.created_at)).limit(500)
             )
         ).scalars().all()
 
@@ -559,7 +560,7 @@ async def export_job_results(
         return StreamingResponse(
             iter([output.getvalue()]),
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename={filename_prefix}verified_{job.file_name}"},
+            headers={"Content-Disposition": f"attachment; filename={filename_prefix}verified_{sanitize_filename(job.file_name)}"},
         )
     except HTTPException:
         raise

@@ -317,6 +317,11 @@ async def verify_email(email: str, job_id: Optional[str] = None, force_fresh: bo
                 smtp_outcome = existing.smtp_outcome
                 smtp_response_code = existing.smtp_response_code
                 smtp_reused = True
+                # BUGFIX: Recompute smtp_ambiguous_trusted from reused smtp_outcome
+                # so scoring matches the fresh-check branch for trusted domains
+                ambiguous_outcomes = {SmtpOutcome.TIMEOUT, SmtpOutcome.GREYLISTED, SmtpOutcome.TEMP_FAILURE, SmtpOutcome.BLOCKED, SmtpOutcome.UNKNOWN}
+                if is_trusted and smtp_outcome in {o.value for o in ambiguous_outcomes}:
+                    smtp_ambiguous_trusted = True
                 logger.info("smtp_reused", email=email, checked_at=str(existing.smtp_checked_at))
             else:
                 # Use shorter timeout for trusted domains

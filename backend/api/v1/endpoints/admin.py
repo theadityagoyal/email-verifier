@@ -30,16 +30,32 @@ from validators.disposable_checker import get_disposable_stats
 router = APIRouter(prefix="/admin", tags=["Admin"])
 logger = get_logger(__name__)
 
+
+def _get_client_ip(request: Request) -> str:
+    """
+    Extract the real client IP from a request behind a reverse proxy (Nginx).
+    Nginx sets X-Forwarded-For (and X-Real-IP) per nginx.conf.
+    We read the FIRST entry of X-Forwarded-For (the original client),
+    falling back to request.client.host if the header is absent.
+    """
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        # X-Forwarded-For can be a comma-separated list: "client, proxy1, proxy2"
+        # The first entry is the original client IP
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 # Rate limiter for admin login attempts (5 attempts per minute to prevent brute force)
 admin_login_rate_limiter = RateLimiter()
 
 
 async def rate_limit_admin_login(request: Request) -> None:
     """Rate limit for admin login endpoint - 5 attempts per minute."""
-    # Use client IP as the key for rate limiting admin login attempts
-    # In a production environment with proxies, you might want to use
-    # X-Forwarded-For or similar headers, but for simplicity we'll use client host
-    client_host = request.client.host if request.client else "unknown"
+    # Use real client IP (respecting X-Forwarded-For from Nginx) as the key
+    # for rate limiting admin login attempts. This prevents shared lockout
+    # across all users when behind a reverse proxy.
+    client_host = _get_client_ip(request)
     key = f"admin_login:{client_host}"
 
     allowed, retry_after = admin_login_rate_limiter.check(key, 5, 60)  # 5 attempts per 60 seconds
