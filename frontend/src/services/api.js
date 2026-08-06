@@ -199,10 +199,6 @@ export const retryJob = (jobId) =>
 export const getDashboardStats = (days = 7) =>
   apiEnhanced.get('/dashboard/stats', { params: { days } }).then((r) => r.data)
 
-// UNUSED — not called anywhere in current UI as of audit, confirm before removing
-export const getTrends = (days = 30) =>
-  apiEnhanced.get('/dashboard/trends', { params: { days } }).then((r) => r.data)
-
 export const getNewDomainsPerDay = (days = 7) =>
   apiEnhanced.get('/dashboard/domains/new-per-day', { params: { days } }).then((r) => r.data)
 
@@ -311,6 +307,9 @@ export const getApiKeyUsage = (prefix, days = 30) =>
     params: { days },
     headers: getAdminHeaders(),
   }).then((r) => r.data)
+
+export const refreshDisposableList = () =>
+  apiEnhanced.post('/admin/disposable-list/refresh', {}, { headers: getAdminHeaders() }).then((r) => r.data)
 
 // ── Notifications ────────────────────────────────────────────────────────
 // Global (single-tenant) in-app notifications powering the header bell.

@@ -8,6 +8,7 @@ import StackedBarChart from '@/components/charts/StackedBarChart';
 import { getDashboardStats, listEmails, listDomains } from '@/services/api';
 import { APP_USER } from '@/utils/appConfig';
 import { useIsTabVisible } from '@/hooks/useIsTabVisible';
+import { getConfig } from '@/utils/statusBucket';
 
 import Button from '@/components/ui/Button';
 import {
@@ -1002,7 +1003,7 @@ export default function DashboardPage() {
   // here are real, not re-derived from the coarser dashboard-stats top_domains.
   const { data: leaderboardData } = useQuery({
     queryKey: ['dashboard-domain-leaderboard'],
-    queryFn: () => listDomains({ page: 1, size: 5, sort_by: 'risk_percent', sort_order: 'desc', min_emails: 5 }),
+    queryFn: () => listDomains({ page: 1, size: 5, sort_by: 'risk_percent', sort_order: 'desc', min_emails: getConfig().domainVerdictThresholds.lowSampleThreshold }),
     refetchInterval: isTabVisible ? 15000 : false,
     refetchOnWindowFocus: true,
   });

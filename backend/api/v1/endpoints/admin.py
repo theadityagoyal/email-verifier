@@ -5,6 +5,7 @@ Auth: POST /admin/login exchanges ADMIN_PASSWORD (from .env) for a stateless
 signed token (see utils/admin_auth.py), valid 24 hours. Every other endpoint
 here requires that token via the X-Admin-Token header (`require_admin`).
 """
+import secrets
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
@@ -25,7 +26,7 @@ from utils.api_key import generate_api_key
 from utils.logging import get_logger
 from utils.rate_limiter import RateLimiter
 from utils.timezone import utc_now_naive
-from validators.disposable_checker import get_disposable_stats
+from validators.disposable_checker import get_disposable_stats, refresh_disposable_list
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 logger = get_logger(__name__)
@@ -74,7 +75,7 @@ async def rate_limit_admin_login(request: Request) -> None:
 @router.post("/login", response_model=AdminLoginResponse)
 async def admin_login(request: Request, payload: AdminLoginRequest, _: None = Depends(rate_limit_admin_login)):
     """Exchange the admin password for a 24h signed token."""
-    if not settings.ADMIN_PASSWORD or payload.password != settings.ADMIN_PASSWORD:
+    if not settings.ADMIN_PASSWORD or not secrets.compare_digest(payload.password, settings.ADMIN_PASSWORD):
         logger.warning("admin_login_failed")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin password")
 
@@ -249,3 +250,10 @@ async def get_api_key_usage(
 @router.get("/disposable-list-health", dependencies=[Depends(require_admin)])
 async def disposable_list_health():
     return get_disposable_stats()
+
+
+@router.post("/disposable-list/refresh", dependencies=[Depends(require_admin)])
+async def disposable_list_refresh():
+    """Manually trigger a refresh of the disposable domain list from upstream sources."""
+    success = refresh_disposable_list()
+    return {"message": "refreshed", "success": success}

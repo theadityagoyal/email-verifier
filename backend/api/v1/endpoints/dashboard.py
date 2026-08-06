@@ -10,7 +10,7 @@ from models.database import get_db
 from models.models import Email, Domain, Job, EmailStatus, JobStatus
 from schemas.schemas import (
     DashboardStats, PaginatedEmailsResponse, DomainStats,
-    EmailVerifyResponse, VerificationTrend,
+    EmailVerifyResponse,
     ActiveJob, DomainOverview, PaginatedDomainsResponse,
     FlaggedOverview, DomainSummary,
 )
@@ -63,7 +63,6 @@ REASON_FILTER_MAP = {
     "catch_all": ["CATCH_ALL_MASKED"],
     "disposable": ["DISPOSABLE_DOMAIN"],
     "role_based": ["ROLE_BASED_ADDRESS"],
-    "mailbox_not_found": ["SMTP_REJECTED", "SMTP_BLOCKED"],
     "domain_not_found": ["DOMAIN_NOT_FOUND"],
     "invalid_syntax": ["SYNTAX_INVALID"],
     "mx_missing": ["NO_MX_RECORDS"],
@@ -492,7 +491,7 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365), db: AsyncSessi
         "catch_all": flag_row[2] or 0,
     }
 
-    # NOTE: top_domains result - confirm frontend actually uses this before optimizing away, DashboardPage.jsx currently uses separate listDomains() call instead for leaderboard
+    # Build domain_map for _compute_domain_summary (used by domain_summary field)
     domain_bucket_rows = (
         await db.execute(
             select(Email.domain, bucket_expr.label("bucket"), func.count(Email.id))
@@ -508,11 +507,6 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365), db: AsyncSessi
         )
         entry[bucket] = count
         entry["total"] += count
-
-    top_domains = sorted(domain_map.values(), key=lambda d: d["total"], reverse=True)[:30]
-    for d in top_domains:
-        denom_d = d["safe"] + d["risky"] + d["unsafe"]
-        d["risk_pct"] = round(((d["risky"] + d["unsafe"]) / denom_d) * 100) if denom_d > 0 else 0
 
     start_date = utc_now_naive() - timedelta(days=days)
     daily_rows = (
@@ -566,7 +560,6 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365), db: AsyncSessi
         bucket_counts=bucket_counts,
         trust_score=trust_score,
         flagged_counts=flagged_counts,
-        top_domains=top_domains,
         daily_volume=daily_volume,
         active_job=active_job,
         per_status_trend=per_status_trend,
@@ -579,44 +572,6 @@ async def get_dashboard_stats(days: int = Query(7, ge=1, le=365), db: AsyncSessi
         generated_at=utc_now_naive(),
         last_sync_at=last_sync_at,
     )
-
-
-# UNUSED - not called anywhere in current UI as of audit, confirm before removing
-@router.get("/dashboard/trends", response_model=list[VerificationTrend])
-async def get_trends(
-    days: int = Query(default=30, ge=1, le=90),
-    db: AsyncSession = Depends(get_db),
-):
-    rows = (
-        await db.execute(
-            select(
-                cast(Email.verified_at, Date).label("date"),
-                Email.status,
-                func.count(Email.id).label("cnt"),
-            )
-            .where(Email.verified_at.isnot(None))
-            .group_by(cast(Email.verified_at, Date), Email.status)
-            .order_by(cast(Email.verified_at, Date))
-            .limit(days * 3)
-        )
-    ).all()
-
-    pivot: dict[str, dict] = {}
-    for r in rows:
-        key = str(r.date)
-        if key not in pivot:
-            pivot[key] = {"date": key, "verified": 0, "invalid": 0, "risky": 0}
-        if r.status == EmailStatus.verified:
-            pivot[key]["verified"] += r.cnt
-        elif r.status == EmailStatus.invalid:
-            pivot[key]["invalid"] += r.cnt
-        elif r.status == EmailStatus.risky:
-            pivot[key]["risky"] += r.cnt
-
-    return [VerificationTrend(**v) for v in pivot.values()]
-
-
-@router.get("/dashboard/domains/new-per-day")
 async def get_new_domains_per_day(
     days: int = Query(default=7, ge=1, le=90),
     db: AsyncSession = Depends(get_db),
