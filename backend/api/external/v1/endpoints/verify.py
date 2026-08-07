@@ -115,6 +115,13 @@ async def external_verify_email(
                 "role_based": result.role_based,
                 "catch_all": result.catch_all,
                 "verified_at": result.verified_at.isoformat() if result.verified_at else None,
+                "sub_status": result.sub_status,
+                "confidence": result.confidence,
+                "reason_code": result.reason_code,
+                "smtp_outcome": result.smtp_outcome,
+                "smtp_response_code": result.smtp_response_code,
+                "spf_valid": result.spf_valid,
+                "dmarc_valid": result.dmarc_valid,
                 "reuse": {
                     "record_existed": result.record_existed,
                     "dns_reused": result.dns_reused,

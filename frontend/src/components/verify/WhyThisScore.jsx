@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import { HelpCircle, CheckCircle2, XCircle, MinusCircle, Info } from 'lucide-react';
-import { getSubStatusInfo, CONFIDENCE_LABELS } from './statusConfig';
+import { getSubStatusInfo, CONFIDENCE_LABELS, STATUS_COLOR_CLASSES } from './statusConfig';
 
 const LINE_ICON = {
   verified: { Icon: CheckCircle2, className: 'text-success' },
@@ -46,7 +46,7 @@ export default function WhyThisScore({ resolvedChecks, recommendationLabel, subS
           <div className="flex items-center gap-2 mb-2">
             <span className="text-sm font-medium text-[var(--foreground)]">Details:</span>
             <span
-              className={`text-xs px-2 py-0.5 rounded-full bg-[var(--${subStatusInfo.color})]/10 text-[var(--${subStatusInfo.color})] border border-[var(--${subStatusInfo.color})]/30`}
+              className={`text-xs px-2 py-0.5 rounded-full ${(STATUS_COLOR_CLASSES[subStatusInfo.color] || STATUS_COLOR_CLASSES.neutral).bg} ${(STATUS_COLOR_CLASSES[subStatusInfo.color] || STATUS_COLOR_CLASSES.neutral).text} border ${(STATUS_COLOR_CLASSES[subStatusInfo.color] || STATUS_COLOR_CLASSES.neutral).border}`}
             >
               {subStatusInfo.label}
             </span>
@@ -60,7 +60,7 @@ export default function WhyThisScore({ resolvedChecks, recommendationLabel, subS
           <div className="flex items-center gap-2 mb-2">
             <span className="text-sm font-medium text-[var(--foreground)]">Confidence:</span>
             <span
-              className={`text-xs px-2 py-0.5 rounded-full bg-[var(--${confidenceInfo.color})]/10 text-[var(--${confidenceInfo.color})] border border-[var(--${confidenceInfo.color})]/30`}
+              className={`text-xs px-2 py-0.5 rounded-full ${(STATUS_COLOR_CLASSES[confidenceInfo.color] || STATUS_COLOR_CLASSES.neutral).bg} ${(STATUS_COLOR_CLASSES[confidenceInfo.color] || STATUS_COLOR_CLASSES.neutral).text} border ${(STATUS_COLOR_CLASSES[confidenceInfo.color] || STATUS_COLOR_CLASSES.neutral).border}`}
             >
               {confidenceInfo.label}
             </span>

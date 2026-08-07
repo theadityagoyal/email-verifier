@@ -4,6 +4,36 @@ from datetime import datetime, date
 from models.models import EmailStatus, JobStatus, NotificationType, NotificationPriority
 
 
+# ── Dashboard component schemas ──────────────────────────────────────────────
+
+class FlaggedOverview(BaseModel):
+    """Overview of flagged emails (disposable, role-based, catch-all) for the dashboard."""
+    total_flagged: int
+    total_flagged_trend_pct: float
+    high_priority: int
+    high_priority_trend_pct: float
+    flag_rate: float
+    flag_rate_trend_pct: float
+    last_7_days: int
+    last_7_days_trend_pct: float
+
+    model_config = {"from_attributes": True}
+
+
+class DomainSummary(BaseModel):
+    """Summary statistics for domains across the dashboard."""
+    avg_reputation: int
+    avg_reputation_trend_pct: float
+    high_risk_count: int
+    high_risk_trend_pct: float
+    total_domains: int
+    total_domains_trend_pct: float
+    improving_count: int
+    improving_trend_pct: float
+
+    model_config = {"from_attributes": True}
+
+
 # ── Request schemas ──────────────────────────────────────────────────────────
 
 class EmailVerifyRequest(BaseModel):
@@ -239,6 +269,91 @@ class DailyVolumeStats(BaseModel):
         return v
 
 
+class ActiveJob(BaseModel):
+    job_id: str
+    file_name: Optional[str] = None
+    progress_percent: int
+    processed: int
+    total: int
+
+    model_config = {"from_attributes": True}
+
+    @field_validator('progress_percent')
+    @classmethod
+    def progress_percent_must_be_valid(cls, v):
+        if not 0 <= v <= 100:
+            raise ValueError('Progress percent must be between 0 and 100')
+        return v
+
+    @field_validator('processed', 'total')
+    @classmethod
+    def count_must_be_non_negative(cls, v):
+        if v < 0:
+            raise ValueError('Count must be non-negative')
+        return v
+
+
+class FlaggedOverview(BaseModel):
+    """Overview of flagged emails (disposable, role-based, catch-all) for the dashboard."""
+    total_flagged: int
+    total_flagged_trend_pct: float
+    high_priority: int
+    high_priority_trend_pct: float
+    flag_rate: float
+    flag_rate_trend_pct: float
+    last_7_days: int
+    last_7_days_trend_pct: float
+
+    model_config = {"from_attributes": True}
+
+
+class DomainSummary(BaseModel):
+    """Summary statistics for domains across the dashboard."""
+    avg_reputation: int
+    avg_reputation_trend_pct: float
+    high_risk_count: int
+    high_risk_trend_pct: float
+    total_domains: int
+    total_domains_trend_pct: float
+    improving_count: int
+    improving_trend_pct: float
+
+    model_config = {"from_attributes": True}
+
+
+class DomainOverview(BaseModel):
+    """High-level overview of all domains for the dashboard."""
+    total_domains: int
+    total_emails: int
+    safe: int
+    risky: int
+    unsafe: int
+    processing: int
+    error: int
+    flagged_domains: int
+    disposable_domains: int
+    catch_all_domains: int
+    no_mx_domains: int
+    new_domains_count: int
+    average_risk_percent: float
+    average_trust_score: int
+
+    model_config = {"from_attributes": True}
+
+
+class PaginatedDomainsResponse(BaseModel):
+    """Paginated response for domain listings."""
+    items: List[DomainStats]
+    total: int
+    page: int
+    size: int
+    pages: int
+    sort_by: Optional[str] = None
+    sort_order: str = "desc"
+
+    model_config = {"from_attributes": True}
+
+
 class DashboardStats(BaseModel):
     total_emails: int
     per_status_counts: Dict[str, int]  # verified, deliverable, trusted, probably_valid, risky, unconfirmed, uncertain, invalid, undeliverable, processing, error
@@ -271,30 +386,6 @@ class DashboardStats(BaseModel):
     def trust_score_must_be_valid(cls, v):
         if not 0 <= v <= 100:
             raise ValueError('Trust score must be between 0 and 100')
-        return v
-
-
-class ActiveJob(BaseModel):
-    job_id: str
-    file_name: Optional[str] = None
-    progress_percent: int
-    processed: int
-    total: int
-
-    model_config = {"from_attributes": True}
-
-    @field_validator('progress_percent')
-    @classmethod
-    def progress_percent_must_be_valid(cls, v):
-        if not 0 <= v <= 100:
-            raise ValueError('Progress percent must be between 0 and 100')
-        return v
-
-    @field_validator('processed', 'total')
-    @classmethod
-    def count_must_be_non_negative(cls, v):
-        if v < 0:
-            raise ValueError('Count must be non-negative')
         return v
 
 
