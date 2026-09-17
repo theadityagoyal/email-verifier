@@ -19,7 +19,7 @@ from utils.file_utils import read_upload_file, FileReadError, SUPPORTED_EXTENSIO
 
 # Constants
 MAX_FILE_SIZE_MB = 50
-UPLOAD_BASE_DIR = "/tmp/uploads"
+UPLOAD_BASE_DIR = "/app/uploads_data"
 
 
 # ── Export filter buckets ────────────────────────────────────────────────
