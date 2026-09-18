@@ -31,7 +31,7 @@ router = APIRouter(tags=["External API - Bulk"])
 logger = get_logger(__name__)
 
 MAX_FILE_SIZE_MB = 50
-UPLOAD_BASE_DIR = "/app/uploads_data"
+UPLOAD_BASE_DIR = "/uploads_data"
 
 
 def _read_file(content: bytes, filename: str) -> pd.DataFrame:

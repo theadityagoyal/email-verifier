@@ -415,7 +415,7 @@ def process_bulk_job_sync(job_id: str, s3_key: str, email_col: str = "email", fo
         if s3_key.startswith("local:"):
             path_part = s3_key.replace("local:", "")
             job_id_part, filename = path_part.split("/", 1)
-            filepath = f"/app/uploads_data/{job_id_part}/{filename}"
+            filepath = f"/uploads_data/{job_id_part}/{filename}"
             with open(filepath, "rb") as f:
                 raw = f.read()
             filename_for_parsing = filename
