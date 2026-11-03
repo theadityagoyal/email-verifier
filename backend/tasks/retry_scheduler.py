@@ -77,13 +77,14 @@ BATCH_SIZE = 50
 POLL_INTERVAL = 30
 
 # Max concurrent retry verifications (subset of executor workers).
-MAX_CONCURRENT_RETRIES = 5
+# Conservative while draining a large backlog concentrated on a few MX hosts.
+MAX_CONCURRENT_RETRIES = 2
 
 # Max retry tasks submitted-but-not-finished at any time (running + waiting on
 # the semaphore). The executor is SHARED with bulk jobs, so this keeps retries
 # from flooding its FIFO queue / starving bulk work, and keeps queue wait well
 # below LEASE_SECONDS.
-MAX_INFLIGHT_RETRIES = 10
+MAX_INFLIGHT_RETRIES = 4
 
 # Lease duration: a claimed row is hidden from the poller this long. If the
 # worker crashes/hangs the row becomes due again automatically afterwards.
@@ -239,6 +240,12 @@ async def _persist_final_result(
         probe_mismatch=probe_mismatch,
     )
 
+    # NOTE: determine_status() does NOT accept probe_mismatch (its signature is
+    # syntax_valid, domain_exists, mx_found, smtp_valid, disposable, catch_all,
+    # score, domain). The probe_mismatch cap is already applied inside
+    # calculate_score(), and status is derived from that score. Passing it here
+    # raised TypeError on every final outcome. Same call shape as
+    # services/email_service.verify_email().
     status = determine_status(
         syntax_valid=syntax_valid,
         domain_exists=domain_exists,
@@ -248,7 +255,6 @@ async def _persist_final_result(
         catch_all=catch_all,
         score=score,
         domain=domain,
-        probe_mismatch=probe_mismatch,
     )
 
     sub_status = determine_sub_status(
