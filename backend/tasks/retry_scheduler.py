@@ -1,13 +1,18 @@
 """
 Greylisting-aware delayed retry scheduler.
 
-Polls the smtp_retry_queue table every ~30s, picks up pending rows whose
+Polls the smtp_retry_queue table every ~30s, claims (leases) pending rows whose
 next_retry_at <= now, and re-verifies them via SMTP. Uses the existing
 ThreadPoolExecutor + per-thread event loop pattern (same as bulk_processor.py)
 so it runs entirely within the FastAPI process — no Celery, no APScheduler,
 no extra dependencies.
 
 Flow per retry:
+  0) CLAIM: rows are leased in the poll loop BEFORE submit — next_retry_at is
+     pushed LEASE_SECONDS into the future inside the same transaction that
+     fetched them. Without this, status stays 'pending' and the same oldest
+     BATCH_SIZE rows get re-picked every cycle (head-of-line blocking). If a
+     worker crashes/hangs, the row simply becomes due again after the lease.
   1) Acquire per-email verification lock (utils/verification_lock.py) —
      prevents concurrent verifications (original job + retry + manual re-check)
   2) Re-run SMTP against stored mx_host first; if connection error, fall back
@@ -20,6 +25,12 @@ Flow per retry:
         upsert final result to emails table, mark queue row 'completed'
   5) Else (max attempts exhausted):
         upsert final 'greylisted_unconfirmed' to emails table, mark queue row 'failed'
+  6) Unexpected exception: log it, and re-queue with backoff if attempts remain
+     (only mark 'failed' when attempts are exhausted).
+
+Concurrency: a module-level threading.BoundedSemaphore limits concurrent retry
+verifications. asyncio primitives are NOT used for this because every executor
+thread owns its own event loop and asyncio primitives are not cross-loop safe.
 
 All retries fire for ANY verification source (single API, external API, bulk)
 because they are enqueued from verify_email() itself.
@@ -29,6 +40,7 @@ import asyncio
 import threading
 import time
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import List, Optional
 
 from sqlalchemy import select, update
@@ -57,8 +69,8 @@ from utils.executor import get_executor
 
 logger = get_logger(__name__)
 
-# How many rows to pick up per polling cycle (prevents one huge batch from
-# starving the executor if many retries come due at once).
+# How many rows to pick up per polling cycle (upper bound — actual fetch size
+# is also capped by free in-flight capacity, see MAX_INFLIGHT_RETRIES).
 BATCH_SIZE = 50
 
 # Polling interval in seconds.
@@ -67,18 +79,26 @@ POLL_INTERVAL = 30
 # Max concurrent retry verifications (subset of executor workers).
 MAX_CONCURRENT_RETRIES = 5
 
+# Max retry tasks submitted-but-not-finished at any time (running + waiting on
+# the semaphore). The executor is SHARED with bulk jobs, so this keeps retries
+# from flooding its FIFO queue / starving bulk work, and keeps queue wait well
+# below LEASE_SECONDS.
+MAX_INFLIGHT_RETRIES = 10
+
+# Lease duration: a claimed row is hidden from the poller this long. If the
+# worker crashes/hangs the row becomes due again automatically afterwards.
+LEASE_SECONDS = 15 * 60
+
 _retry_scheduler_thread: Optional[threading.Thread] = None
 _retry_scheduler_stop = threading.Event()
-_retry_semaphore: Optional[asyncio.Semaphore] = None
 
+# Cross-thread concurrency limiter (NOT asyncio — each executor thread has its
+# own event loop, asyncio primitives are not cross-loop safe).
+_retry_sem = threading.BoundedSemaphore(MAX_CONCURRENT_RETRIES)
 
-def _get_or_create_semaphore() -> asyncio.Semaphore:
-    """Create or reuse the semaphore on the current thread's event loop."""
-    global _retry_semaphore
-    loop = asyncio.get_event_loop()
-    if _retry_semaphore is None:
-        _retry_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RETRIES)
-    return _retry_semaphore
+# Count of submitted-but-not-finished retry tasks.
+_inflight = 0
+_inflight_lock = threading.Lock()
 
 
 async def _fetch_due_retries(db: AsyncSession, limit: int = BATCH_SIZE) -> List[SmtpRetryQueue]:
@@ -95,6 +115,45 @@ async def _fetch_due_retries(db: AsyncSession, limit: int = BATCH_SIZE) -> List[
         .with_for_update(skip_locked=True)  # skip rows already picked by another worker
     )
     return list(result.scalars().all())
+
+
+async def _claim_due_retries(limit: int) -> List[SimpleNamespace]:
+    """
+    Fetch due rows AND lease them in the same transaction.
+
+    Rows are copied into plain SimpleNamespace objects BEFORE commit, because
+    commit expires ORM attributes (and the session is closed afterwards).
+    next_retry_at is pushed LEASE_SECONDS ahead so the next poll cycle does not
+    pick the same rows again. No new status / migration needed.
+    """
+    async with AsyncSessionLocal() as db:
+        rows = await _fetch_due_retries(db, limit=limit)
+        if not rows:
+            await db.rollback()
+            return []
+
+        entries = [
+            SimpleNamespace(
+                id=r.id,
+                email=r.email,
+                domain=r.domain,
+                mx_host=r.mx_host,
+                mx_records=r.mx_records,
+                attempt=r.attempt,
+                max_attempts=r.max_attempts,
+                job_id=r.job_id,
+            )
+            for r in rows
+        ]
+
+        lease_until = utc_now_naive() + timedelta(seconds=LEASE_SECONDS)
+        await db.execute(
+            update(SmtpRetryQueue)
+            .where(SmtpRetryQueue.id.in_([e.id for e in entries]))
+            .values(next_retry_at=lease_until)
+        )
+        await db.commit()
+        return entries
 
 
 async def _update_queue_entry(
@@ -274,86 +333,65 @@ async def _persist_final_result(
         await session.commit()
 
 
-async def _retry_one(queue_entry: SmtpRetryQueue) -> None:
+async def _retry_one(queue_entry) -> None:
     """
-    Process a single retry queue entry.
-    Runs under semaphore to limit concurrency.
+    Process a single retry queue entry (a plain SimpleNamespace snapshot taken
+    at claim time — NOT a live ORM object).
+
+    Concurrency limiting is done by the caller (_run_limited) with a
+    threading.BoundedSemaphore, not here.
     """
-    semaphore = _get_or_create_semaphore()
-    async with semaphore:
-        email = queue_entry.email
-        mx_host = queue_entry.mx_host
-        mx_records = queue_entry.mx_records or [mx_host]
-        attempt = queue_entry.attempt
-        max_attempts = queue_entry.max_attempts
-        job_id = queue_entry.job_id
+    email = queue_entry.email
+    mx_host = queue_entry.mx_host
+    mx_records = queue_entry.mx_records or [mx_host]
+    attempt = queue_entry.attempt
+    max_attempts = queue_entry.max_attempts
+    job_id = queue_entry.job_id
 
-        logger.debug("greylist_retry_start", email=email, attempt=attempt, max=max_attempts)
+    logger.debug("greylist_retry_start", email=email, attempt=attempt, max=max_attempts)
 
-        # Acquire per-email lock to avoid concurrent verifications
-        lock_entry = None
-        try:
-            if settings.RESULT_REUSE_ENABLED:
-                lock_entry = await email_lock_manager.acquire(email)
+    # Acquire per-email lock to avoid concurrent verifications
+    lock_entry = None
+    try:
+        if settings.RESULT_REUSE_ENABLED:
+            lock_entry = await email_lock_manager.acquire(email)
 
-            # Try the stored MX host first, then fall back to the rest
-            smtp_result: SmtpResult = await async_verify_smtp(
-                email=email,
-                mx_records=[mx_host] + [h for h in mx_records if h != mx_host],
-                timeout=settings.SMTP_TIMEOUT,
-            )
+        # Try the stored MX host first, then fall back to the rest
+        smtp_result: SmtpResult = await async_verify_smtp(
+            email=email,
+            mx_records=[mx_host] + [h for h in mx_records if h != mx_host],
+            timeout=settings.SMTP_TIMEOUT,
+        )
 
-            logger.debug("greylist_retry_smtp_result", email=email,
-                         outcome=smtp_result.outcome.value, code=smtp_result.smtp_code)
+        logger.debug("greylist_retry_smtp_result", email=email,
+                     outcome=smtp_result.outcome.value, code=smtp_result.smtp_code)
 
-            # Determine next action based on outcome
-            if smtp_result.outcome == SmtpOutcome.GREYLISTED:
-                if attempt < max_attempts:
-                    # Schedule another retry with exponential backoff
-                    initial_delay = settings.SMTP_RETRY_INITIAL_DELAY
-                    multiplier = settings.SMTP_RETRY_MULTIPLIER
-                    max_delay = settings.SMTP_RETRY_MAX_DELAY
-                    delay = min(initial_delay * (multiplier ** attempt), max_delay)
-                    next_retry_at = utc_now_naive() + timedelta(seconds=delay)
-                    new_attempt = attempt + 1
+        # Determine next action based on outcome
+        if smtp_result.outcome == SmtpOutcome.GREYLISTED:
+            if attempt < max_attempts:
+                # Schedule another retry with exponential backoff
+                initial_delay = settings.SMTP_RETRY_INITIAL_DELAY
+                multiplier = settings.SMTP_RETRY_MULTIPLIER
+                max_delay = settings.SMTP_RETRY_MAX_DELAY
+                delay = min(initial_delay * (multiplier ** attempt), max_delay)
+                next_retry_at = utc_now_naive() + timedelta(seconds=delay)
+                new_attempt = attempt + 1
 
-                    async with AsyncSessionLocal() as db:
-                        await _update_queue_entry(
-                            db=db,
-                            queue_id=queue_entry.id,
-                            attempt=new_attempt,
-                            next_retry_at=next_retry_at,
-                            status="pending",
-                            last_outcome=smtp_result.outcome.value,
-                            last_smtp_code=smtp_result.smtp_code,
-                            last_response=smtp_result.raw_response,
-                        )
-                    logger.info("greylist_retry_rescheduled",
-                                email=email, attempt=new_attempt, next_retry_at=next_retry_at.isoformat())
-                else:
-                    # Max attempts exhausted — persist final 'greylisted_unconfirmed'
-                    async with AsyncSessionLocal() as db:
-                        await _persist_final_result(
-                            email=email,
-                            domain=queue_entry.domain,
-                            smtp_result=smtp_result,
-                            mx_records=mx_records,
-                            job_id=job_id,
-                        )
-                        await _update_queue_entry(
-                            db=db,
-                            queue_id=queue_entry.id,
-                            attempt=attempt,
-                            next_retry_at=None,
-                            status="failed",
-                            last_outcome=smtp_result.outcome.value,
-                            last_smtp_code=smtp_result.smtp_code,
-                            last_response=smtp_result.raw_response,
-                        )
-                    logger.info("greylist_retry_max_attempts_reached",
-                                email=email, attempts=attempt)
+                async with AsyncSessionLocal() as db:
+                    await _update_queue_entry(
+                        db=db,
+                        queue_id=queue_entry.id,
+                        attempt=new_attempt,
+                        next_retry_at=next_retry_at,
+                        status="pending",
+                        last_outcome=smtp_result.outcome.value,
+                        last_smtp_code=smtp_result.smtp_code,
+                        last_response=smtp_result.raw_response,
+                    )
+                logger.info("greylist_retry_rescheduled",
+                            email=email, attempt=new_attempt, next_retry_at=next_retry_at.isoformat())
             else:
-                # Final outcome (VALID, INVALID, CATCH_ALL, TIMEOUT, BLOCKED, etc.)
+                # Max attempts exhausted — persist final 'greylisted_unconfirmed'
                 async with AsyncSessionLocal() as db:
                     await _persist_final_result(
                         email=email,
@@ -367,60 +405,169 @@ async def _retry_one(queue_entry: SmtpRetryQueue) -> None:
                         queue_id=queue_entry.id,
                         attempt=attempt,
                         next_retry_at=None,
-                        status="completed",
+                        status="failed",
                         last_outcome=smtp_result.outcome.value,
                         last_smtp_code=smtp_result.smtp_code,
                         last_response=smtp_result.raw_response,
                     )
-                logger.info("greylist_retry_completed",
-                            email=email, outcome=smtp_result.outcome.value, attempt=attempt)
-
-        except Exception as exc:
-            logger.error("greylist_retry_failed", email=email, error=str(exc), exc_info=True)
-            # On unexpected error, don't schedule another retry — mark failed
-            # but don't persist a result to emails (we don't know what happened)
+                logger.info("greylist_retry_max_attempts_reached",
+                            email=email, attempts=attempt)
+        else:
+            # Final outcome (VALID, INVALID, CATCH_ALL, TIMEOUT, BLOCKED, etc.)
             async with AsyncSessionLocal() as db:
+                await _persist_final_result(
+                    email=email,
+                    domain=queue_entry.domain,
+                    smtp_result=smtp_result,
+                    mx_records=mx_records,
+                    job_id=job_id,
+                )
                 await _update_queue_entry(
                     db=db,
                     queue_id=queue_entry.id,
                     attempt=attempt,
                     next_retry_at=None,
-                    status="failed",
-                    last_outcome="ERROR",
-                    last_response=str(exc),
+                    status="completed",
+                    last_outcome=smtp_result.outcome.value,
+                    last_smtp_code=smtp_result.smtp_code,
+                    last_response=smtp_result.raw_response,
                 )
-        finally:
-            if settings.RESULT_REUSE_ENABLED and lock_entry is not None:
-                await email_lock_manager.release(email, lock_entry)
+            logger.info("greylist_retry_completed",
+                        email=email, outcome=smtp_result.outcome.value, attempt=attempt)
+
+    except Exception as exc:
+        logger.error("greylist_retry_failed", email=email, attempt=attempt,
+                     error=str(exc), exc_info=True)
+        # Unexpected error: do NOT kill the row on the first hiccup. Re-queue
+        # with backoff while attempts remain; only mark 'failed' when exhausted.
+        # No result is persisted to emails (we don't know what happened).
+        try:
+            async with AsyncSessionLocal() as db:
+                if attempt < max_attempts:
+                    initial_delay = settings.SMTP_RETRY_INITIAL_DELAY
+                    multiplier = settings.SMTP_RETRY_MULTIPLIER
+                    max_delay = settings.SMTP_RETRY_MAX_DELAY
+                    delay = min(initial_delay * (multiplier ** attempt), max_delay)
+                    next_retry_at = utc_now_naive() + timedelta(seconds=delay)
+                    await _update_queue_entry(
+                        db=db,
+                        queue_id=queue_entry.id,
+                        attempt=attempt + 1,
+                        next_retry_at=next_retry_at,
+                        status="pending",
+                        last_outcome="ERROR",
+                        last_response=str(exc),
+                    )
+                    logger.info("greylist_retry_error_requeued",
+                                email=email, attempt=attempt + 1,
+                                next_retry_at=next_retry_at.isoformat())
+                else:
+                    await _update_queue_entry(
+                        db=db,
+                        queue_id=queue_entry.id,
+                        attempt=attempt,
+                        next_retry_at=None,
+                        status="failed",
+                        last_outcome="ERROR",
+                        last_response=str(exc),
+                    )
+                    logger.info("greylist_retry_error_exhausted",
+                                email=email, attempts=attempt)
+        except Exception as inner_exc:
+            # Lease will expire on its own and the row becomes due again.
+            logger.error("greylist_retry_error_state_write_failed",
+                         email=email, error=str(inner_exc), exc_info=True)
+    finally:
+        if settings.RESULT_REUSE_ENABLED and lock_entry is not None:
+            await email_lock_manager.release(email, lock_entry)
+
+
+def _run_on_thread_loop(coro):
+    """Run an async coroutine on this thread's event loop (created lazily)."""
+    # Each thread has its own event loop (reused via bulk_processor pattern)
+    loop = getattr(threading.current_thread(), "_retry_loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        threading.current_thread()._retry_loop = loop
+    return loop.run_until_complete(coro)
+
+
+def _run_limited(entry) -> None:
+    """
+    Executor-thread entry point: gate on the module-level threading semaphore
+    (cross-thread safe), then run _retry_one on this thread's own event loop.
+    """
+    with _retry_sem:
+        _run_on_thread_loop(_retry_one(entry))
+
+
+def _make_done_callback(entry):
+    """Done-callback: release in-flight slot and surface any swallowed exception."""
+    def _callback(future) -> None:
+        global _inflight
+        with _inflight_lock:
+            _inflight -= 1
+
+        if future.cancelled():
+            logger.warning("greylist_retry_future_cancelled", queue_id=entry.id, email=entry.email)
+            return
+
+        exc = future.exception()
+        if exc is not None:
+            logger.error(
+                "greylist_retry_future_failed",
+                queue_id=entry.id,
+                email=entry.email,
+                error=str(exc),
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+    return _callback
+
+
+def _submit_entry(executor, entry) -> bool:
+    """Submit one claimed entry; tracks in-flight count. Returns False on submit error."""
+    global _inflight
+    with _inflight_lock:
+        _inflight += 1
+    try:
+        future = executor.submit(_run_limited, entry)
+    except Exception as exc:
+        with _inflight_lock:
+            _inflight -= 1
+        logger.error("greylist_retry_submit_failed", queue_id=entry.id,
+                     email=entry.email, error=str(exc), exc_info=True)
+        return False
+    future.add_done_callback(_make_done_callback(entry))
+    return True
 
 
 async def _poll_loop() -> None:
     """Main polling loop — runs in a background thread."""
-    logger.info("greylist_retry_scheduler_started", poll_interval=POLL_INTERVAL, batch_size=BATCH_SIZE)
+    logger.info("greylist_retry_scheduler_started", poll_interval=POLL_INTERVAL, batch_size=BATCH_SIZE,
+                max_concurrent=MAX_CONCURRENT_RETRIES, max_inflight=MAX_INFLIGHT_RETRIES,
+                lease_seconds=LEASE_SECONDS)
 
     while not _retry_scheduler_stop.is_set():
         cycle_start = time.time()
 
         try:
-            # Fetch due retries
-            async with AsyncSessionLocal() as db:
-                due_retries = await _fetch_due_retries(db, limit=BATCH_SIZE)
+            with _inflight_lock:
+                inflight = _inflight
+            capacity = MAX_INFLIGHT_RETRIES - inflight
 
-            if due_retries:
-                logger.info("greylist_retry_batch_picked", count=len(due_retries))
-                # Submit all to executor (they run async on thread's event loop)
-                executor = get_executor()
-                thread_local = threading.local()  # ensure each gets its own loop context
+            if capacity > 0:
+                # Claim = fetch + lease (next_retry_at += LEASE_SECONDS) + commit,
+                # all BEFORE submit, so the next cycle can't re-pick these rows.
+                claimed = await _claim_due_retries(limit=min(BATCH_SIZE, capacity))
 
-                # Fire and forget — _retry_one handles its own DB session
-                futures = [
-                    executor.submit(
-                        lambda q=entry: _run_on_thread_loop(_retry_one(q))
-                    )
-                    for entry in due_retries
-                ]
-                # Don't wait — let them complete in background
-                # (waiting would block the poll loop)
+                if claimed:
+                    logger.info("greylist_retry_batch_picked", count=len(claimed), inflight=inflight)
+                    executor = get_executor()
+                    for entry in claimed:
+                        _submit_entry(executor, entry)
+                    # Don't wait — results are handled by _retry_one + done-callbacks.
+            else:
+                logger.debug("greylist_retry_poll_skipped_inflight_full", inflight=inflight)
         except Exception as exc:
             logger.error("greylist_retry_poll_error", error=str(exc), exc_info=True)
 
@@ -433,16 +580,6 @@ async def _poll_loop() -> None:
             time.sleep(0.1)
 
     logger.info("greylist_retry_scheduler_stopped")
-
-
-def _run_on_thread_loop(coro):
-    """Run an async coroutine on this thread's event loop (created lazily)."""
-    # Each thread has its own event loop (reused via bulk_processor pattern)
-    loop = getattr(threading.current_thread(), "_retry_loop", None)
-    if loop is None or loop.is_closed():
-        loop = asyncio.new_event_loop()
-        threading.current_thread()._retry_loop = loop
-    return loop.run_until_complete(coro)
 
 
 def start_retry_scheduler() -> None:
